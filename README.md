@@ -28,7 +28,7 @@ pip install cryptography argon2-cffi reedsolo zxcvbn-python
 
 ### Clonando o Repositório
 ```bash
-git clone https://github.com/seuusuario/CryptGuard.git
+git clone https://github.com/Crypt-Guard/CryptGuard.git
 cd CryptGuard
 ```
 
