@@ -1,3 +1,4 @@
+
 O menu inicial exibe as seguintes opções:
 
 [1] Criptografar Texto
