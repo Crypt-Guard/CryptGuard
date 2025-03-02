@@ -199,3 +199,17 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+   ADDITIONAL NOTES FOR CRYPTGUARD:
+
+   This software uses the following third-party libraries, each under their
+   respective licenses:
+
+   - cryptography (Apache-2.0)
+   - argon2-cffi (MIT)
+   - reedsolo (MIT)
+   - zxcvbn-python (MIT)
+   - flet (MIT)
+
+   For the complete text of these licenses, please refer to the respective
+   packages or visit their official repositories.

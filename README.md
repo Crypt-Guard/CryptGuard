@@ -1,76 +1,154 @@
-# CryptGuard - Sistema de Criptografia Avançado
+# 🔐 CryptGuard
 
-## 📌 Descrição
-O **CryptGuard** é um sistema de criptografia avançado desenvolvido em Python, projetado para proteger arquivos, textos e volumes ocultos com técnicas de criptografia moderna e negação plausível. Ele utiliza **Argon2id** para derivação de chaves, **ChaCha20Poly1305** para criptografia autenticada e **Reed-Solomon** para correção de erros, garantindo alta segurança e integridade dos dados.
+<div align="center">
 
-## 🚀 Funcionalidades
-- 🔒 **Criptografia e descriptografia de arquivos e textos**
-- 📂 **Criptografia em streaming para arquivos grandes**
-- 📦 **Criação de volumes ocultos com negação plausível**
-- 🔑 **Uso opcional de arquivos-chave para aumentar a segurança**
-- ✅ **Correção de erros via Reed-Solomon para maior integridade**
-- 🔐 **Metadados protegidos com criptografia**
-- 🛠 **Configuração personalizada dos parâmetros de Argon2id**
+![CryptGuard Logo](screenshot/tela.png)
 
-## 🛠️ Tecnologias Utilizadas
-- **Python 3.8+**
-- `cryptography` (ChaCha20Poly1305)
-- `argon2_cffi` (Argon2id)
-- `reedsolo` (Correção de erros Reed-Solomon)
-- `zxcvbn` (Validação da força da senha)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
+[![Security](https://img.shields.io/badge/security-audited-green.svg)](SECURITY.md)
+[![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-## 📥 Instalação
-### Requisitos
-Antes de executar o CryptGuard, certifique-se de ter o **Python 3.8+** instalado e instale as dependências:
+**CryptGuard é uma solução avançada de criptografia com interface moderna, focada em segurança e usabilidade.**
+
+[🚀 Começar](#-início-rápido) •
+[📖 Documentação](#-documentação) •
+[🛡️ Segurança](#%EF%B8%8F-segurança) •
+[🤝 Contribuir](#-contribuir) •
+[📜 Licença](#-licença)
+
+</div>
+
+## ✨ Características
+
+- 🔒 **Criptografia Robusta**
+  - ChaCha20Poly1305 para criptografia autenticada
+  - Argon2id para derivação de chaves
+  - Reed-Solomon para correção de erros
+
+- 🎯 **Funcionalidades Avançadas**
+  - Criptografia de texto e arquivos
+  - Suporte a múltiplos arquivos
+  - Volumes ocultos com negação plausível
+  - Tokens efêmeros para segurança adicional
+
+- 💫 **Interface Moderna**
+  - Design inspirado nos apps da Meta
+  - Interface responsiva e intuitiva
+  - Feedback visual em tempo real
+  - Indicador de força de senha
+
+- 🛡️ **Segurança Aprimorada**
+  - Verificação de força de senha via zxcvbn
+  - Suporte a arquivos-chave
+  - Metadados criptografados
+  - Proteção contra ataques conhecidos
+
+## 🚀 Início Rápido
+
+### Pré-requisitos
+
+- Python 3.8 ou superior
+- pip (gerenciador de pacotes Python)
+
+### Instalação
+
+1. Clone o repositório:
 ```bash
-pip install cryptography argon2-cffi reedsolo zxcvbn-python
+git clone https://github.com/seu-usuario/cryptguard.git
+cd cryptguard
 ```
 
-### Clonando o Repositório
+2. Instale as dependências:
 ```bash
-git clone https://github.com/Crypt-Guard/CryptGuard.git
-cd CryptGuard
+pip install -r requirements.txt
 ```
 
-## 🔧 Como Usar
-O CryptGuard opera via linha de comando. Após instalar as dependências, execute o script principal:
+3. Execute o CryptGuard:
 ```bash
-python cryptguard.py
+python cryptguard_ui.py
 ```
 
-Você verá o seguinte menu:
-```
-=== CRYPTGUARD - SISTEMA DE CRIPTOGRAFIA AVANÇADO ===
-[1] Criptografar Texto
-[2] Criptografar Arquivo (Imagem/PDF/Áudio)
-[3] Descriptografar Arquivo
-[4] Criptografar Múltiplos Arquivos
-[5] Gerar Token Efêmero
-[6] Criar Volume Oculto (Negação Plausível)
-[0] Sair
-```
-Basta escolher uma opção e seguir as instruções.
+## 💡 Guia de Uso
+
+### Criptografar Arquivo
+
+1. Digite uma senha forte
+2. (Opcional) Configure parâmetros avançados do Argon2id
+3. Clique em "Criptografar Arquivo"
+4. Selecione o arquivo desejado
+5. Aguarde a confirmação de sucesso
+
+### Descriptografar Arquivo
+
+1. Digite a senha correta
+2. Clique em "Descriptografar Arquivo"
+3. Selecione o arquivo .encrypted
+4. O arquivo será restaurado com seu nome original
+
+### Volumes Ocultos
+
+1. Prepare dois conjuntos de arquivos (falso e real)
+2. Use senhas diferentes para cada volume
+3. Guarde o token efêmero gerado
+4. Use o token para acessar o volume real
+
+## 📖 Documentação
+
+- [RoadMap](ROADMAP.md) - Funcionalidades e planos futuros
+- [Segurança](SECURITY.md) - Guia de segurança e melhores práticas
+- [Contribuição](CONTRIBUTING.md) - Como contribuir com o projeto
+- [Licença](LICENSE) - Termos de licenciamento
 
 ## 🛡️ Segurança
-- **Recomenda-se usar senhas fortes** (mínimo 8 caracteres, com letras maiúsculas, minúsculas, números e caracteres especiais).
-- **Arquivos-chave podem aumentar a entropia** e dificultar ataques de força bruta.
-- **A negação plausível** é implementada no volume oculto, permitindo armazenar arquivos sigilosos de forma discreta.
+
+O CryptGuard foi projetado com foco em segurança, mas recomendamos:
+
+- Realizar auditorias independentes
+- Seguir as melhores práticas de segurança
+- Manter backups dos dados importantes
+- Verificar a conformidade legal
+
+Consulte [SECURITY.md](SECURITY.md) para mais informações.
+
+## 🤝 Contribuir
+
+Contribuições são bem-vindas! Por favor, leia nosso [Guia de Contribuição](CONTRIBUTING.md).
+
+### Áreas de Contribuição
+
+- 📝 Documentação
+- 🐛 Correção de bugs
+- ✨ Novas funcionalidades
+- 🎨 Melhorias na interface
+- 🌐 Traduções
 
 ## 📜 Licença
-Este projeto está licenciado sob a **Apache License 2.0**. Consulte o arquivo `LICENSE` para mais detalhes.
 
-## 🤝 Contribuição
-Contribuições são bem-vindas! Para contribuir:
-1. Faça um fork do projeto
-2. Crie uma branch (`git checkout -b minha-feature`)
-3. Faça suas alterações e commit (`git commit -m 'Minha nova feature'`)
-4. Envie para o repositório (`git push origin minha-feature`)
-5. Abra um **Pull Request**
+CryptGuard é licenciado sob a [Licença Apache 2.0](LICENSE).
 
-## 📞 Contato
-Se tiver dúvidas ou sugestões, entre em contato:
-- **Email:** cryptguard737@gmail.com
-- **GitHub:** [CryptGuard](https://github.com/Crypt-Guard)
+## 📊 Status do Projeto
+
+- ✅ Interface gráfica moderna
+- ✅ Criptografia robusta
+- ✅ Documentação completa
+- 🚧 Suporte a diretórios
+- 🚧 Integração com nuvem
+- 🚧 Suporte a YubiKey
+
+## 🙏 Agradecimentos
+
+- Comunidade Python
+- Desenvolvedores das bibliotecas utilizadas
+- Contribuidores do projeto
+- Usuários que reportam bugs e sugerem melhorias
 
 ---
-🔐 *CryptGuard - Proteja seus dados com criptografia de alto nível!*
+
+<div align="center">
+
+**CryptGuard** - Desenvolvido com ❤️ pela comunidade
+
+[⬆ Voltar ao topo](#-cryptguard)
+
+</div>
