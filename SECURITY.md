@@ -98,7 +98,7 @@ No Brasil, considere:
 
 Para reportar vulnerabilidades ou problemas de segurança:
 1. NÃO abra uma issue pública
-2. Envie e-mail para [security@cryptguard.example.com](mailto:security@cryptguard.example.com)
+2. Envie e-mail para [cryptguard737@gmail.com](mailto:security@cryptguard.example.com)
 3. Use nossa chave PGP disponível em [keys.openpgp.org](https://keys.openpgp.org)
 
 ---
