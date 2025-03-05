@@ -36,6 +36,7 @@ CryptGuard é uma solução avançada de criptografia com foco em segurança e u
 
 - Autenticação
   • [1] Senha + Arquivo-chave
+
   • [2] Somente Senha
 
 - 💫 **Interface CLI**
