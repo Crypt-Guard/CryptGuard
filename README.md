@@ -48,23 +48,24 @@ CryptGuard é uma solução avançada de criptografia com foco em segurança e u
   • Gestão cuidadosa de memória sensível (zeroização de buffers)
 
 --------------------------------------------------------------------------------
-Estrutura do Projeto
 
-A nova organização do repositório está organizada de forma modular na pasta "cryptguard/":
+## Estrutura do Projeto
+
+**A nova organização do repositório está organizada de forma modular na pasta "cryptguard/":**
 
 cryptguard/
-├── __init__.py             -> Inicializa o pacote
-├── config.py               -> Configurações globais (chunk size, thresholds, parâmetros Argon2, etc.)
-├── password_utils.py       -> Funções para validação e coleta de senhas (Senha + Arquivo-chave ou Somente Senha)
-├── argon_utils.py          -> Derivação de chaves com Argon2id
-├── metadata.py             -> Criptografia e descriptografia de metadados (.meta)
-├── rs_codec.py             -> Codificação e decodificação Reed-Solomon
-├── chunk_crypto.py         -> Criptografia de chunks com ChaCha20Poly1305 + RS
-├── single_shot.py          -> Criptografia/Descriptografia para arquivos pequenos (single-shot)
-├── streaming.py            -> Criptografia/Descriptografia para arquivos grandes (streaming, com chunk size dinâmico)
-├── hidden_volume.py        -> Funcionalidades de volumes ocultos e re-key do volume real
-├── utils.py                -> Funções auxiliares (limpeza de tela, geração de nomes únicos, etc.)
-└── main.py                 -> Interface de linha de comando principal
+__init__.py             -> Inicializa o pacote
+config.py               -> Configurações globais (chunk size, thresholds, parâmetros Argon2, etc.)
+password_utils.py       -> Funções para validação e coleta de senhas (Senha + Arquivo-chave ou Somente Senha)
+argon_utils.py          -> Derivação de chaves com Argon2id
+metadata.py             -> Criptografia e descriptografia de metadados (.meta)
+rs_codec.py             -> Codificação e decodificação Reed-Solomon
+chunk_crypto.py         -> Criptografia de chunks com ChaCha20Poly1305 + RS
+single_shot.py          -> Criptografia/Descriptografia para arquivos pequenos (single-shot)
+streaming.py            -> Criptografia/Descriptografia para arquivos grandes (streaming, com chunk size dinâmico)
+hidden_volume.py        -> Funcionalidades de volumes ocultos e re-key do volume real
+utils.py                -> Funções auxiliares (limpeza de tela, geração de nomes únicos, etc.)
+main.py                 -> Interface de linha de comando principal
 
 --------------------------------------------------------------------------------
 ### Pré-requisitos
