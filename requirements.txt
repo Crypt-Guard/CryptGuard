@@ -2,4 +2,3 @@ cryptography==44.0.1
 argon2-cffi==23.1.0
 reedsolo==1.7.0
 zxcvbn-python==4.4.24
-flet==0.27.4
