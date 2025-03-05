@@ -63,10 +63,10 @@ Instalação:
    git clone https://github.com/Crypt-Guard/CryptGuard.git
    cd CryptGuard
 
-2. Instale as dependências:
+3. Instale as dependências:
    pip install -r requirements.txt
 
-3. Execute o CryptGuard:
+4. Execute o CryptGuard:
    python cryptguard/main.py
 
 --------------------------------------------------------------------------------
@@ -137,6 +137,4 @@ Agradecimentos
 Agradecemos à comunidade Python, aos desenvolvedores das bibliotecas utilizadas, e a todos os contribuidores deste projeto.
 
 --------------------------------------------------------------------------------
-CryptGuard – Desenvolvido com ❤️ pela comunidade
-
-[⬆ Voltar ao topo]
+CryptGuard.
