@@ -66,7 +66,6 @@ A criptografia e o uso de tecnologias de segurança podem estar sujeitos a regul
 Para reportar vulnerabilidades ou problemas de segurança:
 1. NÃO abra uma issue pública.
 2. Envie um e-mail para: [cryptguard737@gmail.com](mailto:cryptguard737@gmail.com).
-3. Utilize, se disponível, nossa chave PGP para comunicações seguras.
 
 ---
 
