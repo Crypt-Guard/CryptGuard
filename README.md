@@ -102,7 +102,7 @@ pip install -r requirements.txt
 
 3. Execute o CryptGuard:
 ```bash
-   python cryptguard/main.py
+python cryptguard/main.py
 ```
 --------------------------------------------------------------------------------
 ## 💡 Guia de Uso
