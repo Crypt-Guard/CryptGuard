@@ -54,6 +54,7 @@ CryptGuard é uma solução avançada de criptografia com foco em segurança e u
 **A nova organização do repositório está organizada de forma modular na pasta "cryptguard/":**
 
 cryptguard/
+
 ├── __init__.py             -> Inicializa o pacote
 
 ├── config.py               -> Configurações globais (chunk size, thresholds, parâmetros Argon2, etc.)
