@@ -35,6 +35,7 @@ CryptGuard é uma solução avançada de criptografia com foco em segurança e u
   • Key Rolling / Re-encryption: Troque a senha do volume real sem expor o volume falso
 
 - Autenticação
+
   • [1] Senha + Arquivo-chave
 
   • [2] Somente Senha
