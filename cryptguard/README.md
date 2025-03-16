@@ -1,439 +1,437 @@
-**CryptGuard** é uma ferramenta de criptografia de dados com suporte a **volumes ocultos** para oferecer **negação plausível**. Desenvolvida em Python, ela permite criar volumes criptografados nos quais é possível armazenar dados confidenciais com forte proteção criptográfica. Seu principal diferencial é a capacidade de criar um segundo volume escondido dentro do volume principal, de forma que mesmo sob coação o usuário possa revelar apenas o volume externo sem evidenciar a existência dos dados mais sensíveis.
+**CryptGuard** is a data encryption tool with support for **hidden volumes** to provide **plausible deniability**. Developed in Python, it allows the creation of encrypted volumes in which confidential data can be stored with strong cryptographic protection. Its main differentiator is the ability to create a second hidden volume within the main volume, so that even under duress the user can disclose only the external volume without revealing the existence of more sensitive data.
 
-## Introdução
+## Introduction
 
-CryptGuard foi concebido com o propósito de proteger dados sigilosos em repouso, fornecendo uma camada adicional de segurança através de um volume oculto. As principais funcionalidades incluem:
+CryptGuard was designed to protect confidential data at rest, providing an additional security layer through a hidden volume. Its main features include:
 
-- **Criptografia Forte**: Utiliza algoritmos modernos (como AES de 256 bits ou equivalente) e derivação de chaves via Argon2 para assegurar a confidencialidade dos dados.
-- **Volume Oculto (Hidden Volume)**: Permite criar um volume interno secreto dentro de um volume criptografado externo, viabilizando a negação plausível em casos de coação.
-- **Derivação Segura de Chaves**: Emprega Argon2 (função de derivação de chave robusta) para converter senhas em chaves criptográficas, dificultando ataques de força bruta.
-- **Processamento de Grandes Arquivos**: Suporta criptografia em **streaming**, dividindo dados em blocos para processar arquivos grandes sem carregar tudo na memória.
-- **Interface Modular**: Código organizado em módulos independentes, facilitando manutenção e extensões por desenvolvedores.
+- **Strong Encryption**: Uses modern algorithms (like AES with 256-bit keys or equivalent) and Argon2-based key derivation to ensure data confidentiality.
+- **Hidden Volume**: Allows creating a secret inner volume within an encrypted volume, enabling plausible deniability in coercive situations.
+- **Secure Key Derivation**: Employs Argon2 (a robust key derivation function) to convert passwords into cryptographic keys, making brute-force attacks more difficult.
+- **Large File Handling**: Supports **streaming** encryption, splitting data into chunks to process large files without loading them entirely into memory.
+- **Modular Interface**: Code organized into independent modules, facilitating maintenance and extensions for developers.
 
-Este README técnico destina-se a desenvolvedores que desejam entender o funcionamento interno do CryptGuard para modificá-lo ou atualizá-lo. A seguir, detalhamos a estrutura do código, explicamos a implementação do volume oculto e descrevemos o papel de cada módulo, com exemplos de uso e dicas de melhores práticas para expansão da funcionalidade.
+This technical README is intended for developers who want to understand CryptGuard’s internal workings to modify or update it. Below, we detail the code structure, explain how the hidden volume is implemented, and describe the role of each module, with usage examples and best practice tips for feature expansion.
 
-## Estrutura do Código
+## Code Structure
 
-O projeto está organizado em múltiplos módulos Python, cada um responsável por uma parte da lógica do CryptGuard. Abaixo está a estrutura geral dos arquivos e a responsabilidade de cada módulo:
+The project is organized into multiple Python modules, each responsible for a part of the CryptGuard logic. Below is a general overview of the files and the responsibility of each module:
 
-- **`password_utils.py`** – Responsável por funções de validação de senha e por gerenciar a autenticação, incluindo a verificação de um arquivo-chave, quando utilizado.
-- **`rs_codec.py`** – Implementa a codificação e decodificação Reed-Solomon para garantir a integridade dos dados e oferecer mecanismos de correção de erros nos chunks cifrados.
-- **`config.py`** – Define configurações e constantes globais usadas por todo o sistema (tamanhos de chave, parâmetros do Argon2, tamanho de bloco, etc.).
-- **`utils.py`** – Funções utilitárias genéricas usadas em vários módulos (por exemplo, manipulação de bytes, conversões, geração de valores aleatórios seguros, etc.).
-- **`argon_utils.py`** – Lógica de derivação de chaves usando Argon2. Contém funções para gerar a chave criptográfica a partir da senha do usuário e um salt.
-- **`chunk_crypto.py`** – Implementa a criptografia e descriptografia em blocos (chunks) de dados. Fornece funções de baixo nível para cifrar/decifrar segmentos de um arquivo usando a chave derivada.
-- **`metadata.py`** – Define a estrutura de metadados do volume criptografado (header). Esse módulo lida com a criação e interpretação do cabeçalho do volume, incluindo informações como salt, parâmetros de KDF, tamanho de volume oculto, etc.
-- **`hidden_volume.py`** – Gerencia a lógica de volumes ocultos. Funções para criação de um volume criptografado (com ou sem volume oculto) e para acesso/extração do volume escondido dentro do volume externo.
-- **`streaming.py`** – Fornece mecanismos de criptografia **em streaming** (fluxo contínuo). Usado para ler ou escrever dados criptografados em partes, útil para não carregar arquivos inteiros em memória.
-- **`single_shot.py`** – Oferece funções de criptografia **de uma vez só** (single shot), que processam o dado inteiro de uma vez. Indicado para arquivos menores ou operações simples.
-- **`main.py`** – Ponto de entrada do aplicativo (CLI). Analisa argumentos de linha de comando e coordena as operações de criar volumes, criptografar ou descriptografar arquivos, utilizando os módulos acima.
-- **`__init__.py`** – Inicializa o pacote `cryptguard`. Geralmente vazio ou utilizado para expor interfaces públicas do pacote (por exemplo, importações convenientes ou informações de versão).
+- **`password_utils.py`** – Responsible for password validation functions and managing authentication, including checking for a key file when used.
+- **`rs_codec.py`** – Implements Reed-Solomon encoding and decoding to ensure data integrity and provide error correction mechanisms for encrypted chunks.
+- **`config.py`** – Defines global settings and constants used throughout the system (key sizes, Argon2 parameters, block size, etc.).
+- **`utils.py`** – Generic utility functions used across various modules (e.g., byte manipulation, conversions, generating secure random values, etc.).
+- **`argon_utils.py`** – Logic for key derivation using Argon2. Contains functions to generate the cryptographic key from the user’s password and a salt.
+- **`chunk_crypto.py`** – Implements chunk-based data encryption and decryption. Provides low-level functions to encrypt/decrypt segments of a file using the derived key.
+- **`metadata.py`** – Defines the structure of the encrypted volume’s metadata (header). This module handles creating and interpreting the volume header, including information such as salt, KDF parameters, hidden volume size, etc.
+- **`hidden_volume.py`** – Manages hidden volume logic. Functions for creating an encrypted volume (with or without a hidden volume) and for accessing/extracting the hidden volume inside the external volume.
+- **`streaming.py`** – Provides **streaming** encryption mechanisms (continuous flow). Used for reading or writing encrypted data in parts, useful for not loading entire files into memory.
+- **`single_shot.py`** – Offers **single-shot** encryption functions that process the entire data at once. Suitable for smaller files or straightforward operations.
+- **`main.py`** – Application entry point (CLI). Parses command-line arguments and coordinates operations such as creating volumes, encrypting, or decrypting files, using the modules above.
+- **`__init__.py`** – Initializes the `cryptguard` package. Typically empty or used to expose the package’s public interfaces (e.g., convenient imports or version information).
 
-Essa separação modular facilita a compreensão e manutenção: cada componente lida com um aspecto específico (configurações, criptografia, volume oculto, etc.), permitindo que desenvolvedores modifiquem partes isoladamente sem impactar todo o sistema.
+This modular separation makes the code easier to understand and maintain: each component handles a specific aspect (configurations, encryption, hidden volume, etc.), allowing developers to modify parts in isolation without impacting the entire system.
 
-## Volume Oculto e Segurança
+## Hidden Volume and Security
 
-O **volume oculto** é a principal característica de segurança avançada do CryptGuard. Ele permite armazenar dados secretos dentro de um volume criptografado de tal forma que a própria existência desses dados seja disfarçada. A seguir, explicamos como isso é implementado e como protege os dados:
+The **hidden volume** is CryptGuard’s primary advanced security feature. It allows highly sensitive data to be stored within an encrypted volume in such a way that the very existence of these data is concealed. Below, we explain how it’s implemented and how it protects the data:
 
-- **Conceito de Negação Plausível**: Ao criar um volume com suporte a ocultação, o usuário define duas senhas – uma para o volume externo (dados menos sensíveis ou chamativos) e outra para o volume interno oculto (dados altamente confidenciais). Caso seja forçado a revelar a senha, o usuário pode fornecer apenas a senha do volume externo. Quem obtiver essa senha consegue acessar somente os dados do volume externo, enquanto o volume oculto permanece inacessível e indetectável, pois seus dados parecem aleatórios dentro do arquivo criptografado.
-- **Implementação do Volume Oculto**: O CryptGuard aloca um único arquivo container criptografado. Dentro desse container:
-  - O **volume externo** ocupa o espaço inicial do arquivo e possui seu próprio cabeçalho de metadados e região de dados criptografados.
-  - O **volume oculto** é armazenado em uma porção reservada do mesmo arquivo (tipicamente no final ou em áreas não utilizadas pelo volume externo). Seus dados também são cifrados e só podem ser interpretados com a segunda senha.  
-  Importante: o espaço do volume oculto é preenchido com dados aleatórios quando o volume é criado, de forma que, sem a senha correta, ele é indistinguível de espaço livre aleatório.
-- **Proteção dos Dados**: Ambos os volumes (externo e oculto) usam criptografia forte. A senha do usuário nunca é usada diretamente como chave; em vez disso, o módulo de derivação (`argon_utils.py`) aplica Argon2 (um KDF robusto) junto com um salt aleatório (armazenado no cabeçalho) para gerar a chave de criptografia. Isso torna ataques de força bruta muito mais difíceis, pois Argon2 impõe um alto custo computacional para cada tentativa de senha.
-- **Isolamento de Metadados**: Os metadados do volume (definidos em `metadata.py`) incluem informações necessárias para montar/abrir o volume: um identificador ou número de versão, o salt do Argon2, parâmetros do Argon2 (tempo de processamento, memória, etc.), tamanho do volume oculto, entre outros. Esses metadados do volume externo são armazenados no início do arquivo container, cifrados com a chave derivada da senha externa. Já os metadados do volume oculto são armazenados separadamente (por exemplo, em outra área conhecida do arquivo, possivelmente logo após o espaço do volume externo ou no final do arquivo), cifrados com a chave derivada da senha oculta. Assim, conhecer a senha externa permite decifrar apenas os metadados do volume externo – os do volume oculto permanecem inacessíveis sem a segunda senha.
-- **Operação de Abertura do Volume**: Ao abrir um volume criptografado, o CryptGuard tenta decifrar o cabeçalho de metadados usando a senha fornecida. Se a senha corresponder ao volume externo, os metadados se decifrarão corretamente (validação por algum campo de integridade ou assinatura interna) e o sistema monta o volume externo. Se a senha corresponder ao volume oculto, a decodificação do cabeçalho externo falhará; em seguida, o software pode tentar decifrar a área de metadados do volume oculto com essa senha. Caso seja válida, monta-se o volume oculto. Se nenhuma das tentativas resultar em metadados válidos, a senha é considerada incorreta. Esse processo garante que um invasor com senha apenas do volume externo não consiga detectar ou montar o volume oculto.
-- **Integridade e Confidencialidade**: Todos os dados armazenados, tanto no volume externo quanto no oculto, são cifrados. Opcionalmente, cada bloco de dados pode incluir verificações de integridade/autenticidade (por exemplo, tags de autenticidade, HMACs) para detectar modificações indevidas nos dados cifrados. (Obs.: Se o CryptGuard implementa uma cifra autenticada, como AES-GCM, a integridade vem inclusa; caso contrário, essa funcionalidade pode ser adicionada via HMAC em futuros aprimoramentos).
-- **Restrições de Escrita no Volume Externo**: Uma vez que um volume oculto é criado dentro de um container, é crucial que o volume externo não sobrescreva os dados do volume oculto. O CryptGuard ao criar o volume oculto reserva explicitamente uma porção do arquivo para ele. A escrita de dados no volume externo deve ser limitada ao seu espaço alocado. Em cenários onde o volume externo pode ser montado para escrita, uma prática recomendada (inspirada no VeraCrypt/TrueCrypt) é solicitar também a senha do volume oculto durante a montagem externa para que o software possa evitar gravar acidentalmente em áreas ocupadas pelo volume oculto. Caso o CryptGuard ainda não implemente essa proteção dinâmica, **desenvolvedores devem ter cautela** ao adicionar tal funcionalidade para garantir que o volume oculto não seja corrompido.
+- **Plausible Deniability Concept**: When creating a volume with concealment support, the user sets two passwords – one for the external volume (less sensitive or more innocuous data) and another for the hidden internal volume (highly sensitive data). If forced to divulge a password, the user can provide only the external volume’s password. Anyone with that password gains access only to the external volume’s data, while the hidden volume remains inaccessible and undetectable, since its data appear random within the encrypted file.
+- **Hidden Volume Implementation**: CryptGuard uses a single encrypted container file. Inside this container:
+  - The **external volume** occupies the initial portion of the file and has its own metadata header and encrypted data region.
+  - The **hidden volume** is stored in a reserved portion of the same file (usually at the end or in areas unused by the external volume). Its data are also encrypted and can only be interpreted using the second password.  
+  Importantly, the hidden volume’s space is filled with random data when the volume is created, so that without the correct password, it is indistinguishable from random free space.
+- **Data Protection**: Both volumes (external and hidden) use strong encryption. The user’s password is never used directly as a key; instead, the derivation module (`argon_utils.py`) applies Argon2 (a robust KDF) along with a random salt (stored in the header) to generate the encryption key. This makes brute-force attacks much harder, because Argon2 imposes a high computational cost for each password attempt.
+- **Metadata Isolation**: The volume metadata (defined in `metadata.py`) includes the information needed to mount/open the volume: an identifier or version number, the Argon2 salt, Argon2 parameters (processing time, memory, etc.), hidden volume size, and so on. These external volume metadata are stored at the start of the container file, encrypted with the key derived from the external password. The hidden volume’s metadata is stored separately (for example, in another known area of the file, possibly right after the external volume space or at the end of the file), encrypted with the key derived from the hidden password. Thus, knowing only the external password allows decrypting only the external volume metadata – the hidden volume’s metadata remains inaccessible without the second password.
+- **Volume Opening Operation**: When opening an encrypted volume, CryptGuard attempts to decrypt the metadata header using the provided password. If the password matches the external volume, the metadata will decrypt correctly (validated by an integrity field or internal signature), and the system mounts the external volume. If the password matches the hidden volume, the external header decryption will fail; the software may then attempt to decrypt the hidden volume’s metadata area with that password. If valid, it mounts the hidden volume. If neither attempt produces valid metadata, the password is deemed incorrect. This process ensures that an attacker with only the external password cannot detect or mount the hidden volume.
+- **Integrity and Confidentiality**: All stored data, in both the external and hidden volumes, is encrypted. Optionally, each data block can include integrity/authenticity checks (for instance, authenticity tags or HMACs) to detect unauthorized changes in the encrypted data. (Note: If CryptGuard uses an authenticated cipher such as AES-GCM, integrity comes included; otherwise, this feature could be added via HMAC in future improvements).
+- **Write Restrictions on the External Volume**: Once a hidden volume is created inside a container, it is crucial that the external volume not overwrite hidden volume data. When creating a hidden volume, CryptGuard explicitly reserves a portion of the file for it. Writing data to the external volume must be restricted to its allocated space. In scenarios where the external volume can be mounted for writing, a recommended practice (inspired by VeraCrypt/TrueCrypt) is also to request the hidden volume password during the external mount so that the software can avoid accidentally writing to areas occupied by the hidden volume. If CryptGuard has not yet implemented this dynamic protection, **developers should use caution** when adding such a feature to ensure that the hidden volume is not corrupted.
 
-Em resumo, a estratégia de segurança do CryptGuard combina criptografia forte com design cuidadoso de armazenamento para oferecer negação plausível. Mesmo que um adversário obtenha o arquivo criptografado, sem a senha correta ele só verá dados aleatórios; e mesmo com a senha externa, não há indicações de que um segundo volume existe. Para o usuário legítimo, entretanto, o acesso aos dados ocultos é transparente ao fornecer a senha secundária.
+In summary, CryptGuard’s security strategy combines strong encryption with careful storage design to provide plausible deniability. Even if an adversary obtains the encrypted file, without the correct password they see only random data; and even with the external password, there is no indication that a second volume exists. For the legitimate user, however, accessing hidden data is seamless upon entering the secondary password.
 
-## Funcionamento de Cada Módulo
+## How Each Module Works
 
-Nesta seção, detalhamos o funcionamento interno de cada módulo do CryptGuard e como um desenvolvedor pode modificá-los ou estendê-los. Entender a interação entre esses componentes é fundamental para realizar alterações de forma segura sem introduzir regressões. Os exemplos de uso fornecidos ajudam a ilustrar como os módulos trabalham juntos.
+This section provides an internal overview of each CryptGuard module and how a developer might modify or extend them. Understanding how these components interact is essential to make safe changes without introducing regressions. The usage examples help illustrate how the modules work together.
 
-### config.py – Configurações Globais
+### config.py – Global Settings
 
-O módulo `config.py` concentra constantes e parâmetros globais de configuração usados em toda a aplicação. Isso inclui, entre outros:
+The `config.py` module consolidates global constants and configuration parameters used throughout the application. These include, among others:
 
-- **Tamanhos e Comprimentos**: por exemplo, tamanho do salt (em bytes) para Argon2, comprimento da chave derivada (por exemplo, 256 bits), tamanho de blocos de criptografia, etc.
-- **Parâmetros do Argon2**: valores padrão para iterações (tempo), memória e paralelismo usados na derivação de chave. Por exemplo, `ARGON_T_COST` (custo de tempo/número de iterações), `ARGON_M_COST` (memória em KiB), `ARGON_PARALLELISM` (número de threads).
-- **Algoritmos de Criptografia**: especificação do algoritmo e modo de operação padrão (por exemplo, AES em modo XTS ou GCM) e tamanho de bloco. Se o projeto utiliza uma biblioteca de criptografia, pode definir aqui strings ou identificadores para escolher a cifra.
-- **Outros**: tamanho dos metadados (header) do volume, identificador de versão do formato, e quaisquer flags ou opções default.
+- **Sizes and Lengths**: For example, the size of the Argon2 salt in bytes, the length of the derived key (e.g., 256 bits), encryption block size, etc.
+- **Argon2 Parameters**: Default values for iterations (time), memory, and parallelism used in key derivation. For example, `ARGON_T_COST` (time cost / number of iterations), `ARGON_M_COST` (memory in KiB), `ARGON_PARALLELISM` (number of threads).
+- **Encryption Algorithms**: The specification of the default algorithm and operating mode (e.g., AES in XTS mode or GCM), and block size. If the project uses a crypto library, you might define strings or identifiers here to select the cipher.
+- **Other**: The size of the volume’s metadata (header), the format’s version identifier, and any default flags or options.
 
-*Como funciona:* Esses valores são importados por outros módulos para assegurar consistência. Por exemplo, `argon_utils.py` consulta `config.py` para saber qual o tamanho do salt e parâmetros Argon2 usar, e `chunk_crypto.py` pode usar a constante de tamanho de bloco definida aqui.
+*How it works:* These values are imported by other modules to ensure consistency. For instance, `argon_utils.py` looks to `config.py` to determine which salt size and Argon2 parameters to use, and `chunk_crypto.py` may rely on the block size constant defined here.
 
-*Como modificar:* Desenvolvedores podem ajustar parâmetros em `config.py` para atualizar configurações globais. Por exemplo, aumentar o custo do Argon2 (para reforçar segurança contra ataques de força bruta) ou trocar o algoritmo de cifragem (se quiser implementar ChaCha20-Poly1305 em vez de AES, por exemplo). Tais mudanças afetam todo o sistema, então é importante verificar compatibilidade – volumes criados com configurações antigas talvez precisem de migração se o formato mudar (ex.: mudança no tamanho de metadados ou algoritmo deve vir acompanhada de um incremento de versão e possivelmente procedimentos de conversão). Mantenha `config.py` como fonte da verdade para evitar “números mágicos” espalhados pelo código.
+*How to modify:* Developers can adjust parameters in `config.py` to update global settings. For example, increasing Argon2’s cost (to strengthen security against brute-force attacks) or switching the encryption algorithm (if implementing ChaCha20-Poly1305 instead of AES). Such changes affect the entire system, so it’s important to check compatibility – volumes created with older settings might need migration if the format changes (e.g., changing header size or algorithm should come with a version increment and possibly conversion procedures). Keep `config.py` as the single source of truth to avoid “magic numbers” spread throughout the code.
 
-### utils.py – Funções Utilitárias
+### utils.py – Utility Functions
 
-O `utils.py` contém funções auxiliares de uso geral que não se encaixam especificamente nos outros componentes. Exemplos de funcionalidades que podem estar presentes neste módulo:
+`utils.py` contains auxiliary, general-purpose functions that do not specifically fit into the other components. Examples of functionalities that may appear in this module:
 
-- **Geração de Dados Aleatórios Seguros**: função para gerar bytes aleatórios (por exemplo, usando `os.urandom()` ou via biblioteca de criptografia) para usos diversos como salt, IV (vetor de inicialização) ou preenchimento.  
-- **Manipulação de Bytes e Strings**: conversão de endereços ou inteiros para bytes e vice-versa, padding de dados para alinhar em blocos, formatação de valores de tamanho (ex.: converter tamanho em MB para bytes).
-- **Funções de Apoio Criptográfico**: por exemplo, limpeza segura de memória (overwrite de buffers de texto plano após uso), ou cálculo de hash/HMAC se necessário em vários lugares.
-- **Tratamento de Erros e Logs**: possivelmente utilidades para logar eventos de criptografia ou lançamento de exceções customizadas (como uma exceção específica para "senha incorreta" ou "dados corrompidos").
+- **Secure Random Data Generation**: A function to generate random bytes (e.g., using `os.urandom()` or a crypto library) for a variety of purposes such as salt, IV (initialization vector), or padding.  
+- **Byte and String Manipulation**: Converting addresses or integers to bytes and vice versa, padding data for block alignment, formatting size values (e.g., converting a size in MB to bytes).
+- **Cryptographic Support Functions**: For instance, secure memory cleaning (overwriting plaintext buffers after use) or calculating hashes/HMACs, if needed in various places.
+- **Error and Logging Handling**: Possibly utilities for logging cryptographic events or throwing custom exceptions (e.g., a specific exception for “incorrect password” or “corrupted data”).
 
-*Como funciona:* O utils serve de biblioteca de apoio para os demais módulos. Por exemplo, ao criar um volume, o `hidden_volume.py` pode chamar `utils.py` para gerar o salt aleatório do cabeçalho. Se houver necessidade de converter representações (como transformar uma senha em encoding específico antes de derivar a chave), isso pode estar em utils. Mantê-las isoladas facilita testes unitários e evita duplicação de código.
+*How it works:* `utils.py` acts as a support library for the other modules. For example, when creating a volume, `hidden_volume.py` can call `utils.py` to generate the random salt for the header. If there’s a need to convert representations (like turning a password into a specific encoding prior to key derivation), it could be handled in utils. Having them isolated facilitates unit testing and avoids code duplication.
 
-*Como modificar:* Ao adicionar novas funcionalidades que sejam utilizadas em múltiplos módulos, considere implementá-las aqui. Por exemplo, se for incluir uma função de verificação de integridade repetida em vários lugares, coloque-a em utils. Certifique-se de escrever funções genéricas e bem testadas, pois um bug aqui pode afetar várias partes do CryptGuard. Se alterar alguma função existente (como o gerador de aleatórios), garanta que continue usando fontes criptograficamente seguras. Em resumo, `utils.py` deve conter funções **puramente utilitárias** – modifique-o conforme necessário, mas evite inserir lógica de alto nível nele (que deve ficar nos módulos principais).
+*How to modify:* When adding new functionalities used by multiple modules, consider implementing them here. For instance, if you plan to include an integrity verification function repeated across different places, put it in utils. Make sure to write generic, well-tested functions, since a bug here can affect many parts of CryptGuard. If you change an existing function (such as the random generator), ensure it continues to use cryptographically secure sources. In short, `utils.py` should contain **purely utility** functions – modify it as necessary, but avoid placing high-level logic here (that belongs in the main modules).
 
-### argon_utils.py – Derivação de Chaves (KDF)
+### argon_utils.py – Key Derivation (KDF)
 
-Este módulo implementa a derivação de chaves usando o algoritmo **Argon2**, uma das funções de derivação de senha mais seguras atualmente. O Argon2 protege contra ataques de força bruta impondo alto custo computacional e de memória para cada tentativa de descoberta de chave.
+This module implements key derivation using the **Argon2** algorithm, one of today’s most secure password-based key derivation functions. Argon2 protects against brute-force attacks by imposing a high computational and memory cost for each key discovery attempt.
 
-Principais aspectos do `argon_utils.py`:
+Key aspects of `argon_utils.py`:
 
-- **Função de Derivação**: Provavelmente a função principal aqui é algo como `derivar_chave(senha: str, salt: bytes) -> bytes`. Ela utiliza os parâmetros definidos em `config.py` (p.ex. iterações, memória, comprimento da chave) para rodar o Argon2 e produzir a chave de criptografia a partir da senha fornecida.
-- **Biblioteca de Suporte**: Internamente, a implementação pode usar uma biblioteca Python, como `argon2-cffi` ou similar, ou eventualmente chamar uma função de baixo nível. Os parâmetros (senha, salt, t_cost, m_cost, parallelism) são passados conforme `config.py` define.
-- **Salt Aleatório**: A geração do salt *não* é feita aqui; provavelmente o salt é gerado via `utils.py` quando criando um volume e armazenado nos metadados. `argon_utils.py` apenas recebe o salt (do cabeçalho) para derivar a mesma chave quando precisar decifrar.
+- **Derivation Function**: Likely the main function here is something like `derive_key(password: str, salt: bytes) -> bytes`. It uses the parameters set in `config.py` (e.g., iterations, memory, key length) to run Argon2 and produce the encryption key from the provided password.
+- **Supporting Library**: Internally, the implementation may use a Python library like `argon2-cffi` or a similar solution, or it might call a low-level function. The parameters (password, salt, t_cost, m_cost, parallelism) are passed in as defined by `config.py`.
+- **Random Salt**: Salt generation is *not* done here; the salt is likely generated via `utils.py` when creating a volume and stored in the metadata. `argon_utils.py` just receives the salt (from the header) to derive the same key when decryption is needed.
 
-*Como funciona:* Quando um novo volume é criado, `argon_utils.py` é usado para derivar a chave mestre de criptografia a partir da senha do usuário. Primeiro gera-se um salt aleatório (via utils) e salva-se esse salt no cabeçalho. Depois, passa-se a senha e o salt para a função Argon2, obtendo uma chave de, por exemplo, 256 bits. Essa chave então é usada pelo módulo de criptografia (chunk_crypto) para cifrar os dados. No momento de abrir um volume existente, o processo se repete: lê-se o salt do cabeçalho, aplica-se Argon2 com a senha fornecida e se obtém a chave para tentar decifrar os dados ou os metadados.
+*How it works:* When a new volume is created, `argon_utils.py` is used to derive the master encryption key from the user’s password. First, a random salt is generated (via utils) and saved in the header. The password and salt are then passed to the Argon2 function, yielding (for example) a 256-bit key. That key is then used by the encryption module (`chunk_crypto`) to encrypt data. When opening an existing volume, the process is reversed: the salt is read from the header, Argon2 is applied with the user-supplied password, and the resulting key is used to attempt to decrypt the data or metadata.
 
-*Como modificar:* Caso desenvolvedores queiram trocar o esquema de derivação de chaves, este é o módulo a ser alterado. Por exemplo, para usar **scrypt** ou PBKDF2 em vez de Argon2, pode-se criar uma nova função aqui ou modificar a existente, lembrando de atualizar a forma como os parâmetros são tratados (e guardar novos parâmetros no metadado, se necessário). Se desejar ajustar a segurança, aumentar `t_cost` ou `m_cost` do Argon2 tornará a derivação mais lenta (melhorando segurança contra ataques, porém deixando a abertura de volume ligeiramente mais lenta para todos). Mantenha a compatibilidade: volumes antigos derivam a chave com os parâmetros antigos – uma solução é incluir nos metadados a identificação do algoritmo de KDF e seus parâmetros para que `argon_utils.py` possa aplicar o procedimento correto dependendo da versão do volume. Em resumo, mexa aqui para evoluir o KDF, mas teste exaustivamente a compatibilidade com volumes existentes e a resistência a ataques de senha.
+*How to modify:* If developers want to switch the key derivation scheme, this is the module to change. For example, to use **scrypt** or PBKDF2 instead of Argon2, a new function could be created here or the existing one updated, remembering to adjust how parameters are handled (and store any new parameters in the metadata if needed). If you want to increase security, raising Argon2’s `t_cost` or `m_cost` will make derivation slower (improving resilience against attacks but slightly slowing volume opening for all). Maintain compatibility: old volumes derive keys with old parameters – a solution is to store the KDF algorithm ID and parameters in the metadata so `argon_utils.py` can apply the correct procedure depending on the volume version. In short, make changes here to evolve the KDF, but thoroughly test compatibility with existing volumes and password-attack resistance.
 
-### chunk_crypto.py – Criptografia de Dados em Blocos
+### chunk_crypto.py – Block-Based Data Encryption
 
-O módulo `chunk_crypto.py` implementa as operações de criptografia e descriptografia de baixo nível, manipulando os dados efetivos do volume. O termo "chunk" (pedaço) refere-se ao processamento dos dados em blocos de tamanho fixo, o que é útil para streaming e para grandes arquivos. Principais responsabilidades e funcionamento:
+The `chunk_crypto.py` module implements the low-level encryption and decryption operations that handle the actual volume data. “Chunk” refers to splitting the data into fixed-size blocks, which is useful for streaming and handling large files. Main responsibilities and how it works:
 
-- **Inicialização de Cifra**: Geralmente, antes de cifrar ou decifrar um bloco, é necessário inicializar um objeto de cifra (por exemplo, criar um objeto AES a partir da chave e IV correspondentes). `chunk_crypto.py` provavelmente fornece funções como `inicializar_cifra(chave, iv)` ou implementa diretamente dentro de funções de encriptação.
-- **Cifrar e Decifrar Blocos**: Funções dedicadas, por exemplo `encrypt_chunk(data: bytes, key: bytes, iv: bytes) -> bytes` e `decrypt_chunk(encrypted_data: bytes, key: bytes, iv: bytes) -> bytes`. Estas usam a biblioteca criptográfica subjacente para aplicar a cifra simétrica.
-- **Modo de Operação**: O modo de criptografia escolhido influencia como os blocos são tratados:
-  - Se for um modo de streaming ou CTR, cada chunk pode ser cifrado independentemente usando um contador ou IV único.
-  - Se for GCM (um modo AEAD), cada bloco produzirá também um tag de autenticação que precisa ser armazenado/verificado.
-  - Se for XTS (modo típico para criptografia de disco), o módulo pode dividir o volume em setores e criptografar cada setor com tweaks; contudo, XTS é mais complexo e requer 2 chaves derivadas, o que talvez seja demais para esta implementação caso tenha sido simplificada.
-  - **Suposição**: É provável que um modo mais simples como **AES-GCM** seja usado para garantir confidencialidade e integridade por bloco. Nesse caso, cada chunk deve armazenar além do dado cifrado o tag de autenticação gerado.
-- **Gerenciamento de IV/Nonce**: Para cada bloco cifrado, é importante usar um **IV (vetor de inicialização)** ou **nonce** único. O módulo pode definir que o IV do primeiro bloco seja derivado de algo (por exemplo, do salt ou parte do hash da chave) e depois incrementado ou calculado em função do índice do bloco para subsequentes. Outra estratégia é gerar IVs aleatórios por bloco e armazená-los junto com os dados cifrados (embora isso aumente o overhead). O `chunk_crypto.py` lida com esses detalhes para que outros módulos (streaming, single_shot) não precisem se preocupar com o baixo nível.
-- **Tamanho de Bloco**: Definido em `config.py` (por exemplo, 64 KiB). O chunk_crypto pode ler essa constante para saber quantos bytes processar por vez. Exceto possivelmente o último bloco de um arquivo, que pode ser menor se o tamanho total não for múltiplo do tamanho do chunk – nesse caso, a função de criptografia deve adequar o padding ou tratamento do bloco final (por exemplo, usando padding padrão de cifra ou armazenando o tamanho real em algum lugar).
-- **Autenticidade**: Se não for usado um modo autenticado nativamente, o módulo pode calcular um HMAC por bloco ou global para garantir que os dados não foram alterados indevidamente. No entanto, isso adiciona complexidade de gerenciamento de chaves (seria necessária uma chave HMAC separada ou derivar adicionalmente via Argon2). É algo a verificar no código; se não implementado, considere nas melhorias.
+- **Cipher Initialization**: Generally, before encrypting or decrypting a block, a cipher object is created (for example, an AES object using a key and IV). `chunk_crypto.py` likely provides functions like `initialize_cipher(key, iv)` or builds this directly within encryption functions.
+- **Encrypting and Decrypting Chunks**: Dedicated functions, such as `encrypt_chunk(data: bytes, key: bytes, iv: bytes) -> bytes` and `decrypt_chunk(encrypted_data: bytes, key: bytes, iv: bytes) -> bytes`. These use the underlying crypto library to apply the symmetric cipher.
+- **Operating Mode**: The chosen encryption mode affects how blocks are handled:
+  - If it’s a streaming or CTR mode, each chunk may be encrypted independently using a counter or unique IV.
+  - If it’s GCM (an AEAD mode), each chunk also produces an authentication tag that must be stored and verified.
+  - If it’s XTS (common for disk encryption), the module may split the volume into sectors and encrypt each one with “tweaks”; however, XTS is more complex and requires two derived keys, which may be beyond a simplified implementation here.
+  - **Assumption**: A simpler mode like **AES-GCM** is likely used to ensure per-chunk confidentiality and integrity. In that case, each chunk must store not only the encrypted data but also the generated authentication tag.
+- **IV/Nonce Management**: For each encrypted block, it’s crucial to use a unique **IV (initialization vector)** or **nonce**. The module might define that the IV for the first block is derived from something (e.g., part of the salt or a key hash) and then increment or compute something for subsequent blocks. Another strategy is generating random IVs for each block and storing them with the encrypted data (though this increases overhead). `chunk_crypto.py` handles these details so that higher-level modules (streaming, single_shot) don’t have to worry about the low level.
+- **Block Size**: Defined in `config.py` (e.g., 64 KiB). `chunk_crypto` reads this constant to know how many bytes to process at a time. Except possibly the final block of a file, which can be smaller if the total size isn’t a multiple of the block size – in that case, the encryption function must handle padding or track the actual size (e.g., using the cipher’s default padding or storing the real length somewhere).
+- **Authenticity**: If no authenticated mode is used, the module could calculate an HMAC per block or globally to ensure data hasn’t been tampered with. However, this adds complexity around key management (you’d need a separate HMAC key or derive another one via Argon2). Check whether this is done in the code; if not implemented, consider future enhancements.
 
-*Como funciona:* Quando um volume é montado (externo ou oculto), após derivar a chave pelo Argon2 (`argon_utils.py`), cada leitura/escrita de dados criptografados passa pelo `chunk_crypto`. Por exemplo, para escrever dados cifrados: divide-se o fluxo de bytes em blocos do tamanho configurado, para cada bloco gera-se um IV (pode ser incrementando um contador ou outro esquema), então cifra-se o bloco com a chave e IV obtidos. O resultado (e possivelmente o tag de autenticação) é escrito no arquivo container. Para leitura (descriptografia), o processo se inverte: para cada bloco lido do arquivo, recupera-se (ou recalcula-se) o IV correspondente, decifra-se o bloco com a chave derivada e obtém-se o texto plano original. Tudo isso deve ocorrer de forma transparente para quem usar níveis superiores (streaming ou single_shot).
+*How it works:* When a volume is mounted (external or hidden), after the key is derived by Argon2 (`argon_utils.py`), every read/write of encrypted data goes through `chunk_crypto`. For example, to write encrypted data: the byte stream is split into blocks of the configured size, for each block an IV is generated (perhaps by incrementing a counter), then the block is encrypted with the key and that IV. The result (and possibly the authentication tag) is written to the container file. For reading/decryption, the process is reversed: each block read from the file is taken along with (or used to compute) its corresponding IV, then decrypted with the derived key to get the original plaintext. All of this should happen transparently for higher-level modules (streaming or single_shot).
 
-*Exemplo de uso:* Um desenvolvedor pode usar funções do `chunk_crypto.py` diretamente se quiser criptografar manualmente um bloco de dados. Exemplo simplificado:
+*Usage example:* A developer may directly use functions from `chunk_crypto.py` if they want to manually encrypt a block of data. A simplified example:
 ```python
 from cryptguard import chunk_crypto, config
-key = b'\x01\x02...32byteskey...'       # chave derivada previamente
-iv  = b'\x00\x00\x00\x00...16bytesiv...' # IV para o bloco (16 bytes para AES)
-plaintext = b"Dados confidenciais..."
+key = b'\x01\x02...32byteskey...'       # previously derived key
+iv  = b'\x00\x00\x00\x00...16bytesiv...' # IV for this block (16 bytes for AES)
+plaintext = b"Confidential data..."
 ciphertext = chunk_crypto.encrypt_chunk(plaintext, key, iv)
-# ... salvar ciphertext no arquivo ...
+# ... save ciphertext to a file ...
 ```
-Da mesma forma, para decifrar:
+And for decryption:
 ```python
 decrypted = chunk_crypto.decrypt_chunk(ciphertext, key, iv)
 assert decrypted == plaintext
 ```
-No uso normal do CryptGuard via suas camadas superiores, o desenvolvedor não precisa gerenciar manualmente IVs por bloco – isso é tratado internamente. Mas para modificar o comportamento, por exemplo, mudar o modo de geração de IV ou implementar um novo algoritmo, `chunk_crypto.py` é o local apropriado.
+In normal CryptGuard usage via its upper layers, the developer doesn’t need to manually manage per-block IVs – this is handled internally. But to modify behavior (e.g., changing the IV generation method or implementing a new algorithm), `chunk_crypto.py` is the place.
 
-*Como modificar:* Se quiser trocar o algoritmo de criptografia ou o modo de operação, o desenvolvedor deve modificar as funções em `chunk_crypto.py`. Por exemplo, para usar **ChaCha20-Poly1305** em vez de AES, pode-se utilizar a biblioteca de criptografia apropriada e ajustar os tamanhos de chave e nonce. Ao fazer isso, lembre-se de atualizar `config.py` com constantes adequadas (tamanho da chave de 256 bits permanece, nonce de 96 bits para ChaCha20, etc.) e garantir que `metadata.py` capture quaisquer informações necessárias (como talvez um identificador de algoritmo para saber como decifrar). Testes devem confirmar que volumes criados com o novo algoritmo ainda podem ser reconhecidos ou que a mudança de formato seja claramente indicada para evitar tentativas de decifração com o método errado. Outro possível ajuste: aumentar o tamanho de bloco para melhorar desempenho (blocos maiores = menos operações de KDF de IV ou menos tags, porém consomem mais RAM por bloco). Qualquer alteração em `chunk_crypto.py` deve ser acompanhada de testes de encriptação/desencriptação para verificar que os dados recuperados são idênticos aos originais e que erros de senha se comportam conforme esperado (dados aleatórios de uma senha errada não devem decifrar para algo legível).
+*How to modify:* If you want to switch the encryption algorithm or operating mode, developers should change the functions in `chunk_crypto.py`. For instance, to replace AES with **ChaCha20-Poly1305**, use an appropriate crypto library and adjust the key and nonce sizes. Update `config.py` with the right constants (still 256-bit key, 96-bit nonce for ChaCha20, etc.) and ensure `metadata.py` captures any required information (like an algorithm ID to know how to decrypt). Test thoroughly to confirm volumes created with the new algorithm are recognized or that any format changes are clearly signaled to avoid decrypting with the wrong method. Another potential tweak: increase the block size to improve performance (larger blocks = fewer KDF or IV operations, but more RAM usage per block). Any changes to `chunk_crypto.py` should be accompanied by encryption/decryption tests to confirm that recovered data match the originals exactly and that incorrect passwords behave as expected (random data from a wrong password should not decrypt to anything coherent).
 
-### metadata.py – Metadados do Volume Criptografado
+### metadata.py – Encrypted Volume Metadata
 
-O módulo `metadata.py` define a estrutura do cabeçalho (header) do volume criptografado e fornece funcionalidades para manipular essa estrutura. Os metadados são críticos pois armazenam informações necessárias para derivar chaves e entender a organização do volume, tanto do externo quanto do oculto.
+The `metadata.py` module defines the structure of the (header) metadata in the encrypted volume and provides functionalities to manage this structure. The metadata is crucial because it stores the information needed to derive keys and interpret the volume’s layout, both external and hidden.
 
-Características típicas contidas nos metadados (supondo uma classe, por exemplo, `VolumeMetadata`):
+Typical fields in the metadata (assuming a class like `VolumeMetadata`):
 
-- **Identificador/Magic e Versão**: Um valor fixo que identifica o arquivo como um volume CryptGuard e possivelmente um número de versão do formato. Isso ajuda a validar se a decifração do cabeçalho foi bem-sucedida (por exemplo, espera-se ler um “MAGIC” específico após tentar decifrar com a senha; se não bater, a senha está errada ou o arquivo não é válido).
-- **Salt**: O salt aleatório usado para derivação da chave via Argon2. Provavelmente armazenado em texto claro no cabeçalho *criptografado* (ou seja, dentro do cabeçalho que é cifrado). Ao tentar abrir o volume, o software lê o arquivo, obtém o blob de metadados cifrados, tenta decifrar com a senha fornecida; se conseguir, extrai o salt e então aplica Argon2. (Alternativamente, o salt pode ficar fora do trecho cifrado para permitir derivar a chave antes de decifrar o restante do cabeçalho – mas isso revelaria um salt fixo, que embora não seja secreto, não há problema que esteja em claro. A estratégia exata depende da implementação).
-- **Parâmetros do Argon2**: Possivelmente armazenados para saber com quais parâmetros a chave foi derivada (especialmente útil se no futuro quiserem suportar parâmetros variáveis ou outros KDFs). Poderia incluir t_cost, m_cost, etc., caso se queira permitir alteração desses valores por volume.
-- **Tamanho do Volume**: Tamanho total do arquivo container ou do espaço de dados do volume externo.
-- **Tamanho do Volume Oculto**: Se um volume oculto foi criado, seu tamanho ou offset inicial pode ser armazenado. Alguns designs evitam colocar explicitamente o tamanho do volume oculto no cabeçalho externo, para que um invasor com acesso ao cabeçalho externo não descubra que há “espaço reservado”. No CryptGuard, essa informação poderia estar apenas no cabeçalho do volume oculto, não no externo.
-- **Checksum/Assinatura**: Além do magic de identificação, pode haver um checksum ou HMAC dos demais campos para validar integridade do cabeçalho (com a chave derivada). Em modos autenticados, o próprio GCM/Poly1305 do cabeçalho pode garantir a integridade. De qualquer forma, é importante que qualquer alteração não autorizada no cabeçalho seja detectável (senão um invasor poderia adulterar parâmetros para tentar enfraquecer a derivação, por exemplo).
-- **Chave Mestra Cifrada (opcional)**: Em algumas implementações, em vez de usar diretamente a chave derivada do Argon2 para cifrar os dados, gera-se uma chave mestra aleatória para o volume e a cifra-se com a chave derivada da senha, armazenando-a no cabeçalho. Isso permite trocar a senha sem recriptografar todo o volume – basta decifrar a chave mestra com a senha antiga e recifrá-la com a nova. Não está claro se o CryptGuard segue esse modelo; caso não, a chave derivada do Argon2 *é* a chave de dados. Se sim, o cabeçalho conterá a chave mestra cifrada (e Argon2 serve apenas para desbloqueá-la).
-- **Outros Campos**: Poderia haver indicadores como “tem volume oculto (bool)” ou padding para completar tamanho fixo do header. Entretanto, um indicador explícito de volume oculto poderia comprometer a negação plausível se um invasor ler o cabeçalho externo e ver flag de “hidden volume: true”. Por isso, é provável que o cabeçalho do volume externo **não contenha nenhuma referência explícita** ao oculto. O volume oculto teria seu próprio cabeçalho separado contendo seus parâmetros (similar ao do externo, mas talvez sem um campo de “hidden volume”).
+- **Identifier/Magic and Version**: A fixed value identifying the file as a CryptGuard volume and possibly a format version number. This helps validate whether the header decryption was successful (for example, you expect a specific “MAGIC” after decrypting with the password; if it doesn’t match, the password is wrong or the file is invalid).
+- **Salt**: The random salt used by Argon2 to derive the key. It’s probably stored in clear text inside the *encrypted* header (i.e., within the header itself, which gets encrypted). When attempting to open the volume, the software reads the file, obtains the encrypted metadata blob, tries to decrypt it with the provided password; if successful, it extracts the salt and then applies Argon2. (Alternatively, the salt could be outside the encrypted portion so you can derive the key before decrypting the rest of the header – though a fixed, non-secret salt is not necessarily a problem. The exact strategy depends on the implementation).
+- **Argon2 Parameters**: Potentially stored so you know which parameters (t_cost, m_cost, etc.) were used for the key derivation (especially useful if in future you want to support variable parameters or other KDFs). Could include t_cost, m_cost, etc., if you want to allow these values to vary by volume.
+- **Volume Size**: The total size of the container file or of the external volume data space.
+- **Hidden Volume Size**: If a hidden volume was created, it may store its size or offset. Some designs avoid explicitly listing the hidden volume’s size in the external header, so that an attacker with external header access won’t see that “reserved space.” In CryptGuard, that information could appear only in the hidden volume’s header, not in the external one.
+- **Checksum/Signature**: In addition to the identifying magic, there may be a checksum or HMAC for the other fields to validate header integrity (with the derived key). In authenticated modes, GCM/Poly1305 on the header can ensure integrity. In any case, it’s important that any unauthorized alteration to the header be detectable (otherwise, an attacker could tamper with parameters to weaken the derivation, for example).
+- **Encrypted Master Key (optional)**: In some implementations, rather than using the Argon2-derived key directly to encrypt the data, a random master key for the volume is generated and stored in the header, encrypted with the password-derived key. This allows changing the password without re-encrypting the entire volume – you just decrypt the master key with the old password and re-encrypt it with the new one. It’s unclear if CryptGuard follows this model; if not, the Argon2-derived key *is* the data key. If so, the header would hold the encrypted master key (and Argon2 only unlocks it).
+- **Other Fields**: Possibly includes indicators like “has hidden volume (bool)” or padding to fill a fixed header size. However, an explicit indicator of a hidden volume could compromise plausible deniability if an attacker reads the external header and sees a “hidden volume: true” flag. Hence, the external volume header likely **does not include** any direct reference to a hidden volume. The hidden volume would have its own header stored separately (similar to the external header but perhaps without a “hidden volume” field).
 
-*Como funciona:* Geralmente `metadata.py` define uma classe ou estrutura e métodos para (de)serializar os metadados para bytes. Por exemplo, `Metadata.to_bytes()` para produzir um bloco binário do tamanho fixo do header pronto para criptografar/escrever, e `Metadata.from_bytes(data: bytes)` para interpretar um bloco binário lido/decifrado do arquivo em um objeto Python com campos acessíveis. Quando se cria um volume novo, o CryptGuard monta um objeto de metadados preenchendo os campos (gera salt, define parâmetros, etc.), serializa em bytes e então cifra esse header com a chave derivada antes de escrever no início do arquivo. Quando se abre um volume, o processo inverso ocorre: lê-se os bytes iniciais do arquivo (do tamanho do header), tenta-se decifrar com a chave derivada da senha fornecida; se obtiver um resultado coerente (ex.: campo `magic` correto), então faz `Metadata.from_bytes` para carregar os campos e usa essas informações para prosseguir (p.ex., sabe-se onde começa/termina o volume oculto, quais parâmetros de Argon2 usar, etc.).
+*How it works:* Typically, `metadata.py` defines a class or structure plus methods for (de)serializing metadata to bytes. For example, `Metadata.to_bytes()` might produce a fixed-size binary block for the header ready to be encrypted/written, and `Metadata.from_bytes(data: bytes)` might interpret a binary block read/decrypted from the file into a Python object with accessible fields. When creating a new volume, CryptGuard builds a metadata object, fills in the fields (generates the salt, sets parameters, etc.), serializes it to bytes, and encrypts that header with the derived key before writing it at the start of the file. When opening a volume, the reverse happens: read the initial bytes of the file (the header size), try to decrypt with the user’s password-derived key; if you get coherent results (the correct `magic` field, for example), then do `Metadata.from_bytes` to load the fields and use them (e.g., hidden volume offset, Argon2 parameters, etc.).
 
-*Exemplo de uso:* Em geral, `metadata.py` é usado internamente pelo sistema e não diretamente chamado pelo usuário final. Mas um desenvolvedor, ao modificar ou inspecionar, poderia fazer algo como:
+*Usage example:* Generally `metadata.py` is used internally by the system, not directly by the end user. But a developer modifying or inspecting could do something like:
 ```python
 from cryptguard.metadata import VolumeMetadata
 meta = VolumeMetadata(
     salt=os.urandom(config.SALT_SIZE),
     has_hidden=True,
-    hidden_size=1024*1024*100,  # 100 MB de volume oculto
+    hidden_size=1024*1024*100,  # 100 MB hidden volume
     argon_params={'t_cost': 3, 'm_cost': 2**16, 'parallelism': 4},
     version=1
 )
 header_bytes = meta.to_bytes()
-# ... cifra header_bytes com chave derivada e grava no arquivo ...
+# ... encrypt header_bytes with the derived key and write to file ...
 ```
-E para ler:
+And to read:
 ```python
-# decifrar first_header_bytes com chave derivada da senha fornecida...
+# decrypt first_header_bytes with the key derived from the given password...
 plaintext_header = cipher.decrypt(first_header_bytes)
 meta = VolumeMetadata.from_bytes(plaintext_header)
 print("Salt:", meta.salt, "Hidden volume?", meta.has_hidden)
 ```
-Novamente, muitos detalhes exatos dependem da implementação, mas a ideia é que o módulo facilita o manuseio do header sem que outros componentes tenham que lidar com offsets e estruturas binárias manualmente.
+Again, many exact details depend on the implementation, but the idea is that the module makes handling the header easier so other components don’t have to deal with offsets and binary structures manually.
 
-*Como modificar:* Se for necessário adicionar informações extras no cabeçalho (por exemplo, um novo campo de configuração, ou suporte a múltiplos volumes ocultos), este módulo deve ser alterado. Ao fazê-lo, tome cuidado com o tamanho fixo do cabeçalho – ao mudar campos, a classe deve continuar serializando para o mesmo tamanho ou a versão do formato deve ser incrementada e lida condicionalmente. Por exemplo, para incluir um campo de “data de criação” ou “algoritmo de cifra utilizado”, pode-se usar algum espaço reservado ou expandir o header se possível. Lembre-se de atualizar a lógica de `to_bytes`/`from_bytes` e de validar essas informações durante a montagem. **Nunca armazene informações sensíveis em texto claro no cabeçalho** (exceto o salt que não é secreto), pois o cabeçalho pode ficar exposto se o adversário tiver o arquivo. Qualquer dado crítico deve estar cifrado ou derivado de forma a não revelar nada (por exemplo, se incluir um campo "has_hidden", talvez codificar de forma indireta ou omitir no externo). Considere também efeitos em compatibilidade: volumes antigos sem o novo campo ainda devem ser legíveis (talvez inferindo valores padrão para campos faltantes). Em resumo, `metadata.py` é central para a definição do formato do container – modifique-o com atenção redobrada, pois erros aqui podem tornar volumes inacessíveis.
+*How to modify:* If you need to add extra info to the header (e.g., a new configuration field or support for multiple hidden volumes), this is the module to change. In doing so, be careful with fixed header size – changing fields might require either keeping the same size or bumping the format version and reading it conditionally. For instance, to add a “creation date” or “cipher algorithm used,” you could use some reserved space or expand the header if possible. Be sure to update the logic in `to_bytes`/`from_bytes` and validate the info during mounting. **Never store sensitive information in plaintext in the header** (except the non-secret salt), as the header can be exposed if an adversary has the file. Store critical data encrypted or derived so that it doesn’t reveal anything (for example, if you add a “has_hidden” field, consider encoding it indirectly or omitting it in the external volume). Also consider compatibility implications: old volumes lacking the new field should still be readable (perhaps inferring default values). In short, `metadata.py` is central to the container format definition – modify it with extra caution, since mistakes here can render volumes inaccessible.
 
-### hidden_volume.py – Gerenciamento de Volume Oculto
+### hidden_volume.py – Hidden Volume Management
 
-Este módulo implementa a funcionalidade de criar e manipular volumes ocultos dentro de um container. Ele orquestra chamadas para outros módulos (metadata, chunk_crypto, argon_utils) para realizar operações complexas envolvendo dois conjuntos de dados (externo e oculto). As principais funções e comportamentos esperados em `hidden_volume.py` incluem:
+This module implements the functionality for creating and handling hidden volumes inside a container. It orchestrates calls to other modules (metadata, chunk_crypto, argon_utils) to perform complex operations involving two sets of data (external and hidden). Key functions and behaviors in `hidden_volume.py` may include:
 
-- **Criação de Volume (Init)**: Uma função como `create_volume(caminho_arquivo, senha_externa, senha_oculta=None, tamanho_oculto=0, dados_externos=None)`. Essa função seria responsável por criar um novo arquivo container criptografado. Passos típicos:
-  1. **Preparação do Arquivo**: Abre um novo arquivo no `caminho_arquivo` e define seu tamanho total. Se um volume oculto será criado (`senha_oculta` fornecida e `tamanho_oculto > 0`), o tamanho total do arquivo deverá acomodar tanto o volume externo quanto o oculto. Por exemplo, se o usuário quer um oculto de 100 MB dentro de um container de 500 MB, o arquivo terá 500 MB no total; o volume externo poderá ocupar até 400 MB e 100 MB estarão reservados para o oculto.
-  2. **Preenchimento Inicial**: Escreve dados aleatórios em todo o arquivo (ou pelo menos nas áreas previstas para o volume oculto). Isso assegura que mesmo partes não utilizadas do volume tenham aparência aleatória indistinguível de dados cifrados reais. Essa etapa utiliza funções de geração aleatória (de utils) para produzir blocos e grava no arquivo repetidamente.
-  3. **Configuração do Volume Externo**: Gera salt do Argon2, deriva a chave da senha externa. Monta os metadados do volume externo (via `metadata.py`), indicando possivelmente o espaço total do volume externo (que seria o total menos o espaço reservado ao oculto). Se um volume oculto será criado, pode ou não haver indicação nos metadados externos; idealmente, não explícita (o volume externo pode simplesmente ser tratado como menor do que o arquivo total, sem justificar por quê – do ponto de vista do invasor, o restante é espaço livre aleatório).
-  4. **Criação do Volume Oculto (opcional)**: Se solicitado, similarmente gera salt e deriva chave para a senha oculta. Monta metadados para o volume oculto, indicando seu tamanho e talvez sua posição. A posição do volume oculto normalmente começa em algum offset dentro do arquivo. Uma estratégia comum: alocar o volume oculto no final do arquivo container. Ex: tamanho total 500 MB, volume oculto 100 MB começaria no offset 400 MB. Assim, o cabeçalho do volume oculto poderia ser armazenado logo no início dessa região (offset 400 MB do arquivo).
-  5. **Escrita de Cabeçalhos**: Cifra e escreve o cabeçalho do volume externo no início do arquivo. Se há volume oculto, cifra e escreve seu cabeçalho em sua região designada (por exemplo, no início do espaço oculto, ou no final do arquivo – alguns designs colocam o cabeçalho do oculto no final do arquivo em vez de início da região, para maior discrição). 
-  6. **Dados Iniciais**: Se `dados_externos` foram fornecidos (o usuário quer já colocar alguns arquivos no volume externo durante criação), o módulo poderia cifrá-los e armazená-los imediatamente após o cabeçalho externo. Entretanto, como geralmente o volume externo seria montado depois para gravação, o CryptGuard pode simplesmente criar o volume vazio (apenas com cabeçalhos e preenchimento aleatório). O mesmo vale para dados ocultos iniciais – normalmente, o volume oculto começa vazio.
+- **Volume Creation (Init)**: A function like `create_volume(file_path, external_password, hidden_password=None, hidden_size=0, external_data=None)`. This function creates a new encrypted container file. Typical steps:
+  1. **File Preparation**: Opens a new file at `file_path` and sets its total size. If a hidden volume is requested (`hidden_password` provided and `hidden_size > 0`), the total file size must accommodate both the external volume and the hidden one. For example, if the user wants a 100 MB container with a 20 MB hidden volume, the file might be 100 MB total; the external volume can occupy up to 80 MB, and 20 MB is reserved for the hidden volume.
+  2. **Initial Filling**: Writes random data across the entire file (or at least in the area allocated for the hidden volume). This ensures that even unused volume portions appear random, indistinguishable from real encrypted data. This step uses random generation functions (from utils) to produce blocks repeatedly.
+  3. **External Volume Setup**: Generates an Argon2 salt, derives the external password key. Builds the external volume metadata (via `metadata.py`), possibly indicating the total space for the external volume (the total minus the hidden space). If a hidden volume is to be created, it may or may not be indicated in the external metadata; ideally, it isn’t explicitly labeled (the external volume may just be seen as smaller, offering no explanation for the unused space – to an attacker, that leftover area just looks like random free space).
+  4. **Hidden Volume Creation (optional)**: If requested, similarly generate a salt and derive the key for the hidden password. Build the metadata for the hidden volume, indicating its size and possibly its position. The hidden volume position is typically allocated at the end of the container file. For example, a total size of 500 MB with a 100 MB hidden volume might start the hidden offset at 400 MB. Thus, the hidden volume’s header might be stored right at the start of that region (offset 400 MB into the file).
+  5. **Writing Headers**: Encrypt and write the external volume header at the beginning of the file. If there is a hidden volume, encrypt and write its header to its designated region (for example, at the start of the hidden area or at the end of the file – some designs put the hidden header at the file’s end for greater stealth).
+  6. **Initial Data**: If `external_data` were provided (the user wants to put some files into the external volume right away), the module could encrypt them and store them immediately after the external header. However, because the external volume is typically mounted later for writing, CryptGuard can simply create an empty volume (just headers and random filling). The same goes for initial hidden data – usually the hidden volume starts empty.
   
-- **Abertura/Montagem de Volume**: Função como `open_volume(caminho_arquivo, senha) -> ObjetoVolume`. Aqui o módulo decide, com base na senha fornecida, qual volume está sendo acessado:
-  1. Lê o cabeçalho externo cifrado do início do arquivo e tenta decifrá-lo usando a senha (derivando chave via Argon2 e decifrando).
-  2. Se a decifração produz metadados válidos (magic correto, versão conhecida, etc.), então a senha corresponde ao volume externo. O módulo então retornaria uma representação do volume externo (por exemplo, um objeto contendo a chave derivada e limites de espaço). Esse objeto pode ser usado com `streaming.py` para ler/escrever dados no volume externo.
-  3. Se a senha falhou para o volume externo (metadados ilógicos), o módulo então tenta ler o cabeçalho do volume oculto (no offset onde ele supostamente estaria, como último 512 bytes do arquivo ou similar). Tenta decifrá-lo com a chave derivada da senha. Se obtiver metadados válidos, então a senha corresponde ao volume oculto. Retorna um objeto representando o volume oculto.
-  4. Se nenhuma tentativa deu certo, a senha é inválida ou o arquivo não é um container CryptGuard.
+- **Volume Opening/Mounting**: A function like `open_volume(file_path, password) -> VolumeObject`. Here the module decides, based on the provided password, which volume is being accessed:
+  1. Reads the encrypted external header from the file start and attempts to decrypt it with the password (deriving the key via Argon2 and decrypting).
+  2. If decryption yields valid metadata (correct magic, known version, etc.), then the password corresponds to the external volume. The module returns a representation of the external volume (e.g., an object holding the derived key and its space limits). That object can be used with `streaming.py` to read/write data in the external volume.
+  3. If the password fails on the external volume (metadata is invalid), the module then tries to read the hidden volume header (at the offset where it’s presumably located, like the last 512 bytes of the file or similar). It attempts to decrypt with the derived key. If it yields valid metadata, then the password is for the hidden volume. It returns an object representing the hidden volume.
+  4. If neither attempt succeeds, the password is invalid or the file is not a CryptGuard container.
   
-  Esse fluxo implica que o módulo `hidden_volume.py` sabe onde procurar o cabeçalho do volume oculto. Essa informação poderia ser fixa (por exemplo, último setor do arquivo é sempre o header do oculto) ou derivada do tamanho total menos tamanho do header (se assumirmos o oculto ocupa final e seu header está logo no início do oculto). Outra possibilidade: armazenar dois headers consecutivos no início, um para externo e um para oculto, e distinguir pela tentativa de senha. Mas isso facilitaria detectar que existem dois headers. Provavelmente o design escolhe posições distintas para manter a ocultação.
+  This flow implies that `hidden_volume.py` knows where to look for the hidden volume header. This could be fixed (e.g., the last sector of the file is always the hidden header) or derived from the total size minus the header size (if we assume the hidden volume uses the file’s end, with its header at the start of that region). Another possibility is to store both headers consecutively at the front, one for the external, one for the hidden, and distinguish them by trying each password. But that would make it easy to detect two headers. Likely the design places them in separate locations for better concealment.
   
-- **Leitura/Escrita de Dados**: Uma vez determinado qual volume (externo ou oculto) está ativo, o `hidden_volume.py` coordena as operações de I/O através do módulo de streaming ou single_shot:
-  - Para leitura/escrita sequencial, usa `streaming.py` passando a posição inicial e tamanho do volume dentro do arquivo. Por exemplo, para volume externo pode começar logo após o cabeçalho externo até o início do oculto (ou até tamanho total se não há oculto). Para volume oculto, o streaming começaria no início da região oculta até o final do arquivo.
-  - O módulo também pode fornecer métodos mais simples como `read_file` ou `write_file` que internamente usam streaming ou single_shot para operações completas em arquivos comuns. Assim, o desenvolvedor poderia pedir para extrair um arquivo do volume oculto diretamente fornecendo path externo e interno.
+- **Data Reading/Writing**: Once it’s determined which volume (external or hidden) is active, `hidden_volume.py` coordinates I/O operations via the streaming or single_shot modules:
+  - For sequential read/write, it uses `streaming.py`, passing the volume’s start position and size in the file. For example, for the external volume, that could be right after the external header until the start of the hidden space (or the entire file size if there is no hidden volume). For the hidden volume, streaming might start at the hidden region’s offset until the file’s end.
+  - The module may also provide simpler methods like `read_file` or `write_file` that use streaming or single_shot internally for common file operations. Thus, a developer might directly request to extract a file from the hidden volume by specifying an external path and an internal path.
   
-- **Proteção contra Sobrescrita**: Se o volume externo for montado com conhecimento da senha oculta, `hidden_volume.py` pode ativar proteção contra escrita em áreas ocultas. Isso poderia ser implementado checando, a cada escrita no externo via streaming, se o offset vai além do limite permitido (início do volume oculto). Caso tente, retornar erro ou truncar. Essa funcionalidade dependeria de o usuário fornecer também a senha oculta ao montar o externo (sinalizando que ele sabe da existência e quer proteger). Caso não implementado ainda, fica como melhoria.
+- **Protecting Against Overwrite**: If the external volume is mounted with knowledge of the hidden password, `hidden_volume.py` can enable protection against writing to hidden areas. That might be done by checking each external write operation to see if the offset goes beyond the allowed boundary (the start of the hidden volume). If it does, return an error or truncate. This requires the user to also supply the hidden password when mounting the external volume (indicating knowledge of the hidden volume). If not yet implemented, it’s a future improvement.
 
-*Exemplos de uso:* Suponha que um desenvolvedor queira criar um volume criptografado com volume oculto via código (sem usar a CLI). Eles poderiam fazer:
-
+*Usage examples:* Suppose a developer wants to create an encrypted volume with a hidden volume from code (not using the CLI). They might do:
 ```python
 from cryptguard import hidden_volume
-# Criar um volume de 100 MiB com um volume oculto de 20 MiB dentro
+# Create a 100 MiB volume with a 20 MiB hidden volume inside
 hidden_volume.create_volume(
-    "meu_container.dat",
-    senha_externa="senha123",
-    senha_oculta="segredo!",
-    tamanho_oculto=20 * 1024 * 1024
+    "my_container.dat",
+    external_password="password123",
+    hidden_password="secret!",
+    hidden_size=20 * 1024 * 1024
 )
 ```
 
-Isso irá gerar o arquivo `meu_container.dat` de 100 MiB, com volume externo de ~80 MiB e um volume oculto de 20 MiB. Depois, para escrever dados no volume oculto:
+This generates `my_container.dat` at 100 MiB, with an external volume of ~80 MiB and a hidden volume of 20 MiB. Then, to write data to the hidden volume:
 
 ```python
-vol = hidden_volume.open_volume("meu_container.dat", senha="segredo!")  # abre volume oculto
-# 'vol' poderia ser um objeto que fornece acesso, por exemplo:
-vol.write(b"mensagem secreta", path_in_volume="nota.txt")
+vol = hidden_volume.open_volume("my_container.dat", password="secret!")  # opens hidden volume
+# 'vol' might be an object that provides access, for example:
+vol.write(b"secret message", path_in_volume="note.txt")
 vol.close()
 ```
 
-Ou, usando streaming manualmente:
+Or, using manual streaming:
 
 ```python
-# Abrir volume oculto e obter limites para streaming
-vol = hidden_volume.open_volume("meu_container.dat", senha="segredo!")
-start, length = vol.data_offset, vol.data_size  # posição e tamanho do volume oculto dentro do arquivo
-with open("meu_container.dat", "rb") as container:
+# Open hidden volume and get limits for streaming
+vol = hidden_volume.open_volume("my_container.dat", password="secret!")
+start, length = vol.data_offset, vol.data_size  # position and size of the hidden volume in the file
+with open("my_container.dat", "rb") as container:
     container.seek(start)
     ciphertext = container.read(length)
-# (Então decifrar ciphertext com vol.key usando streaming.decrypt_stream ou similar)
+# (Then decrypt ciphertext with vol.key using streaming.decrypt_stream or similar)
 ```
 
-Do lado do volume externo:
+For the external volume:
 
 ```python
-vol_ext = hidden_volume.open_volume("meu_container.dat", senha="senha123")
-# Escrever dados no volume externo (até o limite de 80 MiB, sem tocar o oculto)
-vol_ext.write_file("documento.txt", data=b"arquivo externo")
+vol_ext = hidden_volume.open_volume("my_container.dat", password="password123")
+# Write data to the external volume (up to 80 MiB limit, without touching hidden area)
+vol_ext.write_file("document.txt", data=b"external file")
 ```
 
-Os detalhes de API exata variam, mas essencialmente `hidden_volume.py` fornece essas operações de alto nível para que o restante da aplicação (ou CLI em `main.py`) possa criar e acessar volumes sem se preocupar com offsets e derivação de chaves a cada vez (isso fica encapsulado quando você obtém o objeto de volume com a chave pronta).
+The exact API details vary, but essentially `hidden_volume.py` offers these higher-level operations so the rest of the application (or the CLI in `main.py`) can create and access volumes without worrying about offsets and re-deriving the key each time (that’s handled once you obtain the volume object with the ready key).
 
-*Como modificar:* Alterações neste módulo devem ser feitas com extremo cuidado, pois é o coração da lógica de volumes ocultos:
-- **Novos recursos**: Se quiser suportar múltiplos volumes ocultos (mais de um volume escondido com senhas diferentes dentro do mesmo container), este é o módulo a estender. Teria que definir como organizar vários volumes (por exemplo, dividir o espaço livre em várias partes, com múltiplos cabeçalhos ocultos). A lógica de abertura também teria que tentar várias posições de cabeçalho oculto para diferentes senhas.
-- **Mudança na estratégia de alocação**: Por padrão, pode estar usando o final do arquivo para o volume oculto. Um desenvolvedor poderia optar por embutir o volume oculto em outra posição (por exemplo, logo após o cabeçalho externo, preenchendo o meio do arquivo com o oculto, e deixando o restante para externo). Isso exigiria recalcular offsets e talvez armazenar alguns indicadores (o que complica a negação plausível). Qualquer mudança assim deve manter o princípio de que sem a senha oculta é impossível distinguir espaços.
-- **Proteção de volume oculto**: Implementar a funcionalidade de proteger o volume oculto contra sobrescrita quando montado o externo. Isso envolveria possivelmente solicitar as duas senhas juntas e marcar o objeto do volume externo com o limite protegido. Uma vez ativado, operações de escrita devem referenciar esse limite. Adicionar essa capacidade melhoraria a segurança ao usar ativamente os volumes, e pode ser introduzida aqui.
-- **Performance**: Se for necessário melhorar desempenho ao acessar volumes, desenvolvedores podem introduzir cache de chave (se Argon2 for muito lento, talvez armazenar a chave derivada em memória durante uso prolongado, embora sempre derivar a chave na abertura seja mais seguro para não deixar em RAM por muito tempo). Podem também otimizar a cópia de dados aleatórios usando blocos maiores ou threads durante criação do volume.
-- **Limpeza Segura**: Ao fechar um volume, pode ser prudente limpar (zerar) da memória qualquer chave ou senha mantida. Verifique se o módulo já o faz; caso contrário, considere adicionar para não deixar dados sensíveis em variáveis residuais.
-  
-Em resumo, `hidden_volume.py` coordena as operações de alto nível envolvendo dois conjuntos de dados criptografados no mesmo arquivo. Modificações aqui devem ser acompanhadas de testes extensivos: criar volumes, abrir com senhas corretas e incorretas, garantir que o volume oculto não seja detectável e que não haja vazamento de informações (por exemplo, tempo de resposta diferente se existe ou não oculto). Qualquer novo recurso no âmbito de volumes ocultos passa por este módulo.
+*How to modify:* Changes in this module must be handled with utmost care, as it is the core of the hidden volume logic:
+- **New Features**: If you want to support multiple hidden volumes (more than one hidden volume with different passwords inside the same container), this is the module to expand. You’d have to define how to split the free space into multiple hidden areas, with multiple hidden headers. The opening logic would have to attempt multiple header positions for different passwords.
+- **Allocation Strategy Changes**: By default, it may use the end of the file for the hidden volume. A developer could store the hidden volume at another position (e.g., immediately after the external header, filling the middle of the file, leaving the rest for the external volume). That would require recalculating offsets and maybe storing some indicators (which complicates plausible deniability). Any such change must still ensure that without the hidden password, the hidden area is indistinguishable from random data.
+- **Hidden Volume Protection**: Implementing the functionality to protect the hidden volume from overwrite when the external is mounted. This might prompt for both passwords at once and mark the external volume object with a protected limit. Then, during each write operation, check that limit. Introducing this feature improves security when volumes are in active use and can be added here.
+- **Performance**: If you need to enhance performance when accessing volumes, you could introduce key caching (if Argon2 is very slow, you might store the derived key in memory during prolonged use, though always deriving the key at each open is safer so you’re not holding it in RAM too long). You might also optimize random data generation for large file creation using bigger blocks or multiple threads.  
+- **Secure Clearing**: When closing a volume, it might be prudent to clear (zero out) any memory buffers holding keys or passwords. Check if the module already does this; if not, consider adding it to avoid leaving sensitive data in variables.
 
-### streaming.py – Criptografia em Streaming
+In short, `hidden_volume.py` coordinates high-level operations involving two encrypted data sets in the same file. Any new hidden-volume-related features or changes go here. Thorough testing is key: create volumes, open them with correct and incorrect passwords, verify the hidden volume remains undetectable, and ensure no data is leaked (e.g., differences in response time if a hidden volume exists).  
 
-O `streaming.py` é responsável por permitir a leitura e escrita de dados criptografados de forma contínua (stream), ao invés de carregar tudo na memória. Esse módulo é útil para trabalhar com arquivos grandes ou para integrar o CryptGuard em pipelines de dados (por exemplo, criptografar dados enquanto são transmitidos). Principais elementos de funcionamento:
+### streaming.py – Streaming Encryption
 
-- **Interface de Fluxo**: Pode definir classes ou funções geradoras. Por exemplo, uma classe `EncryptedWriter` que ao ser fornecida um arquivo de saída e a chave, oferece um método `write(plaintext_chunk)` que automaticamente cifra e grava no arquivo. Similarmente, um `EncryptedReader` que dado um arquivo cifrado e chave fornece `read()` retornando blocos de plaintext decifrados.
-- **Uso de chunk_crypto**: Internamente, streaming.py utiliza as funções de `chunk_crypto.py`. Ele gerencia a iteração por blocos:
-  - Lê X bytes do arquivo criptografado, chama `decrypt_chunk` e devolve ao consumidor.
-  - Ou recebe X bytes de plaintext do produtor, chama `encrypt_chunk` e grava no arquivo de saída.
-- **Manutenção de Estado**: Se um modo de cifra requer manter estado entre blocos (por exemplo, um CTR que incrementa o contador continuamente, ou manter o contexto do GCM se dividindo mensagens), a implementação terá que carregar esse contexto. Porém, geralmente `chunk_crypto.py` foi feito para blocos independentes com IVs calculáveis, então o `streaming.py` pode simplesmente iterar usando o índice do bloco para calcular IV ou recuperando do arquivo se armazenado.
-- **Bufferização e Tamanho de Bloco**: O streaming possivelmente lê do arquivo cifrado em blocos do tamanho definido (ex.: 64KB). Pode usar um buffer interno para lidar com blocos parciais (no caso do último bloco que pode ser menor, ou se a leitura do consumidor não pede exatamente alinhado em blocos).
-- **API de Alto Nível**: Além das classes geradoras, o módulo pode oferecer funções como `encrypt_stream(input_file, output_file, key)` e `decrypt_stream(input_file, output_file, key)` que leem do arquivo de entrada e escrevem no de saída completamente. Essas funções encapsulariam o loop de leitura e escrita de blocos, facilitando o uso.
-- **Considerações de I/O**: Certifica-se de abrir arquivos binários no modo correto, tratar exceções de leitura/escrita (ex.: espaço em disco insuficiente, etc.), e fechar os arquivos ao final. Poderia também emitir progresso (não obrigatório, mas útil para grandes volumes; talvez não implementado por simplicidade, mas pode ser adicionado).
+`streaming.py` is responsible for reading and writing encrypted data in a continuous flow (stream), instead of loading it all in memory. This module is useful for working with large files or integrating CryptGuard into data pipelines (e.g., encrypting data as it’s transmitted). Main elements:
 
-*Como funciona:* Supondo a existência de `encrypt_stream`, aqui está um possível fluxo:
+- **Stream Interface**: May define classes or generator functions. For example, an `EncryptedWriter` class that, when given an output file and key, offers a `write(plaintext_chunk)` method that automatically encrypts and writes to the file. Similarly, an `EncryptedReader` that, given an encrypted file and a key, provides a `read()` that returns decrypted plaintext chunks.
+- **Use of chunk_crypto**: Internally, streaming.py uses the functions in `chunk_crypto.py`. It manages chunk-by-chunk iteration:
+  - Reads X bytes from the encrypted file, calls `decrypt_chunk` and yields them to the consumer.
+  - Or receives X bytes of plaintext from the producer, calls `encrypt_chunk` and writes them to the output file.
+- **State Management**: If the cipher mode requires maintaining state between blocks (e.g., CTR mode incrementing a counter, or GCM context if splitting messages), the implementation might keep that context. Often, however, `chunk_crypto.py` was designed for independent blocks with computable IVs, so `streaming.py` can simply loop, using the block index to generate the IV or retrieving it from the file if stored.
+- **Buffering and Block Size**: streaming likely reads/writes the encrypted file in blocks of the configured size (e.g., 64 KB). It might use an internal buffer for partial blocks (like the final block if the file doesn’t align).
+- **High-Level API**: In addition to these classes, it may offer functions like `encrypt_stream(input_file, output_file, key)` and `decrypt_stream(input_file, output_file, key)` that read from the input file and write to the output file entirely. This hides the loop of reading and writing in chunks, making usage simpler.
+- **I/O Considerations**: It ensures that files are opened in the correct binary mode, handles read/write exceptions (e.g., running out of disk space), and closes the files. It might provide progress output (not mandatory, but helpful for large volumes; could be unimplemented for simplicity, but feasible to add).
+
+*How it works:* Suppose we have `encrypt_stream`. A possible flow:
 ```python
 from cryptguard import streaming, chunk_crypto, argon_utils, metadata
 
-# Parâmetros preparados: arquivo de entrada e saída, e a senha fornecida
-with open("arquivo_claro.bin", "rb") as f_in, open("arquivo_cifrado.bin", "wb") as f_out:
-    # Deriva chave (normalmente já teria sido feita antes e armazenada no metadata, 
-    # mas se quisermos usar streaming isoladamente:)
-    key = argon_utils.derive_key(password="minha_senha", salt=meu_salt)
+# Prepared parameters: input and output files, and user-supplied password
+with open("plaintext_file.bin", "rb") as f_in, open("encrypted_file.bin", "wb") as f_out:
+    # Derive the key (normally done earlier and stored in metadata,
+    # but if we want to use streaming by itself:)
+    key = argon_utils.derive_key(password="my_password", salt=my_salt)
     streaming.encrypt_stream(f_in, f_out, key)
-# arquivo_cifrado.bin agora contém os dados criptografados em blocos sequenciais.
+# encrypted_file.bin now contains the data, block by block, encrypted
 ```
-Dentro de `encrypt_stream`, o código faria algo como:
+Within `encrypt_stream`, the code might do something like:
 ```python
 def encrypt_stream(f_in, f_out, key):
     chunk_size = config.CHUNK_SIZE
-    iv = inicializa_iv_inicial()  # definindo IV do primeiro bloco
-    bloco_idx = 0
+    iv = initialize_iv()  # define IV for the first block
+    block_idx = 0
     while True:
         data = f_in.read(chunk_size)
-        if not data: 
+        if not data:
             break
-        # se data menor que chunk_size, tratar padding ou anotar tamanho
-        encrypted = chunk_crypto.encrypt_chunk(data, key, iv_for_index(bloco_idx))
+        # if data is smaller than chunk_size, handle padding or store actual size
+        encrypted = chunk_crypto.encrypt_chunk(data, key, iv_for_index(block_idx))
         f_out.write(encrypted)
-        bloco_idx += 1
+        block_idx += 1
 ```
-A função `iv_for_index` pode estar em chunk_crypto ou calculada dentro de streaming: se o IV inicial é definido, e.g., como all-zero or derivado, e incrementa bloco_idx (para modos CTR/GCM isso pode ser concatenado com um contador, para XTS talvez calcula tweak etc., detalhes técnicos). Similar para decrypt_stream.
+Where `iv_for_index` might be in chunk_crypto or computed inside streaming: if the initial IV is set (e.g., all zeros or derived) and we increment block_idx (for CTR/GCM, that may be appended with a counter, for XTS we might do a tweak, etc.). Similar for `decrypt_stream`:
 
-Para **leitura**:
 ```python
-with open("arquivo_cifrado.bin", "rb") as f_in, open("arquivo_decifrado.bin", "wb") as f_out:
-    key = argon_utils.derive_key(password="minha_senha", salt=meu_salt)
+with open("encrypted_file.bin", "rb") as f_in, open("decrypted_file.bin", "wb") as f_out:
+    key = argon_utils.derive_key(password="my_password", salt=my_salt)
     streaming.decrypt_stream(f_in, f_out, key)
 ```
-Onde `decrypt_stream` leria exatamente como foi escrito:
+Where `decrypt_stream` reads as it was written:
 ```python
 def decrypt_stream(f_in, f_out, key):
-    chunk_size = config.CHUNK_SIZE_on_disk  # possivelmente chunk_size + tag size if applicable
-    bloco_idx = 0
+    chunk_size_encrypted = config.CHUNK_SIZE_on_disk  # maybe chunk_size + tag if GCM
+    block_idx = 0
     while True:
         encrypted = f_in.read(chunk_size_encrypted)
         if not encrypted:
             break
-        plain = chunk_crypto.decrypt_chunk(encrypted, key, iv_for_index(bloco_idx))
+        plain = chunk_crypto.decrypt_chunk(encrypted, key, iv_for_index(block_idx))
         f_out.write(plain)
-        bloco_idx += 1
+        block_idx += 1
 ```
-Nota: se um modo autenticado (GCM) está em uso, o `chunk_crypto` pode incorporar verificação do tag dentro de decrypt_chunk e lançar exceção se inválido (indicando dados corrompidos ou senha errada). O streaming deve então interromper e repassar o erro adequadamente.
+Note: If an authenticated mode (GCM) is used, `chunk_crypto` might handle tag verification inside `decrypt_chunk` and throw an exception if invalid (indicating data corruption or wrong password). Streaming should stop and report the error accordingly.
 
-*Como modificar:* O `streaming.py` geralmente não precisa ser mudado a menos que:
-- Mude a forma como os IVs são gerenciados (por exemplo, se trocar de AES-GCM para AES-CBC, o IV do próximo bloco deve ser o último bloco cifrado anterior – encadeamento – então streaming teria que carregar contexto ou passar o resultado de um bloco para o próximo).
-- Suporte a **resumo/reinício**: talvez implementar a capacidade de retomar criptografia de um ponto específico do arquivo. Por exemplo, se quisermos acessar randomicamente um chunk específico, poderíamos expor uma função `decrypt_chunk_at(file, key, index)` usando streaming logicamente. Hoje pode não ser necessário, mas seria útil se implementar leitura aleatória dentro do volume.
-- Adicionar **feedback de progresso**: se integrando em uma UI ou CLI, pode ser útil emitir quantos bytes já foram processados. Um desenvolvedor pode modificar o loop para invocar um callback ou imprimir algo a cada N MB processados.
-- **Compressão**: não é função original deste módulo, mas um desenvolvedor poderia pensar em comprimir dados antes de criptografar para reduzir tamanho. Isso teria que ser feito aqui (ou em single_shot) antes de chamar chunk_crypto.
-- **Parallelismo**: para melhorar velocidade em máquinas multi-core, poderia dividir o arquivo em regiões e processar múltiplos chunks em threads. Alterar streaming para isso é complexo e demandaria cuidado para não quebrar a ordem de escrita no arquivo de saída. Uma opção mais simples seria ler vários chunks e usar multiprocessing (mas Python GIL torna multi-thread CPU-bound não muito efetivo; multi-process seria pesado). Em todo caso, seria uma modificação profunda que requer sincronização e teste.
-  
-Mudar streaming sem necessidade não é comum; os desenvolvedores principalmente vão interagir com esse módulo para utilizá-lo. Se houver bugs na lógica de leitura/escrita (por exemplo, leitura do último bloco com padding), aí sim corrija-os aqui.
+*How to modify:* Generally, there’s no need to change `streaming.py` unless:
+- You’re changing how IVs are managed (e.g., switching from AES-GCM to AES-CBC, where the next block’s IV must be the last block’s ciphertext).
+- You want to support **resumable** encryption or random access: e.g., implementing partial reads from a specific offset. Then you might add something like `decrypt_chunk_at(file, key, index)` within streaming logic.  
+- Adding **progress feedback**: if integrating with a UI/CLI, you might want to print how many bytes have been processed periodically.
+- **Compression**: Not originally the module’s function, but you could compress data before encrypting to reduce size, implemented here (or in single_shot) before chunk_crypto calls.
+- **Parallelism**: to speed things up on multicore machines, you might process multiple chunks in parallel. This is complex in Python due to the GIL for CPU-bound tasks; you might use multiprocessing or chunk-based concurrency. It’s a major change requiring careful synchronization and testing.
 
-### single_shot.py – Operações de Uma Vez (One-shot encryption)
+Unless necessary, it’s typically safe not to modify streaming; developers mostly interact with this module for usage. If you find bugs in read/write logic (like final block padding), then fix them here.
 
-O `single_shot.py` fornece funções utilitárias para criptografar ou descriptografar dados em uma única chamada, isto é, carregando tudo em memória de uma vez em vez de usar streaming. Embora não seja eficiente para arquivos muito grandes, é útil para facilitar o uso em situações simples ou testes.
+### single_shot.py – One-Shot Operations
 
-Prováveis funções aqui:
-- `encrypt_file(input_path, output_path, password)` – abre um arquivo inteiro, lê todo conteúdo para a memória, deriva a chave, cifra todo o conteúdo (possivelmente ainda em blocos ou de uma vez só) e salva no arquivo de saída.
-- `decrypt_file(input_path, output_path, password)` – análogo para decifrar tudo de uma vez.
-- Talvez `encrypt_data(data_bytes, password) -> bytes` e `decrypt_data(data_bytes, password) -> bytes` – para uso programático direto em bytes já na memória, sem I/O de arquivo.
+`single_shot.py` provides convenience functions to encrypt or decrypt data in one go, i.e., loading everything into memory instead of streaming. While not efficient for very large files, it’s useful for simple use cases or testing.
 
-*Como funciona:* Esse módulo serve de fachada simples. Internamente, ele vai reusar componentes existentes:
-- Para derivar a chave, chama `argon_utils.derive_key`.
-- Para criptografar os dados, ele pode simplesmente usar `chunk_crypto.encrypt_chunk` numa só passada se os dados couberem em um chunk, ou dividir em vários chunks se muito grande. Porém, se fosse dividir em chunks, seria redundante dado que streaming já faz isso; é possível que single_shot simplesmente delegue para streaming mas lendo tudo de antemão.
-- Outra abordagem é que single_shot defina o chunk size igual ao tamanho do dado, efetivamente cifrando tudo como um único bloco (mas aí deve gerenciar se dados > chunk_size normal).
-- Após obter o dado cifrado, salva diretamente no output (ou retorna se for função *data*).
-- Similarmente para decifrar: lê arquivo inteiro, passa para decrypt (com chave derivada), obtém plaintext, salva.
+Likely functions include:
+- `encrypt_file(input_path, output_path, password)` – opens an entire file, reads its entire contents into memory, derives the key, encrypts all data (possibly still in chunks, or all at once), and saves to the output.
+- `decrypt_file(input_path, output_path, password)` – the same, but for decryption.
+- Possibly `encrypt_data(data_bytes, password) -> bytes` and `decrypt_data(data_bytes, password) -> bytes` – for direct programmatic use with in-memory data, no file I/O.
 
-*Exemplo de uso:* 
+*How it works:* This module is mostly a simple facade. Internally, it reuses existing components:
+- For key derivation, it calls `argon_utils.derive_key`.
+- For data encryption, it may either call `chunk_crypto.encrypt_chunk` if the entire data fits in one chunk or handle multiple chunks if it’s large. But if we’re chunking, it’s almost the same as streaming – we can do it here or delegate to streaming.  
+- Another approach is that single_shot sets the chunk size to the data length, effectively encrypting it all in one block (managing any overhead).
+- After obtaining the ciphertext, it writes it directly to output (or returns it if it’s a *data* function).
+- Similarly for decryption: read the file contents, decrypt all at once, get plaintext, save or return it.
+
+*Usage example:*  
 ```python
 from cryptguard import single_shot
 
-# Criptografar um arquivo de forma simples
-single_shot.encrypt_file("segredo.txt", "segredo.cgd", password="minha_senha")
+# Encrypt a file simply
+single_shot.encrypt_file("secret.txt", "secret.cgd", password="my_password")
 
-# Descriptografar
-single_shot.decrypt_file("segredo.cgd", "segredo_decifrado.txt", password="minha_senha")
+# Decrypt
+single_shot.decrypt_file("secret.cgd", "secret_decrypted.txt", password="my_password")
 
-# Ou criptografar dados em memória
-cipher_bytes = single_shot.encrypt_data(b"texto em memória", password="1234")
+# Or encrypt data in memory
+cipher_bytes = single_shot.encrypt_data(b"in-memory text", password="1234")
 plain_bytes = single_shot.decrypt_data(cipher_bytes, password="1234")
 ```
-Acima, `"segredo.cgd"` seria o arquivo criptografado (poderia ter extensão própria, `.cgd` aqui apenas ilustrativo). Repare que nessa interface simples não estamos lidando com volumes ocultos – é possivelmente apenas criptografia simples de um arquivo com uma senha. Pode ser útil quando o usuário não quer volume oculto e só deseja proteger um único arquivo de forma rápida.
+Here, `"secret.cgd"` is the encrypted output file (could have a custom extension, `.cgd` is just illustrative). Note that this simple interface doesn’t handle hidden volumes – it might just be straightforward file encryption using a password. It’s useful when the user doesn’t need a hidden volume and just wants a quick encryption method.
 
-*Como modificar:* Esse módulo é relativamente simples. Desenvolvedores podem:
-- Adaptar para usar volumes ocultos se desejado. Por exemplo, poderia haver uma função `create_hidden_file(container_path, outer_password, hidden_password, data_outer, data_hidden)` que pega dois buffers e salva no container ambos (mas isso seria replicar parte de hidden_volume logic – talvez não seja necessário).
-- Ajustar para operar com streams de bytes-like (por exemplo, receber um objeto file-like em vez de path).
-- Melhorar uso de memória: se for extremamente grande, carregar tudo pode estourar a RAM. Poderia adaptar internamente para usar streaming e assim não explodir a memória. O nome "single shot" implicaria ler tudo, mas poderia ser implementado de forma híbrida (lê pedaços e cifra pedaços mas sem expor isso externamente).
-- Se a lógica de chunk mudar (por exemplo, se passar a exigir tratar tags ou metadados diferentes), garantir que single_shot continue consistente com streaming e hidden_volume. No geral, single_shot deve produzir o mesmo resultado que streaming para o mesmo input, só que de forma síncrona. Testes devem comparar essas abordagens para garantir equivalência.
-- Se não houver nada para mudar, esse módulo pode permanecer intocado; muitas modificações aqui seriam apenas chamadas de outros módulos, então mantenha-o atualizado caso as assinaturas de argon_utils ou chunk_crypto mudem.
+*How to modify:* This module is straightforward:
+- You might adapt it to handle hidden volumes if desired, for example a function `create_hidden_file(container_path, outer_password, hidden_password, outer_data, hidden_data)` that places two buffers into the container. But that could replicate `hidden_volume` logic, so it might not be necessary.
+- You could make it accept file-like objects instead of paths.
+- Improve memory usage: if the file is huge, reading it all into memory could be problematic. One could adapt it internally to use streaming so memory doesn’t blow up, though that contradicts the “single-shot” name. You might do it “under the hood,” though, for user convenience.
+- If chunk logic changes (e.g., new tags or metadata), ensure single_shot remains consistent with streaming and hidden_volume so they produce the same results for the same input. Testing should confirm equivalence.
+- Otherwise, you can leave this module alone. Many modifications here would simply be calling the other modules, so keep it up to date if `argon_utils` or `chunk_crypto` signatures change.
 
-### main.py – Interface de Linha de Comando e Inicialização
+### main.py – CLI and Initialization
 
-O `main.py` é o script que integra tudo e fornece a interface para o usuário final (normalmente via linha de comando). Esse módulo analisa argumentos, chama as funções adequadas dos outros módulos e lida com entradas/saídas básicas de usuário.
+`main.py` is the script that brings everything together and provides the user interface (normally via command line). It parses arguments, calls the appropriate module functions, and handles basic user input/output.
 
-Possíveis funcionalidades implementadas em `main.py`:
+Possible functionalities in `main.py`:
 
-- **Análise de Argumentos (CLI)**: Provavelmente usa a biblioteca `argparse` (ou similar) para definir opções e comandos. Exemplo de comandos que podem existir:
-  - `cryptguard create -o <arquivo_container> -p <senha_externa> [-P <senha_oculta> -s <tamanho_oculto>]` – cria um novo volume, usando senha externa obrigatória e senha oculta/tamanho oculto opcionais.
-  - `cryptguard open -o <arquivo_container> -p <senha> -d <diretorio_destino>` – abre um volume (externo ou oculto dependendo da senha) e **extrai** seu conteúdo para um diretório destino (se o CryptGuard suporta armazenar múltiplos arquivos ou se talvez considera o volume um disco virtual).
-  - `cryptguard encrypt -i <arquivo_entrada> -o <arquivo_saida> -p <senha>` – modo simples de criptografar um arquivo (sem volume oculto, usando single_shot ou streaming).
-  - `cryptguard decrypt -i <arquivo_entrada_cifrado> -o <arquivo_saida>` – decifrar arquivo simples (pede a senha via prompt ou argumento).
+- **Argument Parsing (CLI)**: Likely uses `argparse` (or similar) to define options and commands. Example commands:
+  - `cryptguard create -o <container_file> -p <external_password> [-P <hidden_password> -s <hidden_size>]` – creates a new volume, requiring the external password and optionally the hidden password/size.
+  - `cryptguard open -o <container_file> -p <password> -d <destination_dir>` – opens a volume (external or hidden depending on the password) and **extracts** its contents to a destination directory (if CryptGuard supports multiple files or if it treats the volume as a virtual disk).
+  - `cryptguard encrypt -i <input_file> -o <output_file> -p <password>` – simple file encryption mode (no hidden volume, using single_shot or streaming).
+  - `cryptguard decrypt -i <encrypted_input_file> -o <output_file>` – decrypt a simple file (the password is prompted or passed via an argument).
   
-  Os nomes acima são hipotéticos, mas ilustram como main pode estruturar subcomandos para diferentes usos (criar volume, criptografar arquivo simples, etc.). Também trataria opções como verbose, ajuda, versão.
-- **Interação com Usuário**: Para senhas, é importante não passá-las em texto claro via CLI (risco de ficarem no histórico ou visíveis em processos). `main.py` pode usar `getpass.getpass()` para solicitar senhas de forma oculta no terminal. Assim, mesmo que a opção `-p` exista, se não fornecida o programa pedirá interativamente.
-- **Chamada de Módulos**: Com os argumentos interpretados, `main.py` invoca os módulos internos:
-  - Se comando é `create`: chama `hidden_volume.create_volume` com os parâmetros fornecidos. Poderá construir também o conteúdo inicial do volume externo se usuário indicou algum arquivo a incluir.
-  - Se comando é `encrypt`: decide se vai usar `single_shot.encrypt_file` (caso tamanho do arquivo seja pequeno ou por simplicidade) ou `streaming.encrypt_stream` (para arquivos maiores). Essa decisão pode ser manual (ex.: uma flag `--stream` para o usuário escolher) ou automática (por tamanho de arquivo).
-  - Se comando é `open` ou `decrypt`: para volumes, chama `hidden_volume.open_volume` e depois talvez use `streaming` para copiar dados para fora; para arquivo simples, chama `single_shot.decrypt_file`.
-  - Se comando for `add-hidden` (por exemplo, adicionar volume oculto a um container existente), main poderia abrir volume externo com ambas senhas e chamar alguma função para criar um oculto post facto (não sei se previsto, mas poderia).
-- **Mensagens e Tratamento de Erros**: `main.py` deve fornecer feedback no console. Exemplos:
-  - Mensagem de sucesso ao criar volume (e possivelmente instruções de uso).
-  - Erro claro se a senha estiver errada ao tentar abrir (ex: "Senha incorreta ou volume inválido").
-  - Avisos se tentar criar volume oculto maior que volume externo, etc.
-  - Exibir ajuda se usar opções inválidas.
-- **Inicialização**: Pode ser que `main.py` importe todos os módulos e inicie algo global (embora não muito necessário). Talvez definir logging básico ou verificar se o ambiente suporta certas coisas (ex: checar se módulo argon2 está disponível, caso tenha dependência externa).
-- **Modo de Execução**: Comum ter:
+  The above names are hypothetical, but illustrate how `main.py` might structure subcommands for different uses (creating volumes, simple file encryption, etc.). It would also handle options like verbose mode, help, and version.
+- **User Interaction**: For passwords, it’s important not to pass them plainly through CLI options (risk in shell history or process listing). `main.py` could use `getpass.getpass()` to prompt for the password discreetly. Even if `-p` is provided, if left empty, the program could prompt interactively.
+- **Module Calls**: After parsing, `main.py` calls the internal modules:
+  - If the command is `create`: calls `hidden_volume.create_volume` with the parsed parameters. May also build the external volume’s initial content if the user passed something in.
+  - If the command is `encrypt`: decides whether to use `single_shot.encrypt_file` (if the file is small or for simplicity) or `streaming.encrypt_stream` (for large files). Could be a manual or automatic decision based on file size.
+  - If the command is `open` or `decrypt`: for volumes, calls `hidden_volume.open_volume` then uses `streaming` to extract data or something similar; for a simple file, calls `single_shot.decrypt_file`.
+  - If there’s a command like `add-hidden` (to add a hidden volume to an existing container), `main.py` might open the volume externally with both passwords and then call something to create the hidden portion (not sure if that’s supported, but it’s possible).
+- **Messages and Error Handling**: `main.py` provides feedback in the console, for example:
+  - Success messages after creating a volume (and usage instructions).
+  - Clear error messages for incorrect passwords when opening a volume.
+  - Warnings if trying to create a hidden volume larger than the external volume, etc.
+  - Help displayed if using invalid options.
+- **Initialization**: Possibly imports all modules and sets up something global (though not necessarily). It might define basic logging or check if certain dependencies (e.g., argon2 library) are available.
+- **Execution Mode**: Typically something like:
   ```python
   if __name__ == "__main__":
       main()
   ```
-  para permitir executar `python main.py ...` direto. A função `main()` interna seria onde argparse configura subcomandos e roteia para funções apropriadas.
-  
-*Exemplo de uso (CLI)*:  
-No terminal, um usuário desenvolvedor ou final poderia fazer:
+  so running `python main.py ...` works directly. The `main()` function internally configures argparse subcommands and routes them to the right functions.
+
+*CLI usage example:*  
+In a terminal, a developer or end user might do:
 ```
-# Criar um container de 100 MB com 20 MB ocultos
-$ python cryptguard/main.py create -o meucontainer.cgd --password-ext "senha123" --password-hidden "segredo!" --hidden-size 20
-Volume criptografado criado com sucesso: meucontainer.cgd (Volume oculto de 20 MB incluído).
+# Create a 100 MB container with 20 MB hidden
+$ python cryptguard/main.py create -o mycontainer.cgd --password-ext "password123" --password-hidden "secret!" --hidden-size 20
+Encrypted volume created successfully: mycontainer.cgd (20 MB hidden volume included).
 
-# Armazenar um arquivo no volume oculto:
-$ python cryptguard/main.py open -o meucontainer.cgd --password "segredo!"
-... (monta volume oculto em modo extração) ...
-Copiando arquivos do volume oculto para ./volume_oculto_out/
+# Store a file in the hidden volume:
+$ python cryptguard/main.py open -o mycontainer.cgd --password "secret!"
+... (mounts hidden volume in extraction mode) ...
+Copying files from hidden volume to ./hidden_volume_out/
 ```
-Talvez o CryptGuard não implemente um sistema de arquivos completo; se for o caso, o comando `open` pode simplesmente decifrar todo o volume para um arquivo de saída se ele supõe que o volume contém apenas um fluxo de dados. Alternativamente, se definir que o container é como um drive, um possível aprimoramento é montar via FUSE, mas isso fugiria do escopo atual. O exemplo acima assume uma extração simples de conteúdo.
+Perhaps CryptGuard doesn’t implement a full file system; if so, the `open` command might simply decrypt the entire volume to an output file if it assumes a single data stream. Alternatively, if it sees the container as a drive, you could integrate with a FUSE-based mount, but that’s beyond the current scope. The example above just assumes a simple extraction approach.
 
-*Como modificar:* Desenvolvedores podem estender `main.py` para adicionar novos comandos ou alterar a forma de uso:
-- **Novos subcomandos**: por exemplo, adicionar `change-password` (trocar a senha do volume). Isso exigiria ler o volume com a senha atual, recriptografar o cabeçalho com a nova senha e salvar. A implementação envolveria hidden_volume e metadata, mas a integração do comando seria aqui.
-- **Integração com GUI**: Se planeja uma interface gráfica, `main.py` poderia ser adaptado para não usar argparse, mas ainda fornecer funções que a GUI chama. Alternativamente, separar a lógica CLI da lógica de negócio – já está modularizado, então a GUI pode chamar diretamente `hidden_volume` e outros sem passar por main.
-- **Melhorias de usabilidade**: Por exemplo, permitir que o usuário não especifique `--hidden-size` e deduzir do tamanho atual do arquivo, ou um comando para listar informações do volume (não conteúdos, mas tamanho do oculto se souber senha).
-- **Logging detalhado**: Durante desenvolvimento, pode ser útil ter uma opção de debug (`-v` ou `--verbose`) para imprimir passos internos (ex.: "Derivando chave com Argon2...", "Criando cabeçalho do volume externo...", etc.). `main.py` pode usar o módulo `logging` para isso. Desenvolvedores podem adicionar tais logs, garantindo que nada sensível (como senhas ou chaves brutas) seja impresso.
-- **Validar entradas**: Adicionar checagens como tamanho oculto não pode ser >= tamanho total, senha não vazia, etc., com mensagens de erro claras.
+*How to modify:* Developers can extend `main.py` to add new commands or adjust usage:
+- **New Subcommands**: For instance, `change-password` to change the volume’s password. This would involve reading the volume with the old password, re-encrypting the header with the new password, and saving. That logic involves `hidden_volume` and `metadata`, but is exposed here.
+- **GUI Integration**: If you plan on a graphical interface, `main.py` might be adapted to skip argparse and still serve as an entry point. Or you keep it strictly for CLI, while the GUI calls the modules directly.  
+- **Usability Enhancements**: For example, let the user omit `--hidden-size` and automatically derive it from the file size, or have a command to display volume info (not the content, but size, etc.).  
+- **Detailed Logging**: Add a debug option (`-v` or `--verbose`) to print internal steps (“Deriving key with Argon2...,” “Creating external volume header...,” etc.). Use Python’s logging module. Be sure not to log sensitive info (like raw passwords or keys).  
+- **Input Validation**: Check that the hidden size isn’t larger than the total volume, that the password isn’t empty, etc., returning clear error messages.
 
-No geral, `main.py` é o “colar” que junta tudo. Alterações nele são relativamente seguras (não afetam o núcleo criptográfico) desde que a lógica interna dos módulos seja usada corretamente. Ainda assim, teste qualquer novo fluxo de comandos para não introduzir cenários não suportados (por exemplo, tentar abrir um volume com senha oculta via comando errado).
+Overall, `main.py` is the “glue” that ties everything together. Modifying it is relatively safe (it doesn’t affect core cryptography) as long as the internal logic of the modules is called correctly. Still, test any new command flow to ensure no unsupported scenarios (e.g., using the hidden password with the wrong command) are introduced.
 
-## Considerações Finais
+## Final Considerations
 
-O CryptGuard apresenta uma base sólida para criptografia de volumes com ocultação, mas como todo projeto de segurança, requer manutenção cuidadosa e possibilidade de melhorias futuras:
+CryptGuard provides a solid foundation for volume encryption with concealment, but like any security project, it requires careful maintenance and potential future improvements:
 
-- **Testes e Verificação**: É altamente recomendável implementar testes unitários e de integração para todos os módulos. Testes devem cobrir: criação de volume (verificar tamanho correto, impossibilidade de montar volume oculto sem senha correta), criptografia e descriptografia de arquivos (assegurar que o conteúdo original é recuperado bit a bit), manuseio de erros (senha errada não deve quebrar o programa, mas retornar erro claro), e cenários limite (volume oculto de tamanho zero, senhas iguais para externo e oculto, arquivos muito grandes, etc.). Antes de lançar modificações, valide contra essa suíte de testes para garantir que a segurança não foi regressiva.
-- **Melhorias de Segurança**: Avalie adicionar camadas de segurança:
-  - *Autenticidade dos Dados*: Se ainda não implementado, incluir verificação de integridade global do volume para detectar qualquer adulteração. Uma abordagem é armazenar um HMAC de todo o volume (ou de seções) usando uma chave derivada separada. Isso, porém, traz o desafio de onde armazenar o HMAC sem indicar a existência do oculto – possivelmente apenas proteger o volume externo e deixar o oculto implícito. Outra opção é usar sempre cifragem autenticada (como AES-GCM) por chunk, que já garante integridade local.
-  - *Proteção de memória*: Garantir que senhas e chaves sejam apagadas da memória assim que possível. O Python não facilita controle fino de memória, mas práticas como sobrescrever variáveis com zeros e usar objetos de bytes imutáveis com cuidado podem ajudar. Analise pontos onde dados sensíveis ficam em memória e tente minimizar sua exposição (ex.: após derivar chave, não mantenha a senha em nenhuma variável).
-  - *Números Aleatórios*: Verifique se todas as fontes de aleatoriedade usam um CSPRNG (gerador de números pseudoaleatórios criptograficamente seguro). Em Python, `os.urandom` ou `secrets` são adequados. Evite `random` do sistema (não é seguro para criptografia).
-- **Documentação e Usabilidade**: Atualize a documentação de uso conforme novos recursos são adicionados. Por exemplo, se implementar change-password ou proteção de volume oculto, explique em README de usuário como usar. Do ponto de vista de desenvolvedor, mantenha comentários esclarecedores no código para as partes críticas (derivação de chave, estrutura de metadados, etc.). Isso facilita futuras manutenções por outros contribuidores.
-- **Compatibilidade e Migração**: Se o projeto evoluir para versões subsequentes (v2, v3 do formato), planeje um esquema de versão e migração. O campo de versão nos metadados pode ser usado para que o código identifique volumes antigos e tente migrá-los (por exemplo, decifra com antigo método e reescreve cabeçalho no novo formato). Mantenha pelo menos capacidade de leitura de formatos antigos, ou forneça uma ferramenta de conversão.
-- **Novas Funcionalidades**: Considere implementar:
-  - Suporte a **diferentes algoritmos de cifragem** configuráveis (AES, ChaCha20, Twofish, etc.), possivelmente escolhíveis na criação do volume. Isso atrairia usuários com preferências específicas e serve de redundância caso um algoritmo seja comprometido no futuro.
-  - **Compressão transparente** dos dados antes da criptografia para otimizar espaço, opcionalmente ativada por configuração.
-  - **Montagem como unidade lógica**: Integrar com FUSE (em sistemas Unix) ou outras APIs para que o container CryptGuard possa ser montado como se fosse um disco, permitindo ao usuário interagir com arquivos e pastas normalmente dentro do volume. Isso é um projeto extenso à parte, mas aumentaria significativamente a usabilidade (tornando-o similar a TrueCrypt/VeraCrypt).
-  - **Interface gráfica**: Criar uma GUI amigável que use os módulos internamente, para alcançar usuários não familiarizados com CLI. O design modular atual favorece isso, pois a lógica está separada do CLI.
-- **Boas Práticas de Manutenção**: Ao modificar o código:
-  - Siga um estilo consistente (PEP 8 para Python). Nomes de funções e variáveis devem ser claros e descritivos, especialmente em contexto de segurança.
-  - Faça **code review** das mudanças focadas em segurança por pelo menos dois desenvolvedores, se possível. Bugs em código criptográfico podem ser sutis e ter grandes implicações.
-  - Incremente gradativamente funcionalidades, testando cada adição em isolamento (por exemplo, ao trocar um algoritmo, primeiro teste manual de criptografia simples para verificar se os dados batem).
-  - Mantenha as dependências (como bibliotecas de criptografia) atualizadas para receber patches de segurança, mas também monitore mudanças de API nelas ao atualizar.
-  - Documente no README de desenvolvedor (este documento) quaisquer decisões de design importantes ou trade-offs, para que futuros mantenedores entendam o porquê das implementações atuais. Por exemplo: "optou-se por não armazenar flag de volume oculto no header externo para garantir negação plausível".
+- **Testing and Verification**: Strongly recommended to implement unit and integration tests for all modules. Tests should cover: volume creation (verify correct size, inability to mount hidden volume without the right password), file encryption/decryption (ensure original content is recovered bit for bit), error handling (wrong password shouldn’t crash the program, but produce a clear error), and edge cases (hidden volume of zero size, same password for external and hidden, very large files, etc.). Before releasing modifications, validate against this test suite to confirm security isn’t compromised.
+- **Security Enhancements**: Consider adding layers of security:
+  - *Data Authenticity*: If not already implemented, include a global volume integrity check to detect tampering. One approach is storing an HMAC of the entire volume (or sections) using a derived key. However, that might reveal there’s more than one volume if the hidden part is included. Another option is always using an authenticated cipher (AES-GCM) for each chunk, ensuring local integrity.
+  - *Memory Protection*: Ensure passwords and keys are cleared from memory as soon as possible. Python doesn’t allow fine-grained memory control, but best practices include overwriting variables and using immutable byte objects carefully. Review points where sensitive data reside in memory and reduce their exposure (e.g., after deriving a key, don’t keep the plaintext password around).
+  - *Random Numbers*: Confirm all random sources are cryptographically secure (e.g., `os.urandom` or `secrets`). Avoid Python’s `random` for cryptographic purposes.
+- **Documentation and Usability**: Update user documentation as new features are added. For instance, if you implement password changing or hidden volume protection, explain how in the user README. From the developer perspective, keep code comments that clarify critical parts (key derivation, metadata structure, etc.). This aids future contributors.
+- **Compatibility and Migration**: If the project evolves to new versions (v2, v3 of the format), plan a versioning and migration scheme. The metadata version field can help the code recognize older volumes and migrate them (e.g., decrypt with the old method and rewrite the header in the new format). At least maintain the ability to read old formats, or provide a conversion tool.
+- **New Features**: Potential expansions might include:
+  - Support for **different encryption algorithms** (AES, ChaCha20, Twofish, etc.), selectable at volume creation. This attracts users with specific needs and offers redundancy if one algorithm is compromised.
+  - **Transparent compression** before encryption to save space, optionally enabled.
+  - **Logical drive mounting**: Integrate with FUSE (on Unix systems) or other APIs to allow CryptGuard’s container to appear as a drive, letting users manage files and folders normally inside the volume. This is a significant project on its own, akin to TrueCrypt/VeraCrypt’s approach.
+  - **Graphical interface**: Create a user-friendly GUI that uses the internal modules. The modular design helps here, since the core logic is separate from the CLI.
+- **Good Maintenance Practices**: When modifying code:
+  - Follow a consistent style (PEP 8 for Python). Use clear, descriptive names, especially in security-critical contexts.
+  - Have at least two developers do **code reviews** for security-related changes if possible. Cryptographic bugs can be subtle and have big consequences.
+  - Increment new features gradually, testing each in isolation (e.g., if changing an algorithm, first do a manual test to ensure the data matches).
+  - Keep dependencies (like crypto libraries) up to date for security patches, monitoring API changes.  
+  - Document key design decisions or trade-offs in this developer README so future maintainers understand why certain choices were made (e.g., “We do not store a hidden flag in the external header to preserve plausible deniability.”).
 
-Em conclusão, o CryptGuard foi arquitetado com a separação clara de responsabilidades, o que deve facilitar a vida do desenvolvedor ao navegar e modificar o código. A implementação do volume oculto adiciona complexidade interessante, mas com a explicação acima, deve ficar mais claro onde cada parte acontece. Boa codificação!
+In conclusion, CryptGuard is architected with clear separation of responsibilities, which should ease developers’ work in navigating and modifying the code. The hidden volume implementation adds interesting complexity, but with the explanation above, it should be clearer where each piece fits. Happy coding!
