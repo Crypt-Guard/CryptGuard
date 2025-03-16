@@ -7,178 +7,179 @@
 [![Security](https://img.shields.io/badge/security-audited-green.svg)](SECURITY.md)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**CryptGuard é uma solução avançada de criptografia com interface moderna, focada em segurança e usabilidade.**
+**CryptGuard is an advanced encryption solution with a modern interface, focused on security and usability.**
 
-[🚀 Começar](#-início-rápido) •
-[📖 Documentação](#-documentação) •
-[🛡️ Segurança](#%EF%B8%8F-segurança) •
-[🤝 Contribuir](#-contribuir) •
-[📜 Licença](#-licença)
+[🚀 Quick Start](#-quick-start) •
+[📖 Documentation](#-documentation) •
+[🛡️ Security](#️-security) •
+[🤝 Contribute](#-contribute) •
+[📜 License](#-license)
 
 </div>
 
-CryptGuard é uma solução avançada de criptografia com foco em segurança e usabilidade, agora reestruturada em uma arquitetura modular.
+CryptGuard is an advanced encryption solution with a focus on security and usability, now restructured into a modular architecture.
 
 --------------------------------------------------------------------------------
-## ✨ Características
+## ✨ Features
 
-- 🔒 **Criptografia Robusta**
-  • Criptografia autenticada com ChaCha20Poly1305
-  • Derivação de chaves com Argon2id
-  • Correção de erros com Reed-Solomon
+- 🔒 **Robust Encryption**
+  • Authenticated encryption with ChaCha20Poly1305
+  • Key derivation with Argon2id
+  • Error correction with Reed-Solomon
 
-- 🎯 **Funcionalidades Avançadas**
-  • Criptografia de textos e arquivos (single-shot)
-  • Criptografia de arquivos grandes com modo streaming e chunk size dinâmico
-  • Suporte a múltiplos arquivos (compactação em ZIP)
-  • Criação de volumes ocultos com negação plausível
-  • Key Rolling / Re-encryption: Troque a senha do volume real sem expor o volume falso
+- 🎯 **Advanced Functionalities**
+  • Encryption of texts and files (single-shot)
+  • Large file encryption with streaming mode and dynamic chunk sizes
+  • Multiple file support (ZIP compression)
+  • Creation of hidden volumes with plausible deniability
+  • Key Rolling / Re-encryption: Change the password of the real volume without exposing the hidden one
 
-- Autenticação
+- Authentication
 
-  • [1] Senha + Arquivo-chave
+  • [1] Password + Key-file
 
-  • [2] Somente Senha
+  • [2] Password only
 
-- 💫 **Interface CLI**
-  • Interface de linha de comando intuitiva
-  • Feedback em tempo real durante operações de streaming
+- 💫 **CLI Interface**
+  • Intuitive command-line interface
+  • Real-time feedback during streaming operations
 
-- 🛡️ **Segurança Aprimorada**
-  • Verificação de força de senha com zxcvbn
-  • Metadados criptografados (incluindo extensão original dos arquivos)
-  • Gestão cuidadosa de memória sensível (zeroização de buffers)
+- 🛡️ **Enhanced Security**
+  • Password strength verification with zxcvbn
+  • Encrypted metadata (including original file extensions)
+  • Careful management of sensitive memory (buffer zeroization)
 
 --------------------------------------------------------------------------------
 
-## Estrutura do Projeto
+## Project Structure
 
-**A nova organização do repositório está organizada de forma modular na pasta "cryptguard/":**
+**The repository is now organized modularly within the "cryptguard/" directory:**
 
 cryptguard/
 
-├── __init__.py             -> Inicializa o pacote
+├── __init__.py             -> Initializes the package
 
-├── config.py               -> Configurações globais (chunk size, thresholds, parâmetros Argon2, etc.)
+├── config.py               -> Global settings (chunk size, thresholds, Argon2 parameters, etc.)
 
-├── password_utils.py       -> Funções para validação e coleta de senhas (Senha + Arquivo-chave ou Somente Senha)
+├── password_utils.py       -> Functions for password validation and collection (Password + Key-file or Password only)
 
-├── argon_utils.py          -> Derivação de chaves com Argon2id
+├── argon_utils.py          -> Key derivation with Argon2id
 
-├── metadata.py             -> Criptografia e descriptografia de metadados (.meta)
+├── metadata.py             -> Metadata encryption and decryption (.meta)
 
-├── rs_codec.py             -> Codificação e decodificação Reed-Solomon
+├── rs_codec.py             -> Reed-Solomon encoding and decoding
 
-├── chunk_crypto.py         -> Criptografia de chunks com ChaCha20Poly1305 + RS
+├── chunk_crypto.py         -> Chunk encryption with ChaCha20Poly1305 + RS
 
-├── single_shot.py          -> Criptografia/Descriptografia para arquivos pequenos (single-shot)
+├── single_shot.py          -> Encryption/Decryption for small files (single-shot)
 
-├── streaming.py            -> Criptografia/Descriptografia para arquivos grandes (streaming, com chunk size dinâmico)
+├── streaming.py            -> Encryption/Decryption for large files (streaming, dynamic chunk sizes)
 
-├── hidden_volume.py        -> Funcionalidades de volumes ocultos e re-key do volume real
+├── hidden_volume.py        -> Hidden volumes functionality and re-keying real volumes
 
-├── utils.py                -> Funções auxiliares (limpeza de tela, geração de nomes únicos, etc.)
+├── utils.py                -> Auxiliary functions (screen clearing, unique name generation, etc.)
 
-└── main.py                 -> Interface de linha de comando principal
+└── main.py                 -> Main CLI interface
 
 --------------------------------------------------------------------------------
-### Pré-requisitos
+### Prerequisites
 
-- Python 3.8 ou superior
-- pip (gerenciador de pacotes Python)
+- Python 3.8 or higher
+- pip (Python package manager)
 
-### Instalação
+### Installation
 
-1. Clone o repositório:
+1. Clone the repository:
 ```bash
 https://github.com/Crypt-Guard/CryptGuard.git
 cd cryptguard
 ```
 
-2. Instale as dependências:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Execute o CryptGuard:
+3. Run CryptGuard:
 ```bash
 python cryptguard/main.py
 ```
 --------------------------------------------------------------------------------
-## 💡 Guia de Uso
+## 💡 Usage Guide
 
-### Criptografar Arquivo
-  - Criptografar Texto: Insira sua mensagem, a senha (com confirmação) e, opcionalmente, um arquivo-chave.
-  - Criptografar Arquivo: Escolha o arquivo e siga as instruções. Para arquivos grandes, você pode definir um chunk size personalizado.
+### Encrypting Files
+  - Encrypt Text: Enter your message, password (with confirmation), and optionally a key-file.
+  - Encrypt File: Choose the file and follow instructions. For large files, you can set a custom chunk size.
 
-### Volumes Ocultos
-  - Prepare dois conjuntos de arquivos: um para o volume falso e outro para o volume real.
-  - Use senhas distintas para cada volume.
-  - O sistema gera um token efêmero para acesso ao volume real.
-  - Key Rolling / Re-encryption: Troque a senha do volume real sem alterar ou expor o volume falso.
+### Hidden Volumes
+  - Prepare two sets of files: one for the fake volume and one for the real volume.
+  - Use distinct passwords for each volume.
+  - The system generates an ephemeral token for accessing the real volume.
+  - Key Rolling / Re-encryption: Change the password of the real volume without altering or exposing the fake volume.
 
-### Descriptografar Arquivo
-  - Selecione a opção para descriptografar e informe a senha correta. O arquivo será restaurado com sua extensão original (ex: .txt, .jpg, etc.).
-
---------------------------------------------------------------------------------
-## 📖 Documentação
-
-- [RoadMap](ROADMAP.md) - Funcionalidades e planos futuros
-- [Segurança](SECURITY.md) - Guia de segurança e melhores práticas
-- [Contribuição](CONTRIBUTING.md) - Como contribuir com o projeto
-- [Licença](LICENSE) - Termos de licenciamento
+### Decrypting Files
+  - Select the decrypt option and enter the correct password. The file will be restored with its original extension (e.g., .txt, .jpg, etc.).
 
 --------------------------------------------------------------------------------
-## 🛡️ Segurança
+## 📖 Documentation
 
-O CryptGuard foi projetado com foco em segurança, mas recomendamos:
-  • Criptografia autenticada (ChaCha20Poly1305)
-  • Derivação de chaves com Argon2id
-  • Correção de erros com Reed-Solomon
-  • Validação de força de senha (zxcvbn)
-  • Gestão cuidadosa de memória sensível (zeroização de buffers)
-
-Atenção: Realize auditorias de segurança e mantenha backups dos seus dados.
-Consulte [SECURITY.md](SECURITY.md) para mais informações.
+- [RoadMap](ROADMAP.md) - Features and future plans
+- [Security](SECURITY.md) - Security guidelines and best practices
+- [Contributing](CONTRIBUTING.md) - How to contribute to the project
+- [License](LICENSE) - Licensing terms
 
 --------------------------------------------------------------------------------
-## 🤝 Contribuir
+## 🛡️ Security
 
-Contribuições são bem-vindas! Por favor, leia nosso [Guia de Contribuição](CONTRIBUTING.md).
+CryptGuard was designed with security in mind, but we recommend:
+  • Authenticated encryption (ChaCha20Poly1305)
+  • Key derivation with Argon2id
+  • Error correction with Reed-Solomon
+  • Password strength validation (zxcvbn)
+  • Careful management of sensitive memory (buffer zeroization)
 
-### Áreas de Contribuição
-
-- 📝 Documentação
-- 🐛 Correção de bugs
-- ✨ Novas funcionalidades
-- 🎨 Melhorias na interface
-- 🌐 Traduções
-
-## 📜 Licença
-
-CryptGuard é licenciado sob a [Licença Apache 2.0](LICENSE).
+Attention: Conduct security audits and maintain backups of your data.
+Refer to [SECURITY.md](SECURITY.md) for more information.
 
 --------------------------------------------------------------------------------
+## 🤝 Contribute
 
-## 📊 Status do Projeto
+Contributions are welcome! Please read our [Contribution Guide](CONTRIBUTING.md).
 
-  - Criptografia robusta: ✅
-  - Documentação completa: ✅
-  - Suporte a diretórios: 🚧
-  - Integração com nuvem: 🚧
-  - Suporte a dispositivos de autenticação física: 🚧
+### Areas of Contribution
+
+- 📝 Documentation
+- 🐛 Bug fixes
+- ✨ New features
+- 🎨 Interface improvements
+- 🌐 Translations
+
+## 📜 License
+
+CryptGuard is licensed under the [Apache 2.0 License](LICENSE).
 
 --------------------------------------------------------------------------------
 
-## 🙏 Agradecimentos
+## 📊 Project Status
 
-Agradecemos à comunidade Python, aos desenvolvedores das bibliotecas utilizadas, e a todos os contribuidores deste projeto.
+  - Robust encryption: ✅
+  - Complete documentation: ✅
+  - Directory support: 🚧
+  - Cloud integration: 🚧
+  - Physical authentication device support: 🚧
+
+--------------------------------------------------------------------------------
+
+## 🙏 Acknowledgments
+
+We thank the Python community, the developers of the libraries used, and all project contributors.
 
 --------------------------------------------------------------------------------
 <div align="center">
 
-**CryptGuard** - Desenvolvido com ❤️
+**CryptGuard** - Developed with ❤️
 
-[⬆ Voltar ao topo](#-cryptguard)
+[⬆ Back to top](#-cryptguard)
 
 </div>
+
