@@ -6,7 +6,7 @@ import datetime
 import time
 import random
 import secrets
-import hashlib
+from argon2 import PasswordHasher
 import getpass
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -202,13 +202,19 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
             print("\nAuthenticate real volume (password + optional key file):")
             combined_pwd, _ = choose_auth_method()
             token = getpass.getpass("Enter ephemeral token for hidden volume access: ")
-            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            ph = PasswordHasher()
+            token_hash = ph.hash(token)
             meta_inner = decrypt_meta_json(meta_hidden_path, combined_pwd)
             if not meta_inner:
                 print("Failed to decrypt real volume metadata (incorrect password or corrupted)!")
                 input("\nPress Enter to continue...")
                 return
-            if token_hash != meta_inner.get('part2_token_hash'):
+            try:
+                ph.verify(meta_inner.get('part2_token_hash'), token)
+            except:
+                print("Incorrect token!")
+                input("\nPress Enter to continue...")
+                return
                 print("Incorrect token!")
                 input("\nPress Enter to continue...")
                 return
