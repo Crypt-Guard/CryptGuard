@@ -6,7 +6,7 @@ import datetime
 import time
 import random
 import secrets
-import hashlib
+from argon2 import PasswordHasher
 import getpass
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -342,7 +342,8 @@ def change_real_volume_password():
 
     print("\nEnter ephemeral token for real volume access:")
     token = getpass.getpass("> ")
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    ph = PasswordHasher()
+    token_hash = ph.hash(token)
 
     print("\nAuthenticate real volume to decrypt the real part (password + optional key file):")
     real_pwd, _ = choose_auth_method()
@@ -360,7 +361,12 @@ def change_real_volume_password():
             input("\nPress Enter to continue...")
             return
 
-    if token_hash != meta_inner.get('part2_token_hash'):
+    try:
+        ph.verify(meta_inner.get('part2_token_hash'), token)
+    except:
+        print("Incorrect token!")
+        input("\nPress Enter to continue...")
+        return
         print("Incorrect token!")
         input("\nPress Enter to continue...")
         return
