@@ -6,7 +6,6 @@ import datetime
 import time
 import random
 import secrets
-import hashlib
 import getpass
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -21,21 +20,24 @@ from single_shot import decrypt_data_single
 from streaming import decrypt_data_streaming
 from config import MAX_ATTEMPTS, STREAMING_THRESHOLD
 
+# Import do PasswordHasher do Argon2 para hashing de tokens
+from argon2 import PasswordHasher
+
 def read_file_data(file_path: str) -> bytes:
     with open(file_path, 'rb') as f:
         return f.read()
 
 def encrypt_hidden_volume():
     """
-    Creates a hidden volume with enhanced deniability:
-      - Encrypts two files (decoy volume and real volume) without RS,
-      - Concatenates with padding,
-      - Applies RS on the combined data and saves separate metadata:
-          * Outer Meta (for decoy volume) encrypted with the decoy volume password, without indicating hidden.
-          * Inner Meta (for real volume) encrypted with the real volume password, containing details of the hidden volume.
+    Cria um volume oculto com deniabilidade reforçada:
+      - Criptografa dois arquivos (volume de isca e volume real) sem RS,
+      - Concatena com preenchimento (padding),
+      - Aplica RS sobre os dados combinados e salva metadados separados:
+          * Outer Meta (para volume de isca) criptografado com a senha do volume de isca, sem indicar que é oculto.
+          * Inner Meta (para volume real) criptografado com a senha do volume real, contendo detalhes do volume oculto.
     
-    The real volume is encrypted using authentication (password + optional key file)
-    and an ephemeral token, which is incorporated into key derivation.
+    O volume real é criptografado utilizando autenticação (senha + arquivo de chave opcional)
+    e um token efêmero, que é incorporado à derivação da chave.
     """
     clear_screen()
     print("=== ENCRYPT HIDDEN VOLUME ===")
@@ -47,7 +49,7 @@ def encrypt_hidden_volume():
         input("\nPress Enter to continue...")
         return
 
-    # Warn if files are large (streaming for hidden volume not implemented)
+    # Aviso para arquivos grandes (streaming não implementado para volume oculto)
     decoy_size = os.path.getsize(decoy_file)
     real_size = os.path.getsize(real_file)
     if decoy_size > STREAMING_THRESHOLD or real_size > STREAMING_THRESHOLD:
@@ -61,10 +63,17 @@ def encrypt_hidden_volume():
     real_pwd, real_key_file_hash = choose_auth_method()
     real_argon_params = get_argon2_parameters_for_encryption()
 
-    # Generate ephemeral token for real volume
+    # Gera token efêmero para o volume real e computa o hash utilizando Argon2
     token = generate_ephemeral_token(128)
     print(f"\nEphemeral token for real volume: {token}")
     token_bytes = token.encode()
+    ph = PasswordHasher()
+    try:
+        token_hash = ph.hash(token)
+    except Exception as e:
+        print("Error hashing token:", e)
+        input("\nPress Enter to continue...")
+        return
 
     try:
         decoy_data = read_file_data(decoy_file)
@@ -95,10 +104,7 @@ def encrypt_hidden_volume():
     with open(hidden_path, 'wb') as fout:
         fout.write(combined_rs)
 
-    # Compute token hash for verification
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-
-    # Create Outer Meta (for decoy volume) using generic field names
+    # Cria Outer Meta (para volume de isca) e Inner Meta (para volume real)
     outer_meta = {
         'part1_length': part1_length,
         'padding_length': padding_length,
@@ -113,7 +119,6 @@ def encrypt_hidden_volume():
     if decoy_key_file_hash:
         outer_meta['decoy_key_file_hash'] = decoy_key_file_hash
 
-    # Create Inner Meta (for real volume)
     inner_meta = {
         'real_nonce': enc_real_dict['nonce'],
         'real_salt': enc_real_dict['salt'],
@@ -125,9 +130,9 @@ def encrypt_hidden_volume():
     if real_key_file_hash:
         inner_meta['real_key_file_hash'] = real_key_file_hash
 
-    # Save metadata in two files:
-    # Outer Meta: <hidden_path>.meta (accessible with decoy password)
-    # Inner Meta: <hidden_path>.meta_hidden (accessible with real password)
+    # Salva metadados em dois arquivos:
+    # Outer Meta: <hidden_path>.meta (acessível com a senha do volume de isca)
+    # Inner Meta: <hidden_path>.meta_hidden (acessível com a senha do volume real)
     encrypt_meta_json(hidden_path + ".meta", outer_meta, decoy_pwd)
     encrypt_meta_json(hidden_path + ".meta_hidden", inner_meta, real_pwd)
 
@@ -138,12 +143,12 @@ def encrypt_hidden_volume():
 
 def decrypt_file(encrypted_file: str, outer_password: bytearray):
     """
-    Detects whether the volume is normal or hidden and calls the appropriate routine.
-    For hidden volumes, uses:
-      - The .meta file (decoy volume) decryptable with outer_password.
-      - The .meta_hidden file (real volume) decryptable with the real volume password.
-    For real volume, the ephemeral token is incorporated into key derivation.
-    For normal volumes, unified authentication is used.
+    Detecta se o volume é normal ou oculto e chama a rotina apropriada.
+    Para volumes ocultos, utiliza:
+      - O arquivo .meta (volume de isca) descriptografável com outer_password.
+      - O arquivo .meta_hidden (volume real) descriptografável com a senha real.
+    Para volume real, o token efêmero é incorporado à derivação da chave.
+    Para volumes normais, é utilizada autenticação unificada.
     """
     folder = os.path.join(os.path.expanduser("~"), "Documents", "Encoded_files_folder")
     file_path = os.path.join(folder, encrypted_file)
@@ -155,7 +160,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
         input("\nPress Enter to continue...")
         return
 
-    # Determine hidden volume by checking if .meta_hidden exists
+    # Verifica se é volume oculto pela presença de .meta_hidden
     meta_hidden_path = file_path + ".meta_hidden"
     is_hidden = os.path.exists(meta_hidden_path)
 
@@ -202,13 +207,15 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
             print("\nAuthenticate real volume (password + optional key file):")
             combined_pwd, _ = choose_auth_method()
             token = getpass.getpass("Enter ephemeral token for hidden volume access: ")
-            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            ph = PasswordHasher()
             meta_inner = decrypt_meta_json(meta_hidden_path, combined_pwd)
             if not meta_inner:
                 print("Failed to decrypt real volume metadata (incorrect password or corrupted)!")
                 input("\nPress Enter to continue...")
                 return
-            if token_hash != meta_inner.get('part2_token_hash'):
+            try:
+                ph.verify(meta_inner.get('part2_token_hash'), token)
+            except Exception:
                 print("Incorrect token!")
                 input("\nPress Enter to continue...")
                 return
@@ -257,7 +264,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
         print(f"\nHidden volume ({'decoy' if choice=='d' else 'real'}) decrypted and saved as: {out_name}")
 
     else:
-        # Normal volume
+        # Volume normal
         print("\nNormal volume detected.")
         meta_plain = decrypt_meta_json(meta_path, outer_password)
         if not meta_plain:
@@ -278,14 +285,14 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
 
 def change_real_volume_password():
     """
-    Allows changing the password of the REAL VOLUME (hidden part) without exposing the decoy volume.
-    Flow:
-      1) Select the .enc file (hidden volume).
-      2) Authenticate with the decoy volume to decrypt outer metadata.
-      3) Authenticate real volume (password + optional key file) along with the ephemeral token.
-      4) Decrypt the real part.
-      5) Ask for new authentication for the real volume.
-      6) Re-encrypt the real part with new authentication and update inner metadata.
+    Permite alterar a senha do VOLUME REAL (parte oculta) sem expor o volume de isca.
+    Fluxo:
+      1) Seleciona o arquivo .enc (volume oculto).
+      2) Autentica com o volume de isca para descriptografar os metadados externos.
+      3) Autentica o volume real (senha + opcional arquivo de chave) junto com o token efêmero.
+      4) Descriptografa a parte real.
+      5) Solicita nova autenticação para o volume real.
+      6) Recriptografa a parte real com a nova autenticação e atualiza os metadados internos.
     """
     clear_screen()
     print("=== CHANGE REAL VOLUME PASSWORD (HIDDEN) ===")
@@ -342,8 +349,7 @@ def change_real_volume_password():
 
     print("\nEnter ephemeral token for real volume access:")
     token = getpass.getpass("> ")
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-
+    ph = PasswordHasher()
     print("\nAuthenticate real volume to decrypt the real part (password + optional key file):")
     real_pwd, _ = choose_auth_method()
 
@@ -353,14 +359,9 @@ def change_real_volume_password():
         input("\nPress Enter to continue...")
         return
 
-    # Validate real volume key file if applicable (after decrypting meta_inner)
-    if 'real_key_file_hash' in meta_inner:
-        print("Key file detected for real volume.")
-        if not validate_key_file(meta_inner['real_key_file_hash']):
-            input("\nPress Enter to continue...")
-            return
-
-    if token_hash != meta_inner.get('part2_token_hash'):
+    try:
+        ph.verify(meta_inner.get('part2_token_hash'), token)
+    except Exception:
         print("Incorrect token!")
         input("\nPress Enter to continue...")
         return
@@ -411,7 +412,7 @@ def change_real_volume_password():
     enc_real_dict_new = encrypt_data_raw_chacha(real_plain_data, new_real_pwd, new_real_argon_params, extra=token.encode())
     new_real_cipher = enc_real_dict_new['ciphertext']
 
-    # Update combined data, preserving decoy and padding unchanged
+    # Atualiza os dados combinados, preservando volume de isca e padding inalterados
     combined_new = combined_data[:part1_length + padding_length] + new_real_cipher
     try:
         import tempfile
@@ -445,12 +446,12 @@ def change_real_volume_password():
     print("\nReal volume password updated successfully!")
     input("\nPress Enter to continue...")
 
-# The following helper functions are used by hidden_volume:
+# Funções auxiliares utilizadas por hidden_volume:
 
 def encrypt_data_raw_chacha(data: bytes, password: bytearray, argon_params: dict, extra: bytes = None):
     """
-    Encrypts data using ChaCha20Poly1305.
-    Optionally concatenates 'extra' to the password for key derivation.
+    Criptografa dados utilizando ChaCha20Poly1305.
+    Opcionalmente concatena 'extra' à senha para derivação da chave.
     """
     import secrets
     salt = secrets.token_bytes(32)
@@ -474,8 +475,8 @@ def encrypt_data_raw_chacha(data: bytes, password: bytearray, argon_params: dict
 
 def decrypt_data_raw_chacha(enc_dict: dict, password: bytearray, extra: bytes = None) -> bytes:
     """
-    Decrypts data encrypted by encrypt_data_raw_chacha.
-    Uses the optional 'extra' in key derivation if provided.
+    Descriptografa dados criptografados por encrypt_data_raw_chacha.
+    Utiliza o parâmetro 'extra' na derivação da chave, se fornecido.
     """
     salt = base64.b64decode(enc_dict['salt'])
     argon_params = {
