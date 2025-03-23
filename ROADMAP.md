@@ -109,7 +109,3 @@ The updated CryptGuard provides the following main functionalities:
 ### 0️⃣ Exit
 
 - Safely terminates the program.
-
----
-
-This RoadMap reflects CryptGuard's current version, highlighting its modular structure and implemented functionalities, including key rolling, custom chunk sizing, hidden volume password management, and the new graphical file selection feature.
