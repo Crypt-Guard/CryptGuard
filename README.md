@@ -9,7 +9,7 @@
 
 **CryptGuard is an advanced encryption solution with a modern interface, focused on security and usability.**
 
-[🚀 Quick Start](#-quick-start) •
+[💡 Quick Start](#-usage-guide) •
 [📖 Documentation](#-documentation) •
 [🛡️ Security](#️-security) •
 [🤝 Contribute](#-contribute) •
