@@ -11,10 +11,14 @@ from single_shot import encrypt_data_single, decrypt_data_single
 from streaming import encrypt_data_streaming, decrypt_data_streaming
 from hidden_volume import encrypt_hidden_volume, decrypt_file, change_real_volume_password
 from utils import clear_screen, generate_ephemeral_token, generate_unique_filename
+from metadata import decrypt_meta_json
+
+# Importa as funções de diálogo para seleção de arquivo
+from file_chooser import select_file_for_encryption, select_files_for_decryption
 
 def list_encrypted_files():
     """
-    Returns a list of .enc files in ~/Documents/Encoded_files_folder.
+    Retorna uma lista de (nome_do_arquivo, "??") referente a .enc em ~/Documents/Encoded_files_folder.
     """
     folder = os.path.join(os.path.expanduser("~"), "Documents", "Encoded_files_folder")
     if not os.path.exists(folder):
@@ -27,7 +31,7 @@ def list_encrypted_files():
 
 def select_file_from_list(prompt_message, files):
     """
-    Helper function to display a list of files and select one.
+    Auxiliar para exibir uma lista de arquivos no console.
     """
     print(prompt_message)
     for i, f in enumerate(files, 1):
@@ -41,8 +45,7 @@ def select_file_from_list(prompt_message, files):
 
 def ask_chunk_size():
     """
-    Allows the user to set the chunk size for streaming.
-    Returns an integer; if invalid or empty, returns the default CHUNK_SIZE.
+    Permite ao usuário definir o chunk size do streaming.
     """
     default_cs = CHUNK_SIZE
     print(f"Default chunk size is {default_cs} bytes.")
@@ -61,7 +64,7 @@ def ask_chunk_size():
 
 def encrypt_text():
     """
-    Asks the user for a message and encrypts it in single-shot mode.
+    Solicita uma mensagem e criptografa em single-shot.
     """
     clear_screen()
     print("=== ENCRYPT TEXT ===")
@@ -70,35 +73,9 @@ def encrypt_text():
     encrypt_data_single(message, combined_pwd, "text", ".txt", key_file_hash)
     input("\nPress Enter to continue...")
 
-def encrypt_file(file_type: str):
-    """
-    Encrypts a single file (image, PDF, audio, etc.) using unified authentication.
-    If the file is large, uses streaming mode.
-    """
-    clear_screen()
-    print(f"=== ENCRYPT {file_type.upper()} ===")
-    file_path = os.path.normpath(input("Enter file path: ").strip())
-    if not os.path.exists(file_path):
-        print("File not found!")
-        input("\nPress Enter to continue...")
-        return
-    combined_pwd, key_file_hash = choose_auth_method()
-    ext = os.path.splitext(file_path)[1]
-    file_size = os.path.getsize(file_path)
-    if file_size > STREAMING_THRESHOLD:
-        print("\nLarge file detected => using streaming mode.\n")
-        chunk_size = ask_chunk_size()
-        encrypt_data_streaming(file_path, combined_pwd, file_type.lower(), ext,
-                               key_file_hash, chunk_size=chunk_size)
-    else:
-        with open(file_path, 'rb') as f:
-            file_data = f.read()
-        encrypt_data_single(file_data, combined_pwd, file_type.lower(), ext, key_file_hash)
-    input("\nPress Enter to continue...")
-
 def encrypt_multiple_files():
     """
-    Zips multiple files and then encrypts the zip archive.
+    Zipa vários arquivos e então criptografa o zip resultante.
     """
     clear_screen()
     print("=== ENCRYPT MULTIPLE FILES ===")
@@ -145,8 +122,7 @@ def encrypt_multiple_files():
 
 def decrypt_menu():
     """
-    Lists encrypted files and allows the user to select one for decryption.
-    For hidden volumes, additional authentication is requested.
+    Lista arquivos .enc da pasta principal e permite escolher um para descriptografar.
     """
     clear_screen()
     print("=== DECRYPT FILE ===")
@@ -171,10 +147,7 @@ def decrypt_menu():
 
 def reencrypt_file():
     """
-    Performs key rolling (re-encryption):
-      - Decrypts the file using old authentication,
-      - Asks for new authentication and re-encrypts,
-      - Optionally removes the old encrypted file.
+    Faz re-encriptação (key rolling) para arquivos normais.
     """
     clear_screen()
     print("=== RE-ENCRYPT (KEY ROLLING) ===")
@@ -197,13 +170,11 @@ def reencrypt_file():
     print(f"\nUsing old authentication to decrypt {selected_file}.")
     old_pwd, _ = choose_auth_method()
     enc_path = os.path.join(folder, selected_file)
-    from metadata import decrypt_meta_json
     meta_plain = decrypt_meta_json(enc_path + ".meta", old_pwd)
     if not meta_plain:
         print("Failed to decrypt metadata (incorrect authentication or corrupted data)!")
         input("\nPress Enter to continue...")
         return
-    # Check for hidden volume by presence of .meta_hidden
     if os.path.exists(enc_path + ".meta_hidden"):
         print("Re-encrypt is not supported for hidden volumes in this version.")
         input("\nPress Enter to continue...")
@@ -257,7 +228,7 @@ def reencrypt_file():
 
 def generate_ephemeral_token_menu():
     """
-    Generates an ephemeral token in hex and displays it.
+    Gera um token efêmero em hex e exibe para o usuário.
     """
     clear_screen()
     print("=== GENERATE EPHEMERAL TOKEN ===")
@@ -265,16 +236,93 @@ def generate_ephemeral_token_menu():
     print(f"Generated token (use for hidden volumes, etc.): {token}")
     input("\nPress Enter to continue...")
 
+def menu_file_dialog():
+    """
+    Submenu para escolher se deseja criptografar ou descriptografar através da janela de seleção.
+    """
+    clear_screen()
+    print("=== OPEN FILE SELECTION WINDOW ===")
+    print("""
+[1] Encrypt a File
+[2] Decrypt a File
+[0] Back
+    """)
+    subchoice = input("Select an option: ").strip()
+    
+    if subchoice == '1':
+        encrypt_with_dialog()
+    elif subchoice == '2':
+        decrypt_with_dialog()
+    else:
+        return
+
+def encrypt_with_dialog():
+    clear_screen()
+    print("=== ENCRYPTING VIA FILE DIALOG ===")
+    file_path = select_file_for_encryption()
+    if not file_path:
+        print("No file selected (or dialog canceled)!")
+        input("Press Enter to continue...")
+        return
+
+    combined_pwd, key_file_hash = choose_auth_method()
+    
+    import os
+    ext = os.path.splitext(file_path)[1]
+    try:
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        input("Press Enter to continue...")
+        return
+
+    encrypt_data_single(file_data, combined_pwd, "file", ext, key_file_hash)
+    input("\nPress Enter to continue...")
+
+def decrypt_with_dialog():
+    clear_screen()
+    print("=== DECRYPTING VIA FILE DIALOG ===")
+    file1, file2 = select_files_for_decryption()
+    if not file1 and not file2:
+        print("No file selected (or dialog canceled)!")
+        input("Press Enter to continue...")
+        return
+
+    print("Select authentication method for decryption:")
+    combined_pwd, _ = choose_auth_method()
+
+    # Identificar qual dos arquivos selecionados é .enc
+    enc_file = None
+    meta_file = None
+    possible_files = [file1, file2]
+    for p in possible_files:
+        if p and p.endswith(".enc"):
+            enc_file = p
+        elif p and p.endswith(".meta"):
+            meta_file = p
+
+    if enc_file:
+        folder, filename = os.path.split(enc_file)
+        if meta_file and os.path.dirname(meta_file) != folder:
+            print(f"Note: The metadata (.meta) is in a different folder ({meta_file}).")
+        
+        decrypt_file(filename, combined_pwd)
+    else:
+        print("No valid .enc file identified for decryption.")
+    
+    input("\nPress Enter to continue...")
+
 def main_menu():
     """
-    Main menu of CryptGuard with improved usability and unified authentication flows.
+    Menu principal do CryptGuard.
     """
     while True:
         clear_screen()
-        print("\n=== CRYPTGUARD - ADVANCED ENCRYPTION SYSTEM ===")
+        print("=== CRYPTGUARD - ADVANCED ENCRYPTION SYSTEM ===")
         print("""
 [1] Encrypt Text
-[2] Encrypt File (Image/PDF/Audio)
+[2] Open File Selection Window
 [3] Decrypt File
 [4] Encrypt Multiple Files
 [5] Generate Ephemeral Token
@@ -283,18 +331,9 @@ def main_menu():
 [8] Change Real Volume Password (Hidden)
 [0] Exit
         """)
-        choice = input("Select an option: ").strip()
+        choice = input("Select an option: ").strip().lower()
         if choice == '1':
             encrypt_text()
-        elif choice == '2':
-            clear_screen()
-            print("File Type:")
-            print("[1] Image")
-            print("[2] PDF")
-            print("[3] Audio")
-            file_choice = input("Select: ").strip()
-            file_types = {'1': 'image', '2': 'pdf', '3': 'audio'}
-            encrypt_file(file_types.get(file_choice, 'file'))
         elif choice == '3':
             decrypt_menu()
         elif choice == '4':
@@ -307,6 +346,8 @@ def main_menu():
             reencrypt_file()
         elif choice == '8':
             change_real_volume_password()
+        elif choice == '2':
+            menu_file_dialog()
         elif choice == '0':
             print("Exiting...")
             time.sleep(1)
