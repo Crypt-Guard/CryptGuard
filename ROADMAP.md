@@ -7,7 +7,7 @@ The updated CryptGuard provides the following main functionalities:
 | Option | Functionality                                 |
 |--------|-----------------------------------------------|
 | 1️⃣     | Encrypt Text                                  |
-| 2️⃣     | Encrypt File (Image/PDF/Audio)                |
+| 2️⃣     | Open File Selection Window                    |
 | 3️⃣    | Decrypt File                                  |
 | 4️⃣     | Encrypt Multiple Files                        |
 | 5️⃣   | Generate Ephemeral Token                       |
@@ -30,10 +30,11 @@ The updated CryptGuard provides the following main functionalities:
    - Key derivation with Argon2id; encryption with ChaCha20Poly1305.
    - Encrypted metadata stored in a `.meta` file.
 
-### 2️⃣ Encrypt File (Image/PDF/Audio)
+### 2️⃣ Open File Selection Window
 
 #### Workflow
-1. **File Selection**
+1. **Graphical Selection**
+   - Opens a graphical window to conveniently select any file(s) for encryption or decryption from any location.
 2. **Authentication:** Choose between "Password + Key-file" or "Password only."
 3. **Size Check**
    - Files larger than a threshold (e.g., 10MB) use streaming mode (`encrypt_data_stream`). Smaller files use single-shot.
@@ -111,4 +112,4 @@ The updated CryptGuard provides the following main functionalities:
 
 ---
 
-This RoadMap reflects CryptGuard's current version, highlighting its modular structure and implemented functionalities, including key rolling, custom chunk sizing, and hidden volume password management.
+This RoadMap reflects CryptGuard's current version, highlighting its modular structure and implemented functionalities, including key rolling, custom chunk sizing, hidden volume password management, and the new graphical file selection feature.
