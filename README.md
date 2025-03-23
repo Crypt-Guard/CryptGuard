@@ -49,6 +49,10 @@ CryptGuard is an advanced encryption solution with a focus on security and usabi
   • Encrypted metadata (including original file extensions)
   • Careful management of sensitive memory (buffer zeroization)
 
+- 🖥️ **Improved File Selection** *(NEW)*
+  • Graphical file selection window
+  • Easily select files for encryption or decryption from any location in your system
+
 --------------------------------------------------------------------------------
 
 ## Project Structure
@@ -79,6 +83,8 @@ cryptguard/
 
 ├── utils.py                -> Auxiliary functions (screen clearing, unique name generation, etc.)
 
+├── file_chooser.py         -> *(NEW)* Graphical file selection window
+
 └── main.py                 -> Main CLI interface
 
 --------------------------------------------------------------------------------
@@ -91,7 +97,7 @@ cryptguard/
 
 1. Clone the repository:
 ```bash
-https://github.com/Crypt-Guard/CryptGuard.git
+git clone https://github.com/Crypt-Guard/CryptGuard.git
 cd cryptguard
 ```
 
@@ -109,7 +115,7 @@ python cryptguard/main.py
 
 ### Encrypting Files
   - Encrypt Text: Enter your message, password (with confirmation), and optionally a key-file.
-  - Encrypt File: Choose the file and follow instructions. For large files, you can set a custom chunk size.
+  - Encrypt File: Use the graphical file selection window to choose files for encryption conveniently from any location.
 
 ### Hidden Volumes
   - Prepare two sets of files: one for the fake volume and one for the real volume.
@@ -119,6 +125,7 @@ python cryptguard/main.py
 
 ### Decrypting Files
   - Select the decrypt option and enter the correct password. The file will be restored with its original extension (e.g., .txt, .jpg, etc.).
+  - Use the graphical file selection window to locate and select encrypted files and their metadata files.
 
 --------------------------------------------------------------------------------
 ## 📖 Documentation
@@ -182,4 +189,3 @@ We thank the Python community, the developers of the libraries used, and all pro
 [⬆ Back to top](#-cryptguard)
 
 </div>
-
