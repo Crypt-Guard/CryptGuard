@@ -1,7 +1,6 @@
-# main.py
 """
 Main CLI interface for CryptGuard.
-Implements a menu for encrypting/decrypting text/files, hidden volumes, etc.
+Implements a two-tab menu for encryption and encrypted file settings.
 """
 
 import os
@@ -50,7 +49,7 @@ def ask_chunk_size():
         if new_size < 1024:
             print("Value too small, forcing 1024.")
             return 1024
-        # Aplica limite máximo para evitar uso excessivo de memória
+        # Apply maximum limit to avoid excessive memory use
         if new_size > config.MAX_CHUNK_SIZE:
             print(f"Value too large, forcing {config.MAX_CHUNK_SIZE} bytes.")
             return config.MAX_CHUNK_SIZE
@@ -265,7 +264,6 @@ def generate_ephemeral_token_menu():
     clear_screen()
     print("=== GENERATE EPHEMERAL TOKEN ===")
     token = generate_ephemeral_token(128)
-    # Salva em arquivo para evitar exposição em histórico de console
     out_file = "ephemeral_token.txt"
     try:
         with open(out_file, "w") as f:
@@ -328,7 +326,7 @@ def decrypt_with_dialog():
     file1, file2 = select_files_for_decryption()
     if not file1 and not file2:
         print("No file selected (or dialog canceled)!")
-        input("Press Enter to continue...")
+        input("\nPress Enter to continue...")
         return
 
     print("Select authentication method for decryption:")
@@ -354,14 +352,73 @@ def decrypt_with_dialog():
     input("\nPress Enter to continue...")
 
 
-def main_menu():
+def encryption_options_menu():
     """
-    Main CLI menu for CryptGuard.
+    Submenu for Encryption Options.
     """
     while True:
         clear_screen()
+        print("=== ENCRYPTION OPTIONS ===")
+        print("""
+[1] Encrypt Text
+[2] Open File Selection Window
+[3] Decrypt File
+[4] Encrypt Multiple Files
+[0] Back
+        """)
+        choice = input("Select an option: ").strip().lower()
+        if choice == '1':
+            encrypt_text()
+        elif choice == '2':
+            menu_file_dialog()
+        elif choice == '3':
+            decrypt_menu()
+        elif choice == '4':
+            encrypt_multiple_files()
+        elif choice == '0':
+            break
+        else:
+            print("Invalid option!")
+            time.sleep(1)
 
-        # Tentar criar a pasta de saída, caso ainda não exista
+
+def encrypted_file_settings_menu():
+    """
+    Submenu for Encrypted File Settings.
+    """
+    while True:
+        clear_screen()
+        print("=== ENCRYPTED FILE SETTINGS ===")
+        print("""
+[1] Generate Ephemeral Token
+[2] Create Hidden Volume (Plausible Deniability)
+[3] Re-Encrypt (Key Rolling) - (for normal volumes)
+[4] Change Real Volume Password (Hidden)
+[0] Back
+        """)
+        choice = input("Select an option: ").strip().lower()
+        if choice == '1':
+            generate_ephemeral_token_menu()
+        elif choice == '2':
+            encrypt_hidden_volume()
+        elif choice == '3':
+            reencrypt_file()
+        elif choice == '4':
+            change_real_volume_password()
+        elif choice == '0':
+            break
+        else:
+            print("Invalid option!")
+            time.sleep(1)
+
+
+def main_menu():
+    """
+    Main CLI menu for CryptGuard, offering two tabs:
+    [1] Encryption Options and [2] Encrypted File Settings.
+    """
+    while True:
+        clear_screen()
         folder = os.path.join(os.path.expanduser("~"), "Documents", "Encoded_files_folder")
         try:
             os.makedirs(folder, exist_ok=True)
@@ -370,33 +427,15 @@ def main_menu():
 
         print("=== CRYPTGUARD - ADVANCED ENCRYPTION SYSTEM ===")
         print("""
-[1] Encrypt Text
-[2] Open File Selection Window
-[3] Decrypt File
-[4] Encrypt Multiple Files
-[5] Generate Ephemeral Token
-[6] Create Hidden Volume (Plausible Deniability)
-[7] Re-Encrypt (Key Rolling) - (for normal volumes)
-[8] Change Real Volume Password (Hidden)
+[1] Encryption Options
+[2] Encrypted File Settings
 [0] Exit
         """)
         choice = input("Select an option: ").strip().lower()
         if choice == '1':
-            encrypt_text()
-        elif choice == '3':
-            decrypt_menu()
-        elif choice == '4':
-            encrypt_multiple_files()
-        elif choice == '5':
-            generate_ephemeral_token_menu()
-        elif choice == '6':
-            encrypt_hidden_volume()
-        elif choice == '7':
-            reencrypt_file()
-        elif choice == '8':
-            change_real_volume_password()
+            encryption_options_menu()
         elif choice == '2':
-            menu_file_dialog()
+            encrypted_file_settings_menu()
         elif choice == '0':
             print("Exiting...")
             time.sleep(1)
