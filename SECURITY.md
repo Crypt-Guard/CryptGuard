@@ -1,61 +1,75 @@
-# 🛡️ CryptGuard Security Advisory
+# 🛡️ CryptGuard Security Policy
 
-## ⚠️ Important Information
-
-### Relative Security and User Responsibility
-
-CryptGuard is developed to provide a robust encryption solution using:
-- **ChaCha20Poly1305** for authenticated encryption,
-- **Argon2id** for key derivation,
-- **Reed-Solomon** for error correction.
-
-However, no solution can guarantee absolute security. The use of CryptGuard should be accompanied by proper security practices and audits. The protected data remains the user's sole responsibility.
-
-### External Audits and Reviews
-
-We recommend:
-1. Regular external security audits of CryptGuard.
-2. Following best security practices and maintaining secure backups.
-
-## 🔒 Security Best Practices
-
-1. **User Responsibility and Relative Security**
-   - Use strong passwords (ideally 12+ characters, including uppercase, lowercase, digits, and symbols).
-   - Use “Password + Key-file” mode whenever possible to increase entropy.
-   - Authentication includes double verification to reduce errors.
-
-2. **Data Protection**
-   - Sensitive data such as passwords and derived keys are handled carefully, and buffers are zeroized after use.
-   - Metadata encryption includes original file extensions to ensure data integrity.
-
-3. **Hidden Volumes and Key Rolling**
-   - Hidden volumes separate fake and real data.
-   - Use distinct passwords for each volume.
-   - Re-Key (Key Rolling) allows changing the password for the real volume without compromising the hidden volume.
-
-3. **Secure Environment**
-   - Keep the operating system and dependencies updated.
-   - Employ antivirus software, firewalls, and other protective tools.
-   - Regularly backup data and metadata.
-
-## ⚖️ Disclaimer
-
-CryptGuard is provided without any warranty. Users are responsible for:
-- Understanding the potential risks.
-- Compatibility issues and incorrect configurations.
-- Compliance with local laws and regulations.
-
-## 📜 Legal and Regulatory Compliance
-
-### Regulations
-The use of encryption and security technologies may be subject to specific regulations varying by country. Users should verify compliance with local laws and regulations.
-
-## 🆘 Support and Contact
-
-To report vulnerabilities or security issues:
-1. Do NOT open a public issue.
-2. Email: [cryptguard737@gmail.com](mailto:cryptguard737@gmail.com).
+CryptGuard provides powerful encryption features, but no software can guarantee absolute security under all conditions. This document outlines how we handle security matters, recommends safe usage practices, and clarifies user responsibility.
 
 ---
 
-This notice aims to inform users about limitations and best practices for using CryptGuard securely and responsibly, highlighting legal compliance requirements, security guidelines, and user responsibilities.
+## ⚠️ Disclaimer and User Responsibility
+
+- **No Warranty**: CryptGuard is provided “as is,” without warranties or guarantees.  
+- **User Accountability**: You, the user, are fully responsible for how you utilize CryptGuard. Misconfiguration or weak passwords can compromise your data.  
+- **Legal Compliance**: CryptGuard must be used in accordance with local laws and regulations concerning cryptographic software.
+
+---
+
+## 🔐 Best Practices
+
+1. **Strong Passwords**  
+   - Choose passwords of 12+ characters (mix of uppercase, lowercase, digits, symbols).  
+   - Consider using **“Password + Key-file”** mode for increased entropy.
+
+2. **Argon2id Key Derivation**  
+   - CryptGuard employs Argon2id to slow down brute force attacks.  
+   - If your system has limited RAM, fallback logic reduces memory usage. However, you remain responsible for verifying your machine’s resources.
+
+3. **Hidden Volumes**  
+   - Real volumes require an **ephemeral token** plus a distinct password.  
+   - If you lose the token, recovery of the real volume is impossible.  
+   - Present only the decoy password (and data) under coercion to maintain plausible deniability.
+
+4. **File Integrity and Metadata**  
+   - Always keep the `.enc` file and its `.meta` together.  
+   - Reed-Solomon can correct minor corruptions but does not replace secure backups.
+
+5. **Keep Systems Updated**  
+   - Regular OS and dependency updates reduce vulnerabilities.  
+   - Use antivirus and firewalls where appropriate.
+
+6. **Backup Strategy**  
+   - Store encrypted files and their metadata in multiple secure locations.  
+   - Losing the `.meta` file will make decryption infeasible.
+
+---
+
+## 🔍 Reporting Vulnerabilities
+
+- **Confidential Disclosure**: If you discover a security issue, do NOT open a public GitHub issue.  
+- **Contact**: Email the details to [cryptguard737@gmail.com](mailto:cryptguard737@gmail.com) (or any maintained contact if available).  
+- We value responsible disclosure and will address legitimate concerns quickly.
+
+---
+
+## ⚖️ Legal Compliance
+
+1. **Export/Import Laws**  
+   - Cryptographic software may be subject to export and import restrictions in some jurisdictions.  
+   - You must ensure compliance with your local regulations.
+
+2. **Usage Restrictions**  
+   - Any unauthorized or criminal usage of CryptGuard is strictly the user’s responsibility.  
+   - The CryptGuard team disclaims liability for unlawful or malicious usage of the software.
+
+---
+
+## 🏗 Maintainer Responsibilities
+
+- **Prompt Patching**: The maintainers will release fixes for discovered vulnerabilities in a timely manner.
+- **Transparency**: If a security event affects the integrity of user data, we will communicate openly via the project’s releases or advisories.
+
+---
+
+By using CryptGuard, you acknowledge the **disclaimer of warranty** and accept that you are solely responsible for data safeguarding and compliance with the applicable laws. When in doubt, seek professional security audits or legal advice.
+
+Stay safe, secure, and use strong passwords!
+
+---
