@@ -1,4 +1,3 @@
-```md
 # CryptGuard Roadmap
 
 This document outlines CryptGuard’s **current features** and **future plans**, reflecting updates introduced in the latest version.
@@ -108,4 +107,3 @@ We appreciate community involvement. See our [CONTRIBUTING.md](CONTRIBUTING.md) 
 
 **Last Updated**: *Month YYYY*  
 &copy; CryptGuard Team - Secure your data!
-```
