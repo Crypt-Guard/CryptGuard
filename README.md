@@ -59,7 +59,7 @@ CryptGuard is an **advanced encryption solution** focused on **security** and **
 ### 1) Download & Run (Executable Release)
 
 1. Go to the [Releases](../../releases) page of this repository.
-2. Find and download the `CryptGuard.exe` (or similarly named `.exe` file).
+2. Find and download the `CryptGuard.exe`.
 3. Place it in a convenient folder. Double-click to run on Windows.
 
 **No Python installation required** when using the `.exe`.  
