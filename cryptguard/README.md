@@ -251,4 +251,4 @@ By understanding the roles and responsibilities of each module, developers can c
 ---
 
 **End of Updated README – CryptGuard v1.0**  
-Enjoy a more secure and efficient CryptGuard with this latest release! For any questions or enhancements, check out the [contribution guidelines](CONTRIBUTING.md) and [security policy](SECURITY.md).
+Enjoy a more secure and efficient CryptGuard with this latest release! For any questions or enhancements, check out the [contribution guidelines](../CONTRIBUTING.md) and [security policy](../SECURITY.md).
