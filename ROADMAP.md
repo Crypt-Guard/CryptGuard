@@ -1,111 +1,111 @@
-## 🔐 CryptGuard - Features and RoadMap
+```md
+# CryptGuard Roadmap
 
-### Main Features
-
-The updated CryptGuard provides the following main functionalities:
-
-| Option | Functionality                                 |
-|--------|-----------------------------------------------|
-| 1️⃣     | Encrypt Text                                  |
-| 2️⃣     | Open File Selection Window                    |
-| 3️⃣    | Decrypt File                                  |
-| 4️⃣     | Encrypt Multiple Files                        |
-| 5️⃣   | Generate Ephemeral Token                       |
-| 6️⃣     | Create Hidden Volume (Plausible Deniability)  |
-| 7️⃣     | Key Rolling - Normal Volume                   |
-| 8️⃣     | Change Password of Real Volume (Hidden)       |
-| 0️⃣     | Exit                                          |
+This document outlines CryptGuard’s **current features** and **future plans**, reflecting updates introduced in the latest version.
 
 ---
 
-### 🔒 Functionality Details
+## ✨ Overview of Current Features
+
+| Option | Functionality                                                   |
+|--------|-----------------------------------------------------------------|
+| 1️⃣     | **Encrypt Text**                                               |
+| 2️⃣     | **Open File Selection Window**                                 |
+| 3️⃣     | **Decrypt File**                                              |
+| 4️⃣     | **Encrypt Multiple Files**                                     |
+| 5️⃣     | **Generate Ephemeral Token**                                   |
+| 6️⃣     | **Create Hidden Volume (Plausible Deniability)**              |
+| 7️⃣     | **Key Rolling (Normal Volume)**                                |
+| 8️⃣     | **Change Password of Real Volume (Hidden)**                    |
+| 0️⃣     | **Exit**                                                       |
+
+### Core Technologies and Updates
+
+- **ChaCha20-Poly1305** for robust authenticated encryption.
+- **Argon2id** with fallback if `MemoryError` occurs (auto-reduces `memory_cost`).
+- **Reed-Solomon** for optional error correction.
+- **Streaming Mode** for efficient encryption/decryption of large files.
+- **Atomic Metadata Writes** to prevent corruption if interrupted.
+- **Sensitive Data Cleanup**: zeroizes critical buffers (e.g., derived keys, passwords).
+
+---
+
+## 🔒 Detailed Functionality
 
 ### 1️⃣ Encrypt Text
-
-#### Operation Flow
-1. **Input Text**
-   - User inputs a message, password (double confirmation), and optionally a key file.
-2. **Encryption Process**
-   - Uses single-shot mode (`encrypt_data_single`).
-   - Key derivation with Argon2id; encryption with ChaCha20Poly1305.
-   - Encrypted metadata stored in a `.meta` file.
+- **User Input**: Paste or type your message, then provide a password (with confirmation).
+- **Encryption**: Uses single-shot encryption (via `encrypt_data_single`).
+- **Metadata**: Original extension (`.txt`), Argon2 parameters, and timestamps stored securely in `.meta`.
 
 ### 2️⃣ Open File Selection Window
-
-#### Workflow
-1. **Graphical Selection**
-   - Opens a graphical window to conveniently select any file(s) for encryption or decryption from any location.
-2. **Authentication:** Choose between "Password + Key-file" or "Password only."
-3. **Size Check**
-   - Files larger than a threshold (e.g., 10MB) use streaming mode (`encrypt_data_stream`). Smaller files use single-shot.
-4. **Outcome**
-   - Encrypted file saved with metadata preserving the original extension.
+- **Graphical Selection**: Pick one or more files from any folder.
+- **Threshold Check**: Files above a configurable size (e.g., 10MB) switch to streaming mode to prevent high RAM usage.
+- **Outcome**: Encrypted file (`.enc`) plus a `.meta` file containing safely encrypted metadata.
 
 ### 3️⃣ Decrypt File
-
-#### Workflow
-1. **Listing and Selection**
-   - Shows available `.enc` files.
-2. **Authentication**
-   - Choose between "Password + Key-file" or "Password only."
-3. **Processing**
-   - Decrypts selected file; supports hidden volume via ephemeral token.
-4. **Outcome**
-   - Decrypted file restored with original extension (e.g., `.txt`, `.jpg`).
+- **Select and Confirm**: Choose the `.enc` file, provide the correct password and optional key file if used during encryption.
+- **Hidden or Normal**: If the file is part of a hidden volume, an ephemeral token may be required; otherwise, normal decryption proceeds.
+- **Restoration**: Decrypted file recovers its original extension.
 
 ### 4️⃣ Encrypt Multiple Files
+- **Flow**:
+  1. User selects multiple files.
+  2. They are zipped together.
+  3. Large ZIPs use streaming; smaller ones use single-shot.
+- **Outcome**: A single encrypted `.enc` containing all the selected files compressed in a ZIP, plus corresponding `.meta`.
 
-#### Workflow
-1. **Selection**
-   - User selects multiple files.
-2. **Process**
-   - ZIP compression, streaming mode for large ZIPs; single-shot for smaller ZIPs.
-3. **Outcome**
-   - Encrypted ZIP file stored with metadata.
-
-### 5️⃣ Generate Token
-
-#### Workflow
-1. **Generation**
-   - Produces a temporary token to secure the "real" data.
-2. **Outcome**
-   - Token displayed to user.
+### 5️⃣ Generate Ephemeral Token
+- **Ephemeral Token**: Creates a random token (hex) with high entropy.
+- **Real Volume Access**: Required for hidden volumes. Keep it safe—losing it makes the real volume inaccessible, even if you know the password.
 
 ### 6️⃣ Create Hidden Volume (Plausible Deniability)
-
-#### Workflow
-1. **File Selection**
-   - Two file sets: fake volume and real volume.
-2. **Encryption**
-   - Each set encrypted separately using `encrypt_data_raw_chacha`.
-   - Volumes concatenated and encoded with Reed-Solomon.
-   - Ephemeral token generated for real volume access.
-3. **Outcome**
-   - Hidden volume created with plausible deniability.
+- **Setup**:
+  1. Decoy file (fake data).
+  2. Real file (sensitive data).
+  3. Two distinct passwords + ephemeral token for the real file.
+- **Concatenation**: Decoy and real ciphertext are combined with padding and optionally protected by Reed-Solomon.
+- **Dual Metadata**: `.meta` for decoy info, `.meta_hidden` for real volume.
 
 ### 7️⃣ Key Rolling (Normal Volume)
+- **Intent**: Safely replace the encryption key with a new password.
+- **Process**:
+  1. Decrypt with old password (and key file if applicable).
+  2. Re-encrypt the data with a new password.
+  3. Optionally remove the old `.enc` to invalidate the old key.
 
-#### Workflow
-1. **File Selection**
-   - File decrypted with old password.
-2. **Re-encryption**
-   - File re-encrypted with a new password.
-3. **Outcome**
-   - New encrypted file created, original extension preserved.
-
-### 8️⃣ Change Real Volume Password (Hidden)
-
-#### Workflow
-1. **Hidden Volume Access**
-   - Initially accesses fake volume metadata.
-2. **Real Volume Decryption**
-   - User enters current password for real volume.
-3. **Re-Keying**
-   - Real part decrypted in memory.
-   - New password encrypts the real volume only.
-4. **Outcome**
-   - Sensitive data remains secure.
+### 8️⃣ Change Password of Real Volume (Hidden)
+- **Dual Authentication**:
+  1. Decoy password → Access outer metadata.
+  2. Real password + ephemeral token → Access the real content.
+- **Process**:
+  1. Temporarily decrypt the real part in memory.
+  2. Re-encrypt it with the new password/parameters.
+  3. Update `.meta_hidden` without exposing the decoy.
 
 ### 0️⃣ Exit
+- Closes the CryptGuard session.
 
-- Safely terminates the program.
+---
+
+## 🛠 Maintenance and Versions
+
+- **Current Version**: *v1.0 (Major Update)*  
+  - Removed plaintext checksums  
+  - Improved Argon2 fallback  
+  - Atomic .meta writes  
+  - Enhanced streaming + error handling  
+  - Memory zeroization for derived keys/passwords
+
+- **Backward Compatibility**: Old `.enc` files with the old plaintext-checksum format are **not** compatible unless an older version is used. It’s recommended to decrypt and re-encrypt with the updated version if needed.
+
+---
+
+## 🤝 Contribute
+
+We appreciate community involvement. See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. For any security concerns, please refer to [SECURITY.md](SECURITY.md).
+
+---
+
+**Last Updated**: *Month YYYY*  
+&copy; CryptGuard Team - Secure your data!
+```
