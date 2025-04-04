@@ -1,191 +1,192 @@
 # 🔐 CryptGuard
 
-<div align="center">
-
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 [![Security](https://img.shields.io/badge/security-audited-green.svg)](SECURITY.md)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-**CryptGuard is an advanced encryption solution with a modern interface, focused on security and usability.**
+CryptGuard is an **advanced encryption solution** focused on **security** and **usability**. It provides robust file encryption (single-shot and streaming), hidden volumes with plausible deniability, and modern key derivation via Argon2id.
 
-[💡 Usage Guide](#-usage-guide) •
-[📖 Documentation](#-documentation) •
-[🛡️ Security](#️-security) •
-[🤝 Contribute](#-contribute) •
-[📜 License](#-license)
+---
 
-</div>
+## ✨ Key Features
 
-CryptGuard is an advanced encryption solution with a focus on security and usability, now restructured into a modular architecture.
+1. **Authenticated Encryption**  
+   - Uses ChaCha20-Poly1305 to ensure confidentiality and integrity in a single operation.
 
---------------------------------------------------------------------------------
-## ✨ Features
+2. **Argon2id Key Derivation**  
+   - Secure password hashing and fallback handling if system memory is insufficient.
+   - Optional combination of password + key file for enhanced entropy.
 
-- 🔒 **Robust Encryption**
-  • Authenticated encryption with ChaCha20Poly1305
-  • Key derivation with Argon2id
-  • Error correction with Reed-Solomon
+3. **Multiple Encryption Modes**  
+   - **Single-Shot** for small or moderate files.  
+   - **Streaming** mode for large files, reading data in chunks without excessive RAM usage.
 
-- 🎯 **Advanced Functionalities**
-  • Encryption of texts and files (single-shot)
-  • Large file encryption with streaming mode and dynamic chunk sizes
-  • Multiple file support (ZIP compression)
-  • Creation of hidden volumes with plausible deniability
-  • Key Rolling / Re-encryption: Change the password of the real volume without exposing the hidden one
+4. **Hidden Volumes (Plausible Deniability)**  
+   - Create “decoy” and “real” volumes within the same encrypted file, each with separate passwords.
+   - Real volume also requires an ephemeral token, preventing accidental or forced disclosure.
 
-- Authentication
+5. **Metadata Encryption**  
+   - Double-layer metadata encryption, written atomically (prevents corruption on failure).
+   - Stores original file extension and Argon2 parameters securely.
 
-  • [1] Password + Key-file
+6. **Reed-Solomon Error Correction**  
+   - Optionally corrects minor corruption, preserving data in unreliable storage scenarios.
 
-  • [2] Password only
+7. **Key Rolling**  
+   - Allows re-encryption of a normal (non-hidden) volume with a new password, removing the old encryption key.
 
-- 💫 **CLI Interface**
-  • Intuitive command-line interface
-  • Real-time feedback during streaming operations
+8. **Now Available as a Single Executable**  
+   - You can download the `.exe` file from the Releases section for a simpler, no-install experience on Windows.
 
-- 🛡️ **Enhanced Security**
-  • Password strength verification with zxcvbn
-  • Encrypted metadata (including original file extensions)
-  • Careful management of sensitive memory (buffer zeroization)
+---
 
-- 🖥️ **Improved File Selection** *(NEW)*
-  • Graphical file selection window
-  • Easily select files for encryption or decryption from any location in your system
+## 🔖 Recent Updates
 
---------------------------------------------------------------------------------
+- **Removed plaintext checksums** to eliminate any leakage of SHA-256 hashes of unencrypted data.
+- **Argon2id fallback** if `MemoryError` occurs, making it more adaptable on systems with limited RAM.
+- **Atomic metadata write** with temporary files to avoid corruption if interrupted.
+- **Enhanced streaming** to handle large files both in encryption and decryption, reading incrementally.
+- **Improved error handling**: automatically removes incomplete `.enc` or temporary files on failures.
+- **Sensitive data cleared from memory** (`password` and `derived_key` zeroized post-operation).
+- **Hidden volumes** refined: ephemeral token usage, two-layer structure, and better handling of decoy vs. real volume.
+- **Packaged as a single `.exe`** for Windows users, simplifying installation and execution.
 
-## Project Structure
+---
 
-**The repository is now organized modularly within the "cryptguard/" directory:**
+## 🚀 Getting Started
 
-cryptguard/
+### 1) Download & Run (Executable Release)
 
-├── __init__.py             -> Initializes the package
+1. Go to the [Releases](../../releases) page of this repository.
+2. Find and download the `CryptGuard.exe` (or similarly named `.exe` file).
+3. Place it in a convenient folder. Double-click to run on Windows.
 
-├── config.py               -> Global settings (chunk size, thresholds, Argon2 parameters, etc.)
+**No Python installation required** when using the `.exe`.  
+For advanced usage, open a Command Prompt or PowerShell in that folder and run:
 
-├── password_utils.py       -> Functions for password validation and collection (Password + Key-file or Password only)
-
-├── argon_utils.py          -> Key derivation with Argon2id
-
-├── metadata.py             -> Metadata encryption and decryption (.meta)
-
-├── rs_codec.py             -> Reed-Solomon encoding and decoding
-
-├── chunk_crypto.py         -> Chunk encryption with ChaCha20Poly1305 + RS
-
-├── single_shot.py          -> Encryption/Decryption for small files (single-shot)
-
-├── streaming.py            -> Encryption/Decryption for large files (streaming, dynamic chunk sizes)
-
-├── hidden_volume.py        -> Hidden volumes functionality and re-keying real volumes
-
-├── utils.py                -> Auxiliary functions (screen clearing, unique name generation, etc.)
-
-├── file_chooser.py         -> *(NEW)* Graphical file selection window
-
-└── main.py                 -> Main CLI interface
-
---------------------------------------------------------------------------------
-### Prerequisites
-
-- Python 3.8 or higher
-- pip (Python package manager)
-
-### Installation
-
-1. Clone the repository:
 ```bash
-git clone https://github.com/Crypt-Guard/CryptGuard.git
-cd cryptguard
+CryptGuard.exe
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+This approach is especially handy if you prefer using it in a CLI manner.  
+
+> **Note**: Windows SmartScreen or antivirus software may show warnings because this is an unsigned executable. You can accept or whitelist it if you trust the source.
+
+---
+
+### 2) Running from Source (Optional)
+
+If you prefer Python or want to modify the code:
+
+1. **Clone** the repository:
+   ```bash
+   git clone https://github.com/Crypt-Guard/CryptGuard.git
+   cd CryptGuard
+   ```
+2. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Run**:
+   ```bash
+   python main.py
+   ```
+
+You will need Python 3.8+ installed. This mode also lets you adjust Argon2 parameters or make custom modifications.
+
+---
+
+## 🔑 Usage Overview
+
+1. **Encrypt a File**  
+   - Specify a password (confirm it).  
+   - For large files, CryptGuard automatically suggests streaming mode to avoid high RAM usage.
+
+2. **Decrypt a File**  
+   - Supply the same password used at encryption.  
+   - The file recovers its original extension, as stored in metadata.
+
+3. **Hidden Volumes**  
+   - Protect real data inside a single encrypted container.  
+   - Present a decoy password if coerced; only the correct real password + ephemeral token reveals the real content.
+
+4. **Key Rolling**  
+   - Decrypt a normal volume with the old password.  
+   - Re-encrypt with a new password, optionally removing the old .enc files.
+
+5. **Error Correction**  
+   - Reed-Solomon adds 32 bytes parity to help recover from minor corruptions.  
+   - Can be toggled globally in the config or recognized in metadata for consistent usage.
+
+---
+
+## ⚠️ Security & Safety Notes
+
+- **Password Strength**  
+  - Choose strong passwords. Argon2id helps defend against brute force, but a weak password is still a risk.
+- **Ephemeral Token** (Hidden Volume)  
+  - Keep the ephemeral token secret; losing it makes the real volume inaccessible even with the correct password.
+- **Backups**  
+  - Regularly back up your `.enc` file **and** its `.meta`, or you might permanently lose access if the files get corrupted beyond correction.
+- **Memory Usage**  
+  - If you see `MemoryError`, CryptGuard attempts a fallback approach with lower Argon2 memory_cost. If that fails repeatedly, reduce parameters or use a more capable system.
+- **Signed Executables**  
+  - Currently, the `.exe` is not code-signed. Some antivirus software or SmartScreen might flag or prompt. Confirm the source or build from source if in doubt.
+
+---
+
+## 🏗️ Project Structure
+
+```
+CryptGuard/
+ ┣━━ main.py
+ ┣━━ config.py
+ ┣━━ chunk_crypto.py
+ ┣━━ single_shot.py
+ ┣━━ streaming.py
+ ┣━━ hidden_volume.py
+ ┣━━ metadata.py
+ ┣━━ password_utils.py
+ ┣━━ rs_codec.py
+ ┣━━ argon_utils.py
+ ┣━━ utils.py
+ ┗━━ README.md
 ```
 
-3. Run CryptGuard:
-```bash
-python cryptguard/main.py
-```
---------------------------------------------------------------------------------
-## 💡 Usage Guide
+- **main.py**: primary entry point (CLI).  
+- **hidden_volume.py**: logic for hidden (decoy + real) volume creation.  
+- **streaming.py**: encrypt/decrypt in chunks.  
+- **argon_utils.py**: Argon2id-based key derivation with fallback.  
+- **metadata.py**: encryption of `.meta` with double-layer approach.
 
-### Encrypting Files
-  - Encrypt Text: Enter your message, password (with confirmation), and optionally a key-file.
-  - Encrypt File: Use the graphical file selection window to choose files for encryption conveniently from any location.
+---
 
-### Hidden Volumes
-  - Prepare two sets of files: one for the fake volume and one for the real volume.
-  - Use distinct passwords for each volume.
-  - The system generates an ephemeral token for accessing the real volume.
-  - Key Rolling / Re-encryption: Change the password of the real volume without altering or exposing the fake volume.
+## 🤝 Contributing
 
-### Decrypting Files
-  - Select the decrypt option and enter the correct password. The file will be restored with its original extension (e.g., .txt, .jpg, etc.).
-  - Use the graphical file selection window to locate and select encrypted files and their metadata files.
+Contributions to CryptGuard are welcome! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute:
 
---------------------------------------------------------------------------------
-## 📖 Documentation
+- **Bug Reports**: Submit an Issue.  
+- **Pull Requests**: Fork, commit, and open a PR.  
+- **Security Issues**: Check [SECURITY.md](SECURITY.md) for guidelines.
 
-- [RoadMap](ROADMAP.md) - Features and future plans
-- [Security](SECURITY.md) - Security guidelines and best practices
-- [Contributing](CONTRIBUTING.md) - How to contribute to the project
-- [License](LICENSE) - Licensing terms
-
---------------------------------------------------------------------------------
-## 🛡️ Security
-
-CryptGuard was designed with security in mind, but we recommend:
-  • Authenticated encryption (ChaCha20Poly1305)
-  • Key derivation with Argon2id
-  • Error correction with Reed-Solomon
-  • Password strength validation (zxcvbn)
-  • Careful management of sensitive memory (buffer zeroization)
-
-Attention: Conduct security audits and maintain backups of your data.
-Refer to [SECURITY.md](SECURITY.md) for more information.
-
---------------------------------------------------------------------------------
-## 🤝 Contribute
-
-Contributions are welcome! Please read our [Contribution Guide](CONTRIBUTING.md).
-
-### Areas of Contribution
-
-- 📝 Documentation
-- 🐛 Bug fixes
-- ✨ New features
-- 🎨 Interface improvements
-- 🌐 Translations
+---
 
 ## 📜 License
 
-CryptGuard is licensed under the [Apache 2.0 License](LICENSE).
+CryptGuard is licensed under the [Apache 2.0 License](LICENSE).  
 
---------------------------------------------------------------------------------
+Use it responsibly; **no warranty** is provided for potential data loss or misuse.
 
-## 📊 Project Status
+---
 
-  - Robust encryption: ✅
-  - Complete documentation: ✅
-  - Directory support: 🚧
-  - Cloud integration: 🚧
-  - Physical authentication device support: 🚧
+## 🏆 Acknowledgments
 
---------------------------------------------------------------------------------
+- The Argon2id KDF is provided by `argon2-cffi`.  
+- Encryption powered by Python’s `cryptography` library with ChaCha20-Poly1305.  
+- Reed-Solomon implemented via `reedsolo`.  
+- Special thanks to all contributors who have helped improve CryptGuard’s security and usability.
 
-## 🙏 Acknowledgments
+---
 
-We thank the Python community, the developers of the libraries used, and all project contributors.
-
---------------------------------------------------------------------------------
-<div align="center">
-
-**CryptGuard** - Developed with ❤️
-
-[⬆ Back to top](#-cryptguard)
-
-</div>
+**CryptGuard** – Advanced Encryption. Secure. Modern. Tested. Enjoy!
