@@ -33,7 +33,7 @@ First, thank you for your interest in CryptGuard! Contributions from the communi
 
 ### Suggesting Features
 
-- Check the project’s [Roadmap](ROADMAP.md) (if available) or [open an issue](../../issues/new?template=feature_request.md) to propose your idea.
+- Check the project’s [Roadmap](ROADMAP.md) or [open an issue](../../issues/new?template=feature_request.md) to propose your idea.
 - Include:
   1. **A clear description** of the feature
   2. **Use cases** or examples of why it would be beneficial
