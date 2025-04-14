@@ -1,8 +1,7 @@
 # 📜 CryptGuard Update Notes
 
-**Version:** 2.0 (Pending)  
+**Version:** 1.0.1 (Pending)  
 **Date:** April 2025  
-**Status:** Not yet merged into main GitHub repository
 
 ---
 
