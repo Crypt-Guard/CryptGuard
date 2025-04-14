@@ -101,7 +101,7 @@ This document outlines CryptGuard’s **current features** and **future plans**,
 
 ## 🤝 Contribute
 
-We appreciate community involvement. See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. For any security concerns, please refer to [SECURITY.md](SECURITY.md).
+We appreciate community involvement. See our [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. For any security concerns, please refer to [SECURITY.md](../SECURITY.md).
 
 ---
 
