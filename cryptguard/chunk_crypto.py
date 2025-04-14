@@ -11,14 +11,14 @@ Reed-Solomon error correction.
 """
 
 import struct
-import hashlib
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.exceptions import InvalidTag
 
 import config
 from rs_codec import rs_encode_data, rs_decode_data
+from secure_bytes import SecureBytes
 
-def encrypt_chunk(chunk: bytes, key: bytearray,
+def encrypt_chunk(chunk: bytes, key, 
                   aad: bytes, chunk_index: int) -> bytes:
     """
     Encrypts a single chunk using ChaCha20Poly1305.
@@ -26,10 +26,23 @@ def encrypt_chunk(chunk: bytes, key: bytearray,
     AAD includes chunk_index as well.
     Returns the encrypted block, optionally encoded with Reed-Solomon.
 
+    Args:
+        chunk: Data to encrypt
+        key: SecureBytes containing the encryption key
+        aad: Additional authenticated data
+        chunk_index: Index of the chunk (used for nonce)
+
     [ALTERADO]
     - Não armazenamos mais o SHA-256 do plaintext em claro.
+    - Trabalhamos diretamente com SecureBytes para a chave.
     """
-    cipher = ChaCha20Poly1305(bytes(key))
+    # Use memoryview to avoid making a copy of the key
+    if isinstance(key, SecureBytes):
+        cipher = ChaCha20Poly1305(memoryview(key.to_bytes()))
+    else:
+        # Fallback for regular bytes or bytearray
+        cipher = ChaCha20Poly1305(key)
+        
     nonce = chunk_index.to_bytes(12, byteorder='big')
     full_aad = aad + b"|chunk_index=%d" % chunk_index
     enc_chunk = cipher.encrypt(nonce, chunk, full_aad)
@@ -46,14 +59,22 @@ def encrypt_chunk(chunk: bytes, key: bytearray,
         return block_len + raw_block
 
 
-def decrypt_chunk(data: bytes, key: bytearray,
+def decrypt_chunk(data: bytes, key,
                   offset: int, aad: bytes,
                   chunk_index: int):
     """
     Decrypts a single chunk. Returns (plaintext, new_offset) or (None, offset) on failure.
 
+    Args:
+        data: The encrypted data block
+        key: SecureBytes containing the decryption key
+        offset: Starting position in data
+        aad: Additional authenticated data
+        chunk_index: Index of the chunk
+
     [ALTERADO]
     - Removemos a checagem do hash do plaintext. Confiamos no MAC do AEAD.
+    - Trabalhamos diretamente com SecureBytes para a chave.
     """
     if offset + 4 > len(data):
         return None, offset
@@ -89,7 +110,14 @@ def decrypt_chunk(data: bytes, key: bytearray,
         return None, offset
 
     ciphertext = raw_block[start_enc:end_enc]
-    cipher = ChaCha20Poly1305(bytes(key))
+    
+    # Use memoryview to avoid making a copy of the key
+    if isinstance(key, SecureBytes):
+        cipher = ChaCha20Poly1305(memoryview(key.to_bytes()))
+    else:
+        # Fallback for regular bytes or bytearray
+        cipher = ChaCha20Poly1305(key)
+        
     full_aad = aad + b"|chunk_index=%d" % chunk_index
 
     try:

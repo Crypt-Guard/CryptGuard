@@ -3,8 +3,6 @@
 Global configuration settings for CryptGuard.
 """
 
-import os
-
 CHUNK_SIZE = 1024 * 1024  # 1 MB default chunk size
 STREAMING_THRESHOLD = 10 * 1024 * 1024  # 10 MB threshold for streaming mode
 

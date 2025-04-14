@@ -6,13 +6,14 @@ optionally combining with a key file. All messages are now in English.
 Alterações:
 - Removemos sys.exit(1) ao faltar zxcvbn, substituindo por fallback.
 - Melhor limpeza de variáveis e avisos.
+- Adicionado SecureBytes para gerenciamento seguro de senhas na memória.
 """
 
 import os
-import sys
 import hashlib
 import string
 import getpass
+from secure_bytes import SecureBytes
 
 try:
     from zxcvbn import zxcvbn
@@ -95,7 +96,7 @@ def validate_key_file(expected_hash: str) -> bool:
 def get_combined_password():
     """
     Asks for the password (with confirmation) and optionally a key file.
-    Returns (combined_auth: bytearray, key_file_hash: str or None).
+    Returns (combined_auth: SecureBytes, key_file_hash: str or None).
     """
     while True:
         pwd1 = getpass.getpass("Enter password: ")
@@ -108,8 +109,8 @@ def get_combined_password():
             continue
         break
 
-    password_bytes = bytearray(pwd1.encode())
-    key_file_bytes = bytearray()
+    password_bytes = SecureBytes(pwd1.encode())
+    key_file_bytes = SecureBytes()
     key_file_hash = None
 
     use_key_file = input("Do you want to use a key file? (y/n): ").strip().lower()
@@ -118,7 +119,7 @@ def get_combined_password():
         if os.path.exists(key_file_path):
             digest_bytes, key_file_hash = get_file_hash(key_file_path)
             if digest_bytes is not None:
-                key_file_bytes = bytearray(digest_bytes)
+                key_file_bytes = SecureBytes(digest_bytes)
             else:
                 print("Error processing key file. Using password only.")
         else:
@@ -128,25 +129,20 @@ def get_combined_password():
     pwd1 = "0" * len(pwd1)
     pwd2 = "0" * len(pwd2)
 
-    # Combina as credenciais
-    combined = password_bytes + key_file_bytes
-    combined_auth = bytearray(combined)
+    # Combina as credenciais de forma segura
+    combined_secure = SecureBytes(password_bytes.to_bytes() + key_file_bytes.to_bytes())
+    
+    # Limpa buffers originais
+    password_bytes.clear()
+    key_file_bytes.clear()
 
-    # zerar buffers originais
-    for i in range(len(password_bytes)):
-        password_bytes[i] = 0
-    for i in range(len(key_file_bytes)):
-        key_file_bytes[i] = 0
-    for i in range(len(combined)):
-        combined[i] = 0
-
-    return combined_auth, key_file_hash
+    return combined_secure, key_file_hash
 
 
 def get_single_password():
     """
     Asks for a password only, no key file.
-    Returns a bytearray.
+    Returns a SecureBytes object.
     """
     while True:
         pwd1 = getpass.getpass("Enter password (password only): ")
@@ -158,7 +154,8 @@ def get_single_password():
             print("Passwords do not match, try again.")
             continue
         break
-    password_bytes = bytearray(pwd1.encode())
+    
+    password_bytes = SecureBytes(pwd1.encode())
 
     pwd1 = "0" * len(pwd1)
     pwd2 = "0" * len(pwd2)
@@ -172,7 +169,7 @@ def choose_auth_method():
     [1] Password + key file
     [2] Password only
 
-    Returns (combined_auth: bytearray, key_file_hash: str or None).
+    Returns (combined_auth: SecureBytes, key_file_hash: str or None).
     """
     print("\nSelect authentication method:")
     print("[1] Password + key file")

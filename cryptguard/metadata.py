@@ -18,15 +18,21 @@ from cryptography.exceptions import InvalidTag
 
 from argon_utils import generate_key_from_password
 from config import META_ARGON_PARAMS, META_SALT_SIZE
+from secure_bytes import SecureBytes
 
 from typing import Optional, Dict, Any
 
 
 def encrypt_meta_json(meta_path: str, meta_plain: dict,
-                      user_password: bytearray) -> bool:
+                      user_password: SecureBytes) -> bool:
     """
     Encrypts a dict (meta_plain) into JSON and saves it in a .meta file.
     Using two layers of encryption (inner + outer) but now writing only the final result.
+
+    Args:
+        meta_path: Path to save the encrypted metadata
+        meta_plain: Dictionary containing metadata to encrypt
+        user_password: SecureBytes containing the user's password or combined credentials
 
     Returns True on success, False on error.
     """
@@ -36,8 +42,10 @@ def encrypt_meta_json(meta_path: str, meta_plain: dict,
     # =========================
 
     meta_salt = secrets.token_bytes(META_SALT_SIZE)
-    meta_key = generate_key_from_password(user_password, meta_salt, META_ARGON_PARAMS)
-    cipher = ChaCha20Poly1305(bytes(meta_key))
+    meta_key_obf = generate_key_from_password(user_password, meta_salt, META_ARGON_PARAMS)
+    meta_key_plain = meta_key_obf.deobfuscate()
+    
+    cipher = ChaCha20Poly1305(bytes(meta_key_plain.to_bytes()))
 
     try:
         meta_nonce = secrets.token_bytes(12)
@@ -49,8 +57,9 @@ def encrypt_meta_json(meta_path: str, meta_plain: dict,
             "meta_ciphertext": base64.b64encode(meta_cipher).decode()
         }
     finally:
-        for i in range(len(meta_key)):
-            meta_key[i] = 0
+        # Clean up the plaintext key
+        meta_key_plain.clear()
+        meta_key_obf.clear()
 
     # =========================
     # CAMADA 2 (EXTERNAL META)
@@ -58,14 +67,18 @@ def encrypt_meta_json(meta_path: str, meta_plain: dict,
 
     inner_meta_str = json.dumps(meta_dict)
     outer_salt = secrets.token_bytes(META_SALT_SIZE)
-    outer_key = generate_key_from_password(user_password, outer_salt, META_ARGON_PARAMS)
-    outer_cipher = ChaCha20Poly1305(bytes(outer_key))
+    outer_key_obf = generate_key_from_password(user_password, outer_salt, META_ARGON_PARAMS)
+    outer_key_plain = outer_key_obf.deobfuscate()
+    
+    outer_cipher = ChaCha20Poly1305(bytes(outer_key_plain.to_bytes()))
     outer_nonce = secrets.token_bytes(12)
+    
     try:
         outer_ciphertext = outer_cipher.encrypt(outer_nonce, inner_meta_str.encode(), None)
     finally:
-        for i in range(len(outer_key)):
-            outer_key[i] = 0
+        # Clean up the plaintext key
+        outer_key_plain.clear()
+        outer_key_obf.clear()
 
     outer_dict = {
         "outer_salt": base64.b64encode(outer_salt).decode(),
@@ -74,9 +87,6 @@ def encrypt_meta_json(meta_path: str, meta_plain: dict,
     }
 
     # Gravacao atomica em arquivo temporario
-    import tempfile
-    import os
-
     tmp_path = meta_path + ".tmp"
     try:
         with open(tmp_path, 'w') as f:
@@ -104,10 +114,14 @@ def encrypt_meta_json(meta_path: str, meta_plain: dict,
     return True
 
 
-def decrypt_meta_json(meta_path: str, user_password: bytearray) -> Optional[Dict[str, Any]]:
+def decrypt_meta_json(meta_path: str, user_password: SecureBytes) -> Optional[Dict[str, Any]]:
     """
     Decrypts the content of the .meta file and returns a dict.
     Returns None if decryption fails or if the file is missing/corrupted.
+
+    Args:
+        meta_path: Path to the encrypted metadata file
+        user_password: SecureBytes containing the user's password or combined credentials
 
     DUAS CAMADAS:
     - Lê outer_salt, outer_nonce, outer_ciphertext,
@@ -135,16 +149,19 @@ def decrypt_meta_json(meta_path: str, user_password: bytearray) -> Optional[Dict
         print(f"Error decoding Base64 in metadata (outer layer): {e}")
         return None
 
-    outer_key = generate_key_from_password(user_password, outer_salt, META_ARGON_PARAMS)
-    outer_cipher = ChaCha20Poly1305(bytes(outer_key))
+    outer_key_obf = generate_key_from_password(user_password, outer_salt, META_ARGON_PARAMS)
+    outer_key_plain = outer_key_obf.deobfuscate()
+    outer_cipher = ChaCha20Poly1305(bytes(outer_key_plain.to_bytes()))
+    
     try:
         inner_meta_str = outer_cipher.decrypt(outer_nonce, outer_ciphertext, None)
     except (InvalidTag, ValueError) as e:
         print(f"Failed to decrypt outer layer: {e}")
         return None
     finally:
-        for i in range(len(outer_key)):
-            outer_key[i] = 0
+        # Clean up the plaintext key
+        outer_key_plain.clear()
+        outer_key_obf.clear()
 
     # Agora, inner_meta_str deve conter o JSON da camada interna
     try:
@@ -164,8 +181,10 @@ def decrypt_meta_json(meta_path: str, user_password: bytearray) -> Optional[Dict
         print(f"Error decoding Base64 in metadata (inner layer): {e}")
         return None
 
-    meta_key = generate_key_from_password(user_password, meta_salt, META_ARGON_PARAMS)
-    cipher = ChaCha20Poly1305(bytes(meta_key))
+    meta_key_obf = generate_key_from_password(user_password, meta_salt, META_ARGON_PARAMS)
+    meta_key_plain = meta_key_obf.deobfuscate()
+    cipher = ChaCha20Poly1305(bytes(meta_key_plain.to_bytes()))
+    
     try:
         meta_json_str = cipher.decrypt(meta_nonce, meta_cipher, None)
         meta = json.loads(meta_json_str.decode())
@@ -179,5 +198,6 @@ def decrypt_meta_json(meta_path: str, user_password: bytearray) -> Optional[Dict
         print(f"Failed to decrypt metadata: {e}")
         return None
     finally:
-        for i in range(len(meta_key)):
-            meta_key[i] = 0
+        # Clean up the plaintext key
+        meta_key_plain.clear()
+        meta_key_obf.clear()

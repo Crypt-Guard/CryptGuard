@@ -9,14 +9,8 @@ import datetime
 import time
 import random
 import secrets
-import hashlib
 import getpass
 import tempfile
-
-from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.exceptions import InvalidTag
-from argon2.exceptions import VerifyMismatchError, VerificationError
-from argon2 import PasswordHasher
 
 from rs_codec import rs_encode_data, rs_decode_data
 from argon_utils import generate_key_from_password, get_argon2_parameters_for_encryption
@@ -25,6 +19,7 @@ from metadata import encrypt_meta_json, decrypt_meta_json
 from utils import generate_unique_filename, generate_ephemeral_token, clear_screen
 from single_shot import decrypt_data_single
 from streaming import decrypt_data_streaming
+from secure_bytes import SecureBytes
 from config import MAX_ATTEMPTS, STREAMING_THRESHOLD
 from config import RS_PARITY_BYTES  # importa a constante
 from config import META_VERSION
@@ -66,6 +61,7 @@ def encrypt_hidden_volume():
     token = generate_ephemeral_token(128)
     print(f"\nEphemeral token for real volume: {token}")
     token_bytes = token.encode()
+    token_secure = SecureBytes(token_bytes)
 
     # Hash the token for storage
     from argon2 import PasswordHasher
@@ -74,6 +70,11 @@ def encrypt_hidden_volume():
         token_hash = ph.hash(token)
     except Exception as e:
         print("Error hashing token:", e)
+        # Clean up before returning
+        decoy_pwd.clear()
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
@@ -82,12 +83,17 @@ def encrypt_hidden_volume():
         real_data = read_file_data(real_file)
     except Exception as e:
         print(f"Error reading files: {e}")
+        # Clean up before returning
+        decoy_pwd.clear()
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
     # Encrypt decoy and real data
     enc_decoy_dict = encrypt_data_raw_chacha(decoy_data, decoy_pwd, decoy_argon_params)
-    enc_real_dict = encrypt_data_raw_chacha(real_data, real_pwd, real_argon_params, extra=token_bytes)
+    enc_real_dict = encrypt_data_raw_chacha(real_data, real_pwd, real_argon_params, extra=token_secure)
 
     decoy_cipher = enc_decoy_dict['ciphertext']
     real_cipher = enc_real_dict['ciphertext']
@@ -109,6 +115,11 @@ def encrypt_hidden_volume():
             fout.write(combined_rs)
     except OSError as e:
         print(f"Error writing hidden volume file: {e}")
+        # Clean up before returning
+        decoy_pwd.clear()
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
@@ -135,7 +146,7 @@ def encrypt_hidden_volume():
         'real_nonce': enc_real_dict['nonce'],
         'real_salt': enc_real_dict['salt'],
         'real_argon2_time_cost': enc_real_dict['argon2_time_cost'],
-        'real_argon2_memory_cost': enc_real_dict['argon2_memory_cost'],
+        'real_argon2_memory_cost': enc_real_dict['real_argon2_memory_cost'],
         'real_argon2_parallelism': enc_real_dict['argon2_parallelism'],
         'part2_token_hash': token_hash,
         'version': META_VERSION
@@ -146,13 +157,17 @@ def encrypt_hidden_volume():
     if SIGN_METADATA:
         # Assina dados combinados usando chave derivada do decoy
         decoy_salt = base64.b64decode(enc_decoy_dict['salt'])
-        decoy_key = generate_key_from_password(decoy_pwd, decoy_salt, decoy_argon_params)
+        decoy_key_obf = generate_key_from_password(decoy_pwd, decoy_salt, decoy_argon_params)
         import hmac, hashlib
-        signature = hmac.new(bytes(decoy_key), combined_rs, hashlib.sha256).hexdigest()
+        
+        # Temporarily deobfuscate for HMAC signing
+        decoy_key_plain = decoy_key_obf.deobfuscate()
+        signature = hmac.new(bytes(decoy_key_plain.to_bytes()), combined_rs, hashlib.sha256).hexdigest()
         outer_meta['signature'] = signature
-        # limpar chave decoy da memória
-        for i in range(len(decoy_key)):
-            decoy_key[i] = 0
+        
+        # Clean up the key data
+        decoy_key_plain.clear()
+        decoy_key_obf.clear()
 
     # Grava metadados externos (decoy)
     result_outer = encrypt_meta_json(hidden_path + ".meta", outer_meta, decoy_pwd)
@@ -162,6 +177,11 @@ def encrypt_hidden_volume():
             os.remove(hidden_path)
         except OSError:
             pass
+        # Clean up before returning
+        decoy_pwd.clear()
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
@@ -174,6 +194,11 @@ def encrypt_hidden_volume():
             os.remove(hidden_path + ".meta")
         except OSError:
             pass
+        # Clean up before returning
+        decoy_pwd.clear()
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
@@ -182,17 +207,15 @@ def encrypt_hidden_volume():
     print("Save the ephemeral token securely for real volume access.")
 
     # LIMPAR senhas e token da memória
-    for i in range(len(decoy_pwd)):
-        decoy_pwd[i] = 0
-    for i in range(len(real_pwd)):
-        real_pwd[i] = 0
-    token_bytes = b"\x00"
+    decoy_pwd.clear()
+    real_pwd.clear()
+    token_secure.clear()
     token = "0" * len(token)
 
     input("\nPress Enter to continue...")
 
 
-def decrypt_file(encrypted_file: str, outer_password: bytearray):
+def decrypt_file(encrypted_file: str, outer_password: SecureBytes):
     """
     Detects if the volume is normal or hidden, and decrypts accordingly.
     """
@@ -203,8 +226,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
     meta_outer = decrypt_meta_json(meta_path, outer_password)
     if not meta_outer:
         print("Failed to decrypt metadata (incorrect password or corrupted)!")
-        for i in range(len(outer_password)):
-            outer_password[i] = 0
+        outer_password.clear()
         input("\nPress Enter to continue...")
         return
 
@@ -216,8 +238,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
         if 'decoy_key_file_hash' in meta_outer:
             print("Key file is expected for decoy volume.")
             if not validate_key_file(meta_outer['decoy_key_file_hash']):
-                for i in range(len(outer_password)):
-                    outer_password[i] = 0
+                outer_password.clear()
                 input("\nPress Enter to continue...")
                 return
 
@@ -226,8 +247,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
                 combined_rs = f.read()
         except OSError as e:
             print(f"Error reading hidden volume file: {e}")
-            for i in range(len(outer_password)):
-                outer_password[i] = 0
+            outer_password.clear()
             input("\nPress Enter to continue...")
             return
 
@@ -239,15 +259,18 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
                 "memory_cost": meta_outer['decoy_argon2_memory_cost'],
                 "parallelism": meta_outer['decoy_argon2_parallelism']
             }
-            decoy_key = generate_key_from_password(outer_password, decoy_salt, decoy_argon)
+            decoy_key_obf = generate_key_from_password(outer_password, decoy_salt, decoy_argon)
             import hmac, hashlib
-            calc_sig = hmac.new(bytes(decoy_key), combined_rs, hashlib.sha256).hexdigest()
-            for i in range(len(decoy_key)):
-                decoy_key[i] = 0
+            
+            # Temporarily deobfuscate for verification
+            decoy_key_plain = decoy_key_obf.deobfuscate()
+            calc_sig = hmac.new(bytes(decoy_key_plain.to_bytes()), combined_rs, hashlib.sha256).hexdigest()
+            decoy_key_plain.clear()
+            decoy_key_obf.clear()
+            
             if calc_sig != meta_outer.get('signature'):
                 print("Warning: hidden volume file integrity verification failed!")
-                for i in range(len(outer_password)):
-                    outer_password[i] = 0
+                outer_password.clear()
                 input("\nPress Enter to continue...")
                 return
 
@@ -255,8 +278,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
             combined_data = rs_decode_data(combined_rs)
         except ValueError as e:
             print(f"Error decoding RS data from hidden volume: {e}")
-            for i in range(len(outer_password)):
-                outer_password[i] = 0
+            outer_password.clear()
             input("\nPress Enter to continue...")
             return
 
@@ -267,8 +289,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
         choice = input("Decrypt decoy volume (d) or real volume (r)? ").strip().lower()
         if choice not in ['d', 'r']:
             print("Invalid option!")
-            for i in range(len(outer_password)):
-                outer_password[i] = 0
+            outer_password.clear()
             input("\nPress Enter to continue...")
             return
 
@@ -288,28 +309,31 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
             print("\nAuthenticate real volume (password + optional key file):")
             combined_pwd, _ = choose_auth_method()
             token = getpass.getpass("Enter ephemeral token for hidden volume access: ")
+            token_secure = SecureBytes(token.encode())
+            
             from argon2 import PasswordHasher
             ph = PasswordHasher()
             meta_inner = decrypt_meta_json(meta_hidden_path, combined_pwd)
             if not meta_inner:
                 print("Failed to decrypt real volume metadata!")
-                for i in range(len(outer_password)):
-                    outer_password[i] = 0
-                for i in range(len(combined_pwd)):
-                    combined_pwd[i] = 0
+                outer_password.clear()
+                combined_pwd.clear()
+                token_secure.clear()
+                token = "0" * len(token)
                 input("\nPress Enter to continue...")
                 return
+                
             try:
                 ph.verify(meta_inner.get('part2_token_hash'), token)
             except Exception:
                 print("Incorrect token!")
-                for i in range(len(outer_password)):
-                    outer_password[i] = 0
-                for i in range(len(combined_pwd)):
-                    combined_pwd[i] = 0
-                token = "0"*len(token)
+                outer_password.clear()
+                combined_pwd.clear()
+                token_secure.clear()
+                token = "0" * len(token)
                 input("\nPress Enter to continue...")
                 return
+                
             # token válido
             target_cipher = combined_data[part1_length + padding_length : part1_length + padding_length + part2_length]
             salt_str = meta_inner['real_salt']
@@ -319,7 +343,7 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
                 'memory_cost': meta_inner['real_argon2_memory_cost'],
                 'parallelism': meta_inner['real_argon2_parallelism']
             }
-            extra_factor = token.encode()
+            extra_factor = token_secure
 
         attempts = 0
         decrypted_data = None
@@ -349,16 +373,20 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
                     print("Incorrect authentication! Try again:")
                     if choice == 'r':
                         # pedir nova senha/arquivo apenas para real volume nas tentativas
+                        # Clear previous credentials
+                        if 'combined_pwd' in locals():
+                            combined_pwd.clear()
                         combined_pwd, _ = choose_auth_method()
                         # token já coletado anteriormente não é solicitado de novo aqui
             # (observação: se decoy falhar, loop termina pois senha decoy está fixa)
+            
         # limpar senhas e token
-        for i in range(len(outer_password)):
-            outer_password[i] = 0
-        if choice == 'r':
-            for i in range(len(combined_pwd)):
-                combined_pwd[i] = 0
-            token = "0"*len(token)
+        outer_password.clear()
+        if choice == 'r' and 'combined_pwd' in locals():
+            combined_pwd.clear()
+            if 'token_secure' in locals():
+                token_secure.clear()
+            token = "0" * len(token)
 
         if not decrypted_data:
             print("File decryption failed!")
@@ -381,14 +409,12 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
         meta_plain = meta_outer
         if not meta_plain:
             print("Failed to decrypt metadata (incorrect password or corrupted)!")
-            for i in range(len(outer_password)):
-                outer_password[i] = 0
+            outer_password.clear()
             input("\nPress Enter to continue...")
             return
         if 'key_file_hash' in meta_plain:
             if not validate_key_file(meta_plain['key_file_hash']):
-                for i in range(len(outer_password)):
-                    outer_password[i] = 0
+                outer_password.clear()
                 input("\nPress Enter to continue...")
                 return
 
@@ -397,12 +423,10 @@ def decrypt_file(encrypted_file: str, outer_password: bytearray):
             decrypt_data_streaming(file_path, outer_password)
         else:
             decrypt_data_single(file_path, outer_password)
-        # limpar senha outer_password
-        for i in range(len(outer_password)):
-            outer_password[i] = 0
+        # outer_password will be cleared inside the decrypt functions
 
     input("\nPress Enter to continue...")
-    
+
 
 def change_real_volume_password():
     """
@@ -440,14 +464,12 @@ def change_real_volume_password():
     meta_outer = decrypt_meta_json(meta_outer_path, decoy_pwd)
     if not meta_outer:
         print("Failed to decrypt outer metadata with decoy volume authentication!")
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
+        decoy_pwd.clear()
         input("\nPress Enter to continue...")
         return
     if not os.path.exists(meta_inner_path):
         print("This file is not a hidden volume!")
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
+        decoy_pwd.clear()
         input("\nPress Enter to continue...")
         return
 
@@ -456,8 +478,7 @@ def change_real_volume_password():
             combined_rs = f.read()
     except Exception as e:
         print(f"Error reading RS data from hidden volume: {e}")
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
+        decoy_pwd.clear()
         input("\nPress Enter to continue...")
         return
 
@@ -465,10 +486,13 @@ def change_real_volume_password():
         combined_data = rs_decode_data(combined_rs)
     except ValueError as e:
         print(f"Error decoding RS data from hidden volume: {e}")
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
+        decoy_pwd.clear()
         input("\nPress Enter to continue...")
         return
+
+    # Decoy password is no longer needed after this point
+    # We can clear it to reduce exposure
+    decoy_pwd.clear()
 
     part1_length = meta_outer['part1_length']
     padding_length = meta_outer['padding_length']
@@ -476,6 +500,8 @@ def change_real_volume_password():
 
     print("\nEnter ephemeral token for real volume access:")
     token = getpass.getpass("> ")
+    token_secure = SecureBytes(token.encode())
+    
     from argon2 import PasswordHasher
     ph = PasswordHasher()
     print("\nAuthenticate real volume to decrypt the real part (password + optional key file):")
@@ -484,11 +510,9 @@ def change_real_volume_password():
     meta_inner = decrypt_meta_json(meta_inner_path, real_pwd)
     if not meta_inner:
         print("Failed to decrypt real volume metadata!")
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
-        for i in range(len(real_pwd)):
-            real_pwd[i] = 0
-        token = "0"*len(token)
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
@@ -496,11 +520,9 @@ def change_real_volume_password():
         ph.verify(meta_inner.get('part2_token_hash'), token)
     except Exception:
         print("Incorrect token!")
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
-        for i in range(len(real_pwd)):
-            real_pwd[i] = 0
-        token = "0"*len(token)
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
@@ -530,7 +552,7 @@ def change_real_volume_password():
             'argon2_parallelism': real_argon_params["parallelism"]
         }
         try:
-            real_plain_data = decrypt_data_raw_chacha(enc_dict, real_pwd, extra=token.encode())
+            real_plain_data = decrypt_data_raw_chacha(enc_dict, real_pwd, extra=token_secure)
             break
         except InvalidTag:
             attempts += 1
@@ -542,15 +564,17 @@ def change_real_volume_password():
             else:
                 time.sleep(2 ** attempts)
                 print("Try again:")
+    
     if real_plain_data is None:
-        # Limpa
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
-        for i in range(len(real_pwd)):
-            real_pwd[i] = 0
-        token = "0"*len(token)
+        # Clean up
+        real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
+
+    # Old password is no longer needed after successful decryption
+    real_pwd.clear()
 
     print("\nReal part decrypted successfully. Now set new authentication for the real volume:")
     new_real_pwd, key_file_hash_new = choose_auth_method()
@@ -558,7 +582,7 @@ def change_real_volume_password():
 
     enc_real_dict_new = encrypt_data_raw_chacha(real_plain_data, new_real_pwd,
                                                 new_real_argon_params,
-                                                extra=token.encode())
+                                                extra=token_secure)
     new_real_cipher = enc_real_dict_new['ciphertext']
 
     combined_new = combined_data[:part1_length + padding_length] + new_real_cipher
@@ -577,23 +601,19 @@ def change_real_volume_password():
             f.write(new_rs_data)
     except Exception as e:
         print(f"Error writing updated hidden volume: {e}")
-        # remover temp
+        # Clean temporary file
         try:
             os.remove(temp_file_name)
         except OSError:
             pass
-        # limpeza
-        for i in range(len(decoy_pwd)):
-            decoy_pwd[i] = 0
-        for i in range(len(real_pwd)):
-            real_pwd[i] = 0
-        token = "0"*len(token)
-        for i in range(len(new_real_pwd)):
-            new_real_pwd[i] = 0
+        # Clean up sensitive data
+        new_real_pwd.clear()
+        token_secure.clear()
+        token = "0" * len(token)
         input("\nPress Enter to continue...")
         return
 
-    # remover arquivo temporário com sucesso
+    # Remove temporary file
     try:
         os.remove(temp_file_name)
     except OSError as e:
@@ -616,39 +636,46 @@ def change_real_volume_password():
         print("Could not rewrite inner metadata with new real password.")
         # não reverte a mudança no .enc, mas avisa
         # pois passamos os dados atualizados
-        pass
 
     print("\nReal volume password updated successfully!")
 
-    # LIMPAR senhas e token
-    for i in range(len(decoy_pwd)):
-        decoy_pwd[i] = 0
-    for i in range(len(real_pwd)):
-        real_pwd[i] = 0
-    for i in range(len(new_real_pwd)):
-        new_real_pwd[i] = 0
-    token = "0"*len(token)
+    # Clean up all sensitive data
+    new_real_pwd.clear()
+    token_secure.clear()
+    token = "0" * len(token)
 
     input("\nPress Enter to continue...")
 
 
-def encrypt_data_raw_chacha(data: bytes, password: bytearray,
-                            argon_params: dict, extra: bytes = None) -> dict:
+def encrypt_data_raw_chacha(data: bytes, password: SecureBytes,
+                            argon_params: dict, extra=None) -> dict:
     """
     Encrypts data using ChaCha20Poly1305. Argon2 is used to derive the key.
+    
+    Args:
+        data: The data to encrypt
+        password: SecureBytes containing the password
+        argon_params: Dictionary with Argon2 parameters
+        extra: Optional SecureBytes or bytes with additional authentication data
     """
     import secrets
     salt = secrets.token_bytes(32)
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-    key = generate_key_from_password(password, salt, argon_params, extra)
-    cipher = ChaCha20Poly1305(bytes(key))
+    # Get the KeyObfuscator containing the derived key
+    key_obf = generate_key_from_password(password, salt, argon_params, extra)
+    
+    # Temporarily deobfuscate the key for encryption
+    key_plain = key_obf.deobfuscate()
+    cipher = ChaCha20Poly1305(bytes(key_plain.to_bytes()))
+    
     try:
         nonce = secrets.token_bytes(12)
         ciphertext = cipher.encrypt(nonce, data, None)
     finally:
-        for i in range(len(key)):
-            key[i] = 0
+        # Clean up the plaintext key
+        key_plain.clear()
+        key_obf.clear()
 
     return {
         'ciphertext': ciphertext,
@@ -660,10 +687,15 @@ def encrypt_data_raw_chacha(data: bytes, password: bytearray,
     }
 
 
-def decrypt_data_raw_chacha(enc_dict: dict, password: bytearray,
-                            extra: bytes = None) -> bytes:
+def decrypt_data_raw_chacha(enc_dict: dict, password: SecureBytes,
+                            extra=None) -> bytes:
     """
     Decrypts data that was encrypted by encrypt_data_raw_chacha.
+    
+    Args:
+        enc_dict: Dictionary with encryption details
+        password: SecureBytes containing the password
+        extra: Optional SecureBytes or bytes with additional authentication data
     """
     import base64
     from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -673,12 +705,19 @@ def decrypt_data_raw_chacha(enc_dict: dict, password: bytearray,
         'memory_cost': enc_dict['argon2_memory_cost'],
         'parallelism': enc_dict['argon2_parallelism']
     }
-    key = generate_key_from_password(password, salt, argon_params, extra)
-    cipher = ChaCha20Poly1305(bytes(key))
+    
+    # Get the KeyObfuscator containing the derived key
+    key_obf = generate_key_from_password(password, salt, argon_params, extra)
+    
+    # Temporarily deobfuscate the key for decryption
+    key_plain = key_obf.deobfuscate()
+    cipher = ChaCha20Poly1305(bytes(key_plain.to_bytes()))
+    
     try:
         nonce = base64.b64decode(enc_dict['nonce'])
         ciphertext = enc_dict['ciphertext']
         return cipher.decrypt(nonce, ciphertext, None)
     finally:
-        for i in range(len(key)):
-            key[i] = 0
+        # Clean up the plaintext key
+        key_plain.clear()
+        key_obf.clear()

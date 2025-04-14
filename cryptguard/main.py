@@ -4,11 +4,12 @@ import tempfile
 import zipfile
 
 import config
+from secure_bytes import SecureBytes
 from password_utils import choose_auth_method
 from single_shot import encrypt_data_single, decrypt_data_single
 from streaming import encrypt_data_streaming, decrypt_data_streaming
 from hidden_volume import encrypt_hidden_volume, decrypt_file, change_real_volume_password
-from utils import clear_screen, generate_ephemeral_token, generate_unique_filename
+from utils import clear_screen, generate_ephemeral_token
 from metadata import decrypt_meta_json
 from file_chooser import select_file_for_encryption, select_files_for_decryption
 
@@ -71,8 +72,7 @@ def encrypt_text():
     except Exception as e:
         print(f"Encryption failed: {e}")
     finally:
-        for i in range(len(combined_pwd)):
-            combined_pwd[i] = 0
+        combined_pwd.clear()
     input("\nPress Enter to continue...")
 
 
@@ -145,8 +145,7 @@ def encrypt_multiple_files():
                 pass
         # limpar combined_pwd
         if 'combined_pwd' in locals():
-            for i in range(len(combined_pwd)):
-                combined_pwd[i] = 0
+            combined_pwd.clear()
 
     input("\nPress Enter to continue...")
 
@@ -181,8 +180,7 @@ def decrypt_menu():
     except Exception as e:
         print(f"Decryption failed: {e}")
     finally:
-        for i in range(len(combined_pwd)):
-            combined_pwd[i] = 0
+        combined_pwd.clear()
 
     input("\nPress Enter to continue...")
 
@@ -221,16 +219,14 @@ def reencrypt_file():
     meta_plain = decrypt_meta_json(enc_path + ".meta", old_pwd)
     if not meta_plain:
         print("Failed to decrypt metadata (incorrect authentication or corrupted data)!")
-        for i in range(len(old_pwd)):
-            old_pwd[i] = 0
+        old_pwd.clear()
         input("\nPress Enter to continue...")
         return
 
     # Verifica se é volume oculto (não é reencriptação suportada para volumes ocultos)
     if os.path.exists(enc_path + ".meta_hidden"):
         print("Re-encrypt is not supported for hidden volumes in this version.")
-        for i in range(len(old_pwd)):
-            old_pwd[i] = 0
+        old_pwd.clear()
         input("\nPress Enter to continue...")
         return
 
@@ -256,8 +252,7 @@ def reencrypt_file():
     except Exception as e:
         print(f"Decryption failed: {e}")
     finally:
-        for i in range(len(old_pwd)):
-            old_pwd[i] = 0
+        old_pwd.clear()
 
     if not out_name:
         input("\nPress Enter to continue...")
@@ -309,8 +304,7 @@ def reencrypt_file():
         except Exception:
             print("Could not remove decrypted file.")
 
-    for i in range(len(new_pwd)):
-        new_pwd[i] = 0
+    new_pwd.clear()
 
     input("\nKey rolling completed. Press Enter to continue...")
 
@@ -323,6 +317,7 @@ def generate_ephemeral_token_menu():
     clear_screen()
     print("=== GENERATE EPHEMERAL TOKEN ===")
     token = generate_ephemeral_token(128)
+    token_secure = SecureBytes(token.encode())
 
     save_choice = input("Save token to file? (y/N): ").strip().lower()
     if save_choice == 'y':
@@ -337,6 +332,10 @@ def generate_ephemeral_token_menu():
             print(f"Here is the token anyway (use with caution): {token}")
     else:
         print(f"Ephemeral token (not saved): {token}")
+
+    # Clear sensitive data from memory
+    token = "0" * len(token)
+    token_secure.clear()
 
     input("\nPress Enter to continue...")
 
@@ -387,8 +386,7 @@ def encrypt_with_dialog():
     except Exception as e:
         print(f"Encryption failed: {e}")
     finally:
-        for i in range(len(combined_pwd)):
-            combined_pwd[i] = 0
+        combined_pwd.clear()
 
     input("Press Enter to continue...")
 
@@ -425,8 +423,7 @@ def decrypt_with_dialog():
     except Exception as e:
         print(f"Decryption failed: {e}")
     finally:
-        for i in range(len(combined_pwd)):
-            combined_pwd[i] = 0
+        combined_pwd.clear()
 
     input("\nPress Enter to continue...")
 

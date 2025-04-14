@@ -16,12 +16,17 @@ from argon_utils import get_argon2_parameters_for_encryption, generate_key_from_
 from chunk_crypto import encrypt_chunk, decrypt_chunk
 from metadata import encrypt_meta_json, decrypt_meta_json
 from utils import generate_unique_filename
+from secure_bytes import SecureBytes
 
-def encrypt_data_streaming(file_path: str, password: bytearray,
+
+def encrypt_data_streaming(file_path: str, password: SecureBytes,
                            file_type: str, original_ext: str = "",
                            key_file_hash: str = None, chunk_size: int = None):
     """
     Encrypts a large file in streaming mode, reading it in chunks.
+    
+    Args:
+        password: SecureBytes containing the user's password or combined credentials
     """
     if chunk_size is None:
         chunk_size = config.CHUNK_SIZE
@@ -38,7 +43,8 @@ def encrypt_data_streaming(file_path: str, password: bytearray,
     argon_params = get_argon2_parameters_for_encryption()
     file_salt = secrets.token_bytes(32)
     try:
-        derived_key = generate_key_from_password(password, file_salt, argon_params)
+        # Now returns a KeyObfuscator instead of bytearray
+        derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
     except MemoryError:
         print("MemoryError: Argon2 parameters might be too large for this system.")
         return None
@@ -59,7 +65,15 @@ def encrypt_data_streaming(file_path: str, password: bytearray,
                 if chunk_index >= 2**96:
                     print("Error: chunk_index exceeded 2^96, cannot form a valid nonce.")
                     break
-                block = encrypt_chunk(chunk, derived_key, b"", chunk_index)
+                    
+                # Temporarily deobfuscate the key for encryption
+                key_plain = derived_key_obf.deobfuscate()
+                block = encrypt_chunk(chunk, key_plain, b"", chunk_index)
+                key_plain.clear()
+                
+                # Re-obfuscate the key between chunks for additional security
+                derived_key_obf.obfuscate()
+                
                 fout.write(block)
                 processed += len(chunk)
                 chunk_index += 1
@@ -98,7 +112,11 @@ def encrypt_data_streaming(file_path: str, password: bytearray,
             if config.SIGN_METADATA:
                 import hmac, hashlib
                 try:
-                    h = hmac.new(bytes(derived_key), digestmod=hashlib.sha256)
+                    # Temporarily deobfuscate the key for HMAC signing
+                    key_plain = derived_key_obf.deobfuscate()
+                    h = hmac.new(bytes(key_plain.to_bytes()), digestmod=hashlib.sha256)
+                    key_plain.clear()
+                    
                     with open(enc_path, 'rb') as encf:
                         while True:
                             data_block = encf.read(8192)
@@ -119,11 +137,10 @@ def encrypt_data_streaming(file_path: str, password: bytearray,
 
         return enc_path if success else None
     finally:
-        # limpar chave derivada e senha
-        for i in range(len(derived_key)):
-            derived_key[i] = 0
-        for i in range(len(password)):
-            password[i] = 0
+        # Clean up sensitive data securely
+        if 'derived_key_obf' in locals():
+            derived_key_obf.clear()
+        password.clear()
         if not success:
             try:
                 os.remove(tmp_enc_path)
@@ -131,22 +148,22 @@ def encrypt_data_streaming(file_path: str, password: bytearray,
                 pass
 
 
-
-def decrypt_data_streaming(enc_path: str, password: bytearray):
+def decrypt_data_streaming(enc_path: str, password: SecureBytes):
     """
     Decrypts an encrypted file in streaming mode, reading each block individually.
+    
+    Args:
+        password: SecureBytes containing the user's password or combined credentials
     """
     if not os.path.exists(enc_path + ".meta"):
         print("Warning: Metadata file not found. Cannot proceed with decryption.")
-        for i in range(len(password)):
-            password[i] = 0
+        password.clear()
         return
 
     meta_plain = decrypt_meta_json(enc_path + ".meta", password)
     if not meta_plain:
         print("Failed to decrypt metadata (incorrect password or corrupted)!")
-        for i in range(len(password)):
-            password[i] = 0
+        password.clear()
         return
 
     # Ajustar configuração RS conforme meta
@@ -155,19 +172,21 @@ def decrypt_data_streaming(enc_path: str, password: bytearray):
     config.USE_RS = meta_plain.get("use_rs", False)
     if "rs_parity" in meta_plain:
         config.RS_PARITY_BYTES = meta_plain["rs_parity"]
+        
+    derived_key_obf = None
     try:
         file_salt = base64.b64decode(meta_plain["salt"])
         argon_params = {
             "time_cost": meta_plain["argon2_time_cost"],
-            "memory_cost": meta_plain["argon2_memory_cost"],
+            "memory_cost": meta_plain["memory_cost"],
             "parallelism": meta_plain["argon2_parallelism"]
         }
         try:
-            derived_key = generate_key_from_password(password, file_salt, argon_params)
+            # Now returns a KeyObfuscator instead of bytearray
+            derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
         except MemoryError:
             print("MemoryError: Argon2 parameters might be too large for this system.")
-            for i in range(len(password)):
-                password[i] = 0
+            password.clear()
             return
 
         aad_dict = {
@@ -180,7 +199,11 @@ def decrypt_data_streaming(enc_path: str, password: bytearray):
         # Verificar assinatura antes de decifrar (lê todo arquivo)
         if "signature" in meta_plain:
             import hmac, hashlib
-            h = hmac.new(bytes(derived_key), digestmod=hashlib.sha256)
+            # Temporarily deobfuscate the key for HMAC verification
+            key_plain = derived_key_obf.deobfuscate()
+            h = hmac.new(bytes(key_plain.to_bytes()), digestmod=hashlib.sha256)
+            key_plain.clear()
+            
             try:
                 with open(enc_path, 'rb') as encf:
                     while True:
@@ -194,10 +217,6 @@ def decrypt_data_streaming(enc_path: str, password: bytearray):
             calc_sig = h.hexdigest()
             if calc_sig != meta_plain["signature"]:
                 print("Warning: encrypted file signature mismatch! Aborting decryption.")
-                for i in range(len(derived_key)):
-                    derived_key[i] = 0
-                for i in range(len(password)):
-                    password[i] = 0
                 return
 
         folder = os.path.join(os.path.expanduser("~"), "Documents", "Encoded_files_folder")
@@ -238,8 +257,16 @@ def decrypt_data_streaming(enc_path: str, password: bytearray):
                         print("Error: chunk_index exceeded 2^96, invalid nonce.")
                         error_occurred = True
                         break
+                        
+                    # Temporarily deobfuscate the key for decryption
+                    key_plain = derived_key_obf.deobfuscate()
                     plaintext, _ = decrypt_chunk(length_bytes + block_data,
-                                                 derived_key, 0, aad_base, chunk_index)
+                                               key_plain, 0, aad_base, chunk_index)
+                    key_plain.clear()
+                    
+                    # Re-obfuscate the key between chunks for additional security
+                    derived_key_obf.obfuscate()
+                    
                     if plaintext is None:
                         print("Decryption failed for a chunk!")
                         error_occurred = True
@@ -249,11 +276,10 @@ def decrypt_data_streaming(enc_path: str, password: bytearray):
                 if error_occurred:
                     success = False
         finally:
-            # limpar chave derivada e senha
-            for i in range(len(derived_key)):
-                derived_key[i] = 0
-            for i in range(len(password)):
-                password[i] = 0
+            # Clean up sensitive data securely
+            if derived_key_obf is not None:
+                derived_key_obf.clear()
+            password.clear()
             if not success:
                 print("Decryption interrupted due to an error. Removing incomplete output.")
                 try:
