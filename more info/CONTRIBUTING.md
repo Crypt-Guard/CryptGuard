@@ -87,18 +87,12 @@ When your work is ready, push the branch to your fork and [open a Pull Request](
 
 If you discover a **security vulnerability**, we ask you to:
 - **Do not** open a public issue or pull request describing it.
-- Instead, please follow our [Security Policy](SECURITY.md) for confidential disclosure.
-
----
-
-## Community and Conduct
-
-By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md) (if available). We aim for a welcoming, respectful environment.
+- Instead, please follow our [Security Policy](../SECURITY.md) for confidential disclosure.
 
 ---
 
 ## License
 
-By contributing to CryptGuard, you accept and agree that your contributions are licensed under the [Apache 2.0 License](LICENSE).
+By contributing to CryptGuard, you accept and agree that your contributions are licensed under the [Apache 2.0 License](../LICENSE).
 
 Thank you for helping make CryptGuard better!
