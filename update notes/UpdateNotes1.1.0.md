@@ -1,7 +1,3 @@
-Here's the full English translation of your update notes:
-
----
-
 # 📜 CryptGuard Update Notes
 
 **Version:** 1.1.0  
@@ -106,5 +102,3 @@ This version 1.1.0 reinforces CryptGuard’s core philosophy of **minimizing key
 The new project layout, with a fully isolated cryptographic layer, adheres to software engineering best practices and enables easier auditing, maintenance, and future expansions.
 
 **We strongly recommend upgrading** to version 1.1.0 or later to take advantage of these security and organizational benefits.
-
----
