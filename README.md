@@ -164,7 +164,7 @@ my_project/
 2. Make changes and add tests.  
 3. Submit a Pull Request.  
    - For bug reports or suggestions, open an **Issue**.  
-   - Follow [CONTRIBUTING.md](CONTRIBUTING.md) guidelines.
+   - Follow [CONTRIBUTING.md](more_info/CONTRIBUTING.md) guidelines.
 
 ---
 
