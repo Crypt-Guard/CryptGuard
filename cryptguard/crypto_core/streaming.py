@@ -1,8 +1,3 @@
-# crypto_core/streaming.py
-"""
-Streaming encryption/decryption for large files, processing data in chunks.
-"""
-
 import os
 import sys
 import base64
@@ -33,6 +28,7 @@ def calculate_optimal_workers(file_size):
         return min(cores, 8)   # Up to 8 threads
     else:
         return min(cores, 4)   # Up to 4 threads for smaller files
+
 
 def encrypt_data_streaming(file_path: str, password: SecureBytes,
                            file_type: str, original_ext: str = "",
@@ -70,13 +66,22 @@ def encrypt_data_streaming(file_path: str, password: SecureBytes,
         # Determine optimized number of workers based on file size
         workers = calculate_optimal_workers(file_size)
         
+        # Build AAD once, consistent with decrypt logic
+        aad_dict = {
+            "file_type": file_type,
+            "original_ext": original_ext,
+            "volume_type": "normal"
+        }
+        aad_base = json.dumps(aad_dict, sort_keys=True).encode()
+        
         # Queue to control the output order of chunks
         result_queue = queue.PriorityQueue()
         active_tasks = 0
+        next_index_to_write = 0
         
         def encrypt_chunk_task(chunk_data, idx):
             key_plain = derived_key_obf.deobfuscate()
-            block = encrypt_chunk(chunk_data, key_plain, b"", idx)
+            block = encrypt_chunk(chunk_data, key_plain, aad_base, idx)
             key_plain.clear()
             derived_key_obf.obfuscate()
             return (idx, block)
@@ -88,62 +93,57 @@ def encrypt_data_streaming(file_path: str, password: SecureBytes,
              open(file_path, 'rb', buffering=buffer_size) as fin, \
              open(tmp_enc_path, 'wb', buffering=buffer_size) as fout:
             
-            # Store futures to monitor progress
             futures = {}
             
             while True:
-                # Read next chunk, if available
                 chunk = fin.read(chunk_size)
+                # If no more data and no pending tasks, exit loop
                 if not chunk and not futures:
-                    break  # No more data and all futures have been processed
+                    break
                 
                 if chunk:
                     if chunk_index >= 2**96:
                         print("Error: chunk_index exceeded 2^96, cannot form a valid nonce.")
                         break
-                    
-                    # Submit task
                     future = executor.submit(encrypt_chunk_task, chunk, chunk_index)
                     futures[future] = (len(chunk), chunk_index)
                     active_tasks += 1
                     chunk_index += 1
                 
-                # Check if any future is ready
-                done_futures = []
+                # Collect completed tasks
+                done = []
                 for future in concurrent.futures.as_completed(futures):
-                    if future.done():
-                        idx, block = future.result()
-                        result_queue.put((idx, block))
-                        processed_size, _ = futures[future]
-                        processed += processed_size
-                        done_futures.append(future)
-                        active_tasks -= 1
-                
-                # Remove completed futures
-                for future in done_futures:
+                    idx, block = future.result()
+                    result_queue.put((idx, block))
+                    processed += futures[future][0]
+                    done.append(future)
+                    active_tasks -= 1
+                for future in done:
                     del futures[future]
                 
-                # Write results to file in the correct order
-                next_index_to_write = 0
+                # Write ready blocks in order
                 while not result_queue.empty() and result_queue.queue[0][0] == next_index_to_write:
                     _, block = result_queue.get()
                     fout.write(block)
                     next_index_to_write += 1
                 
-                # Update progress bar periodically
+                # Update progress bar
                 if chunk_index % 5 == 0 or processed == file_size:
                     progress = min(processed / file_size, 1.0)
                     elapsed = time.time() - start_time
                     speed = processed / (1024 * 1024 * elapsed) if elapsed > 0 else 0
-                    
                     bar_length = 30
-                    filled_length = int(bar_length * progress)
-                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                    
+                    filled = int(bar_length * progress)
+                    bar = '█' * filled + '░' * (bar_length - filled)
                     sys.stdout.write(f"\rEncrypting: [{bar}] {progress*100:.1f}% - {speed:.2f} MB/s - {active_tasks} active tasks")
                     sys.stdout.flush()
+            
+            # After loop, ensure remaining blocks are written
+            while not result_queue.empty():
+                _, block = result_queue.get()
+                fout.write(block)
         
-        sys.stdout.write('\n')  # New line after completion
+        sys.stdout.write('\n')
         success = True
         print("Streaming encryption completed.")
         try:
@@ -176,7 +176,6 @@ def encrypt_data_streaming(file_path: str, password: SecureBytes,
                     key_plain = derived_key_obf.deobfuscate()
                     h = hmac.new(bytes(key_plain.to_bytes()), digestmod=hashlib.sha256)
                     key_plain.clear()
-                    
                     with open(enc_path, 'rb') as encf:
                         while True:
                             data_block = encf.read(8192)
@@ -224,7 +223,7 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
     config.USE_RS = meta_plain.get("use_rs", False)
     if "rs_parity" in meta_plain:
         config.RS_PARITY_BYTES = meta_plain["rs_parity"]
-        
+    
     derived_key_obf = None
     try:
         file_salt = base64.b64decode(meta_plain["salt"])
@@ -236,7 +235,7 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
         try:
             derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
         except MemoryError:
-            print("MemoryError: Argon2 parameters might be too large for this system.")
+            print("MemoryError: Argon2 parameters too large for this system.")
             password.clear()
             return
 
@@ -252,7 +251,6 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
             key_plain = derived_key_obf.deobfuscate()
             h = hmac.new(bytes(key_plain.to_bytes()), digestmod=hashlib.sha256)
             key_plain.clear()
-            
             try:
                 with open(enc_path, 'rb') as encf:
                     while True:
@@ -281,11 +279,9 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
         out_path = os.path.join(folder, out_name)
         success = True
         try:
-            # Get file size to calculate progress
             file_size = os.path.getsize(enc_path)
             processed = 0
             start_time = time.time()
-            
             with open(enc_path, 'rb') as fin, open(out_path, 'wb') as fout:
                 chunk_index = 0
                 error_occurred = False
@@ -298,13 +294,8 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
                         error_occurred = True
                         break
                     block_len = struct.unpack('>I', length_bytes)[0]
-                    if block_len > config.MAX_CHUNK_SIZE * 2:
-                        print("Corrupted file or block_len too large!")
-                        error_occurred = True
-                        break
                     block_data = fin.read(block_len)
-                    processed += 4 + len(block_data)  # 4 bytes from length_bytes + block size
-                    
+                    processed += 4 + len(block_data)
                     if len(block_data) < block_len:
                         print("Corrupted file (incomplete block)!")
                         error_occurred = True
@@ -313,36 +304,26 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
                         print("Error: chunk_index exceeded 2^96, invalid nonce.")
                         error_occurred = True
                         break
-
                     key_plain = derived_key_obf.deobfuscate()
-                    plaintext, _ = decrypt_chunk(length_bytes + block_data,
-                                               key_plain, 0, aad_base, chunk_index)
+                    plaintext, _ = decrypt_chunk(length_bytes + block_data, key_plain, 0, aad_base, chunk_index)
                     key_plain.clear()
-                    
                     derived_key_obf.obfuscate()
-                    
                     if plaintext is None:
                         print("Decryption failed for a chunk!")
                         error_occurred = True
                         break
                     fout.write(plaintext)
                     chunk_index += 1
-                    
-                    # Update progress bar
                     if chunk_index % 5 == 0 or processed >= file_size:
-                        progress = min(processed / file_size, 1.0)  # Ensure it doesn't exceed 100%
+                        progress = min(processed / file_size, 1.0)
                         elapsed = time.time() - start_time
                         speed = processed / (1024 * 1024 * elapsed) if elapsed > 0 else 0
-                        
-                        # Create progress bar
                         bar_length = 30
-                        filled_length = int(bar_length * progress)
-                        bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                        
+                        filled = int(bar_length * progress)
+                        bar = '█' * filled + '░' * (bar_length - filled)
                         sys.stdout.write(f"\rDecrypting: [{bar}] {progress*100:.1f}% - {speed:.2f} MB/s")
                         sys.stdout.flush()
-                
-                sys.stdout.write('\n')  # New line after completion
+                sys.stdout.write('\n')
                 if error_occurred:
                     success = False
         finally:
