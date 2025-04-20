@@ -3,11 +3,11 @@
 Encrypt/decrypt data in chunks using ChaCha20Poly1305, with optional
 Reed-Solomon error correction.
 
-[CORREÇÃO IMPORTANTE]
-- Removemos o hash do plaintext (checksum SHA-256) que estava em claro,
-  pois o AEAD já garante integridade/autenticidade.
-- O formato agora: nonce(12 bytes) + enc_len(4 bytes) + enc_chunk(...).
-- Isso quebra compatibilidade com versões anteriores que usavam checksum.
+[IMPORTANT CORRECTION]
+- Removed the plaintext hash (SHA-256 checksum) that was in clear text,
+  since AEAD already guarantees integrity/authenticity.
+- The format now: nonce(12 bytes) + enc_len(4 bytes) + enc_chunk(...).
+- This breaks compatibility with previous versions that used checksum.
 """
 
 import struct

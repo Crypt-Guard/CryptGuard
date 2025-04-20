@@ -3,9 +3,9 @@
 Metadata encryption and decryption (.meta files) using ChaCha20Poly1305,
 with Argon2id-based key derivation.
 
-Agora com gravação atômica:
-- Removemos a escrita intermediária do meta_dict diretamente no arquivo.
-- Escrevemos apenas o outer_dict em um arquivo temporário e então renomeamos.
+Now with atomic writing:
+- Removed intermediate writing of meta_dict directly to file.
+- We only write the outer_dict to a temporary file and then rename it.
 """
 
 import os

@@ -1,13 +1,13 @@
 # crypto_core/secure_bytes.py
 """
-secure_bytes.py – Módulo unificado para proteção segura de dados sensíveis no CryptGuard
+secure_bytes.py - Unified module for secure protection of sensitive data in CryptGuard
 
-Este módulo junta as implementações de SecureBytes e funções auxiliares
-combinando as melhores práticas de ambas as versões apresentadas anteriormente.
+This module combines SecureBytes implementations and auxiliary functions,
+combining best practices from both previously presented versions.
 
-A classe SecureBytes armazena os dados em um bytearray mutável, permitindo que
-sejam sobrescritos (zerados) explicitamente. Além disso, há funções de suporte
-para converter strings em SecureBytes, solicitar senhas de forma segura e limpar dados sensíveis.
+The SecureBytes class stores data in a mutable bytearray, allowing it to
+be explicitly overwritten (zeroed). Additionally, there are support functions
+for converting strings to SecureBytes, securely requesting passwords, and clearing sensitive data.
 """
 
 import os
