@@ -29,12 +29,36 @@ def list_encrypted_files():
         result.append((f, vol_type))
     return result
 
-def ask_chunk_size():
-    default_cs = config.CHUNK_SIZE
-    print(f"Default chunk size is {default_cs} bytes.")
-    user_input = input("Enter new chunk size (or press ENTER to keep default): ").strip()
-    if not user_input:
-        return default_cs
+def calculate_optimal_chunk_size(file_size):
+    # For small files, use smaller chunks
+    if file_size < 10 * 1024 * 1024:  # < 10 MB
+        return 64 * 1024  # 64 KB
+    # For medium files
+    elif file_size < 100 * 1024 * 1024:  # < 100 MB
+        return 1 * 1024 * 1024  # 1 MB
+    # For large files
+    elif file_size < 1 * 1024 * 1024 * 1024:  # < 1 GB
+        return 4 * 1024 * 1024  # 4 MB
+    # For very large files
+    else:
+        return 8 * 1024 * 1024  # 8 MB
+
+# Modify ask_chunk_size function to use optimal size as suggestion
+def ask_chunk_size(file_size=None):
+    if file_size:
+        optimal_size = calculate_optimal_chunk_size(file_size)
+        print(f"Recommended chunk size for this file: {optimal_size} bytes")
+        print(f"Current default: {config.CHUNK_SIZE} bytes")
+        user_input = input("Enter chunk size (or press ENTER for recommended): ").strip()
+        if not user_input:
+            return optimal_size
+    else:
+        default_cs = config.CHUNK_SIZE
+        print(f"Default chunk size is {default_cs} bytes.")
+        user_input = input("Enter new chunk size (or press ENTER to keep default): ").strip()
+        if not user_input:
+            return default_cs
+    
     try:
         new_size = int(user_input)
         if new_size < 1024:
@@ -46,7 +70,7 @@ def ask_chunk_size():
         return new_size
     except ValueError:
         print("Invalid input, using default chunk size.")
-        return default_cs
+        return default_cs if file_size is None else calculate_optimal_chunk_size(file_size)
 
 def encrypt_text():
     clear_screen()
@@ -101,7 +125,7 @@ def encrypt_multiple_files():
 
         if zip_size > config.STREAMING_THRESHOLD:
             print("\nLarge file detected => using streaming mode.\n")
-            chunk_size = ask_chunk_size()
+            chunk_size = ask_chunk_size(zip_size)
             try:
                 encrypt_data_streaming(temp_zip_name, combined_pwd, "multi", ".zip", key_file_hash,
                                        chunk_size=chunk_size)
@@ -241,7 +265,7 @@ def reencrypt_file():
     _, ext = os.path.splitext(out_name)
     try:
         if mode_streaming:
-            chunk_size = ask_chunk_size()
+            chunk_size = ask_chunk_size(os.path.getsize(out_name))
             encrypt_data_streaming(out_name, new_pwd, "reenc", ext, key_file_hash_new, chunk_size=chunk_size)
         else:
             with open(out_name, 'rb') as f:
@@ -330,7 +354,7 @@ def encrypt_with_dialog():
         file_size = os.path.getsize(file_path)
         if file_size > config.STREAMING_THRESHOLD:
             print("\nLarge file detected => using streaming mode.\n")
-            chunk_size = ask_chunk_size()
+            chunk_size = ask_chunk_size(file_size)
             encrypt_data_streaming(file_path, combined_pwd, "file", ext, key_file_hash, chunk_size=chunk_size)
         else:
             with open(file_path, 'rb') as f:
@@ -436,6 +460,66 @@ def encrypted_file_settings_menu():
             print("Invalid option!")
             time.sleep(1)
 
+def security_profile_menu():
+    clear_screen()
+    print("=== SECURITY PROFILE SETTINGS ===")
+    print("""
+[1] Fast (Less secure, but faster)
+[2] Balanced (Default)
+[3] Secure (More secure, but slower)
+[4] Ultra Fast (For non-sensitive data only)
+[0] Back
+    """)
+    choice = input("Select security profile: ").strip()
+    
+    if choice == '1':
+        config.ARGON_TIME_COST = config.ARGON_TIME_COST_FAST
+        config.ARGON_MEMORY_COST = config.ARGON_MEMORY_COST_FAST
+        config.ARGON_PARALLELISM = config.ARGON_PARALLELISM_FAST
+        print("Security profile set to Fast")
+    elif choice == '2':
+        config.ARGON_TIME_COST = config.ARGON_TIME_COST_BALANCED
+        config.ARGON_MEMORY_COST = config.ARGON_MEMORY_COST_BALANCED
+        config.ARGON_PARALLELISM = config.ARGON_PARALLELISM_BALANCED
+        print("Security profile set to Balanced")
+    elif choice == '3':
+        config.ARGON_TIME_COST = config.ARGON_TIME_COST_SECURE
+        config.ARGON_MEMORY_COST = config.ARGON_MEMORY_COST_SECURE
+        config.ARGON_PARALLELISM = config.ARGON_PARALLELISM_SECURE
+        print("Security profile set to Secure")
+    elif choice == '4':
+        config.ARGON_TIME_COST = 1
+        config.ARGON_MEMORY_COST = 16384  # 16 MB
+        config.ARGON_PARALLELISM = 1
+        print("Security profile set to Ultra Fast (USE WITH CAUTION)")
+        print("WARNING: This profile sacrifices security for speed.")
+        print("Only use for non-sensitive data or testing purposes.")
+    
+    input("\nPress Enter to continue...")
+
+def performance_settings_menu():
+    while True:
+        clear_screen()
+        print("=== PERFORMANCE SETTINGS ===")
+        print("""
+[1] Security Profile
+[2] Default Chunk Size
+[0] Back
+        """)
+        choice = input("Select an option: ").strip()
+        if choice == '1':
+            security_profile_menu()
+        elif choice == '2':
+            new_size = ask_chunk_size()
+            config.CHUNK_SIZE = new_size
+            print(f"Default chunk size set to {new_size} bytes")
+            input("\nPress Enter to continue...")
+        elif choice == '0':
+            break
+        else:
+            print("Invalid option!")
+            time.sleep(1)
+
 def main_menu():
     while True:
         clear_screen()
@@ -449,6 +533,7 @@ def main_menu():
         print("""
 [1] Encryption Options
 [2] Encrypted File Settings
+[3] Performance Settings
 [0] Exit
         """)
         choice = input("Select an option: ").strip().lower()
@@ -456,6 +541,8 @@ def main_menu():
             encryption_options_menu()
         elif choice == '2':
             encrypted_file_settings_menu()
+        elif choice == '3':
+            performance_settings_menu()
         elif choice == '0':
             print("Exiting...")
             time.sleep(1)
