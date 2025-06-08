@@ -1,11 +1,16 @@
 # main.py
 import os
+import sys
 import time
 import tempfile
 import zipfile
+import logging
+from pathlib import Path
 
 from crypto_core import config
 from crypto_core.secure_bytes import SecureBytes
+from crypto_core.process_protection import process_protection
+from crypto_core.file_permissions import secure_permissions
 from password_utils import choose_auth_method
 from crypto_core.single_shot import encrypt_data_single, decrypt_data_single
 from crypto_core.streaming import encrypt_data_streaming, decrypt_data_streaming
@@ -13,6 +18,86 @@ from hidden_volume import encrypt_hidden_volume, decrypt_file, change_real_volum
 from crypto_core.utils import clear_screen, generate_ephemeral_token
 from crypto_core.metadata import decrypt_meta_json
 from file_chooser import select_file_for_encryption, select_files_for_decryption
+
+
+class RateLimiter:
+    """Simple exponential backoff and lockout."""
+
+    def __init__(self, max_attempts: int = 5, base_delay: int = 2):
+        self.max_attempts = max_attempts
+        self.base_delay = base_delay
+        self.attempts = 0
+        self.last_attempt = 0
+        self.locked_until = 0
+        self.attempt_history = []
+
+    def check(self):
+        now = time.time()
+        self.attempt_history = [(t, s) for t, s in self.attempt_history if now - t < 86400]
+
+        if now < self.locked_until:
+            wait_time = self.locked_until - now
+            raise RuntimeError(f"Bloqueado por {int(wait_time)}s devido a muitas tentativas")
+
+        recent_failures = sum(1 for t, success in self.attempt_history if not success and now - t < 3600)
+        if recent_failures >= 10:
+            self.locked_until = now + 3600
+            raise RuntimeError("Muitas tentativas falhadas na última hora")
+
+        if self.attempts > 0:
+            delay = self.base_delay ** min(self.attempts, 5)
+            elapsed = now - self.last_attempt
+            if elapsed < delay:
+                wait_time = delay - elapsed
+                logging.getLogger(__name__).info("Rate limiting: aguardando %.1fs", wait_time)
+                time.sleep(wait_time)
+
+        if self.attempts >= self.max_attempts:
+            self.locked_until = now + 300
+            raise RuntimeError(f"Excedido limite de {self.max_attempts} tentativas")
+
+        self.attempts += 1
+        self.last_attempt = time.time()
+
+    def success(self):
+        self.attempts = 0
+        self.attempt_history.append((time.time(), True))
+
+    def failure(self):
+        self.attempt_history.append((time.time(), False))
+
+
+def validate_system():
+    import psutil
+    ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+    if ram_gb < 1.0:
+        print(f"⚠️  AVISO: Apenas {ram_gb:.1f} GB de RAM disponível")
+        print("O CryptGuard pode falhar com arquivos grandes ou parâmetros Argon2 altos")
+        response = input("Continuar mesmo assim? (s/N): ")
+        if response.lower() != 's':
+            sys.exit(1)
+    disk = psutil.disk_usage(os.path.expanduser("~"))
+    if disk.free < 100 * 1024 * 1024:
+        print("⚠️  AVISO: Pouco espaço em disco")
+    return True
+
+
+def setup_logging():
+    log_dir = Path.home() / ".cryptguard" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    secure_permissions(log_dir)
+    log_file = log_dir / f"cryptguard_{time.strftime('%Y%m%d')}.log"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    if log_file.exists():
+        secure_permissions(log_file)
 
 def list_encrypted_files():
     folder = os.path.join(os.path.expanduser("~"), "Documents", "Encoded_files_folder")
@@ -551,5 +636,42 @@ def main_menu():
             print("Invalid option!")
             time.sleep(1)
 
-if __name__ == "__main__":
+
+def main():
+    setup_logging()
+    logger = logging.getLogger(__name__)
+
+    if not validate_system():
+        return
+
+    try:
+        process_protection.apply_protections()
+        if process_protection.debugger_detected:
+            logger.warning("⚠️ Debugger detectado!")
+            print("\n" + "="*50)
+            print("⚠️  AVISO DE SEGURANÇA")
+            print("="*50)
+            print("Um debugger foi detectado anexado ao processo.")
+            print("Isso pode comprometer a segurança dos seus dados.")
+            print("="*50)
+            response = input("\nContinuar mesmo assim? (s/N): ")
+            if response.lower() != 's':
+                return
+
+        def on_debugger():
+            print("\n⚠️ ALERTA: Debugger anexado durante execução!")
+            logger.critical("Debugger anexado durante execução")
+
+        process_protection.continuous_check(on_debugger)
+    except Exception as e:
+        logger.error("Erro ao aplicar proteções: %s", e)
+        print(f"⚠️ Algumas proteções de segurança falharam: {e}")
+
+    global rate_limiter
+    rate_limiter = RateLimiter()
+
     main_menu()
+
+
+if __name__ == "__main__":
+    main()

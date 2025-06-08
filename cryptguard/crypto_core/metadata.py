@@ -12,6 +12,7 @@ import os
 import json
 import base64
 import secrets
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.exceptions import InvalidTag
@@ -20,6 +21,7 @@ from crypto_core.argon_utils import generate_key_from_password
 from crypto_core.config import META_ARGON_PARAMS, META_SALT_SIZE
 from crypto_core.secure_bytes import SecureBytes
 from typing import Optional, Dict, Any
+from crypto_core.utils import write_atomic_secure
 
 def encrypt_meta_json(meta_path: str, meta_plain: dict,
                       user_password: SecureBytes) -> bool:
@@ -62,26 +64,10 @@ def encrypt_meta_json(meta_path: str, meta_plain: dict,
         "outer_ciphertext": base64.b64encode(outer_ciphertext).decode()
     }
 
-    tmp_path = meta_path + ".tmp"
     try:
-        with open(tmp_path, 'w') as f:
-            json.dump(outer_dict, f)
+        write_atomic_secure(Path(meta_path), json.dumps(outer_dict).encode())
     except Exception as e:
-        print(f"Error writing metadata file: {e}")
-        try:
-            os.remove(tmp_path)
-        except:
-            pass
-        return False
-
-    try:
-        os.replace(tmp_path, meta_path)
-    except Exception as e:
-        print(f"Failed to finalize metadata file: {e}")
-        try:
-            os.remove(tmp_path)
-        except:
-            pass
+        print(f"Failed to write metadata file: {e}")
         return False
 
     return True
