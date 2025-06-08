@@ -48,7 +48,7 @@ def encrypt_data_streaming(file_path: str, password: SecureBytes,
     argon_params = get_argon2_parameters_for_encryption()
     file_salt = secrets.token_bytes(32)
     try:
-        derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
+        derived_key_obf, actual_params = generate_key_from_password(password, file_salt, argon_params)
     except MemoryError:
         print("MemoryError: Argon2 parameters might be too large for this system.")
         return None
@@ -155,9 +155,9 @@ def encrypt_data_streaming(file_path: str, password: SecureBytes,
         if success:
             meta_plain = {
                 "salt": base64.b64encode(file_salt).decode(),
-                "argon2_time_cost": argon_params["time_cost"],
-                "argon2_memory_cost": argon_params["memory_cost"],
-                "argon2_parallelism": argon_params["parallelism"],
+                "argon2_time_cost": actual_params["time_cost"],
+                "argon2_memory_cost": actual_params["memory_cost"],
+                "argon2_parallelism": actual_params["parallelism"],
                 "volume_type": "normal",
                 "file_type": file_type,
                 "original_ext": original_ext,
@@ -233,7 +233,7 @@ def decrypt_data_streaming(enc_path: str, password: SecureBytes):
             "parallelism": meta_plain["argon2_parallelism"]
         }
         try:
-            derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
+            derived_key_obf, _ = generate_key_from_password(password, file_salt, argon_params)
         except MemoryError:
             print("MemoryError: Argon2 parameters too large for this system.")
             password.clear()

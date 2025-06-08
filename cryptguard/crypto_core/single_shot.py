@@ -48,7 +48,7 @@ def encrypt_data_single(data: bytes,
 
     data_len = len(data)
     try:
-        derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
+        derived_key_obf, actual_params = generate_key_from_password(password, file_salt, argon_params)
     except MemoryError:
         print("MemoryError: Argon2 parameters might be too large for this system.")
         return
@@ -76,9 +76,9 @@ def encrypt_data_single(data: bytes,
                 return
 
             meta_plain = {
-                "argon2_time_cost": argon_params["time_cost"],
-                "argon2_memory_cost": argon_params["memory_cost"],
-                "argon2_parallelism": argon_params["parallelism"],
+                "argon2_time_cost": actual_params["time_cost"],
+                "argon2_memory_cost": actual_params["memory_cost"],
+                "argon2_parallelism": actual_params["parallelism"],
                 "salt": base64.b64encode(file_salt).decode(),
                 "file_type": file_type,
                 "original_ext": original_ext,
@@ -154,9 +154,9 @@ def encrypt_data_single(data: bytes,
 
             # Metadata, indicating that "multi_sub_block = True"
             meta_plain = {
-                "argon2_time_cost": argon_params["time_cost"],
-                "argon2_memory_cost": argon_params["memory_cost"],
-                "argon2_parallelism": argon_params["parallelism"],
+                "argon2_time_cost": actual_params["time_cost"],
+                "argon2_memory_cost": actual_params["memory_cost"],
+                "argon2_parallelism": actual_params["parallelism"],
                 "salt": base64.b64encode(file_salt).decode(),
                 "file_type": file_type,
                 "original_ext": original_ext,
@@ -226,7 +226,7 @@ def decrypt_data_single(enc_path: str, password: SecureBytes):
             "parallelism": meta_plain["argon2_parallelism"]
         }
         try:
-            derived_key_obf = generate_key_from_password(password, file_salt, argon_params)
+            derived_key_obf, _ = generate_key_from_password(password, file_salt, argon_params)
         except MemoryError:
             print("MemoryError: Argon2 parameters might be too large for this system.")
             return
