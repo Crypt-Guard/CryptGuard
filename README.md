@@ -1,124 +1,181 @@
-````markdown
-# 🔐 CryptGuardv2
+# 🔐 CryptGuard v2 – Version 2.5.0
 
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)  
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)  
-[![Security](https://img.shields.io/badge/security-hardening-green)]  
+[](https://www.google.com/search?q=LICENSE)
+[](https://www.python.org/)
+[](https://www.google.com/search?q=%23-security-recommendations)
+[](https://www.google.com/search?q=CONTRIBUTING.md)
 
-High-performance, memory-hardened file encryption tool for Windows (and soon macOS/Linux).  
-Supports AES-GCM & ChaCha20-Poly1305, Argon2id KDF, robust GUI/CLI, secure delete, logging, and more.
+**CryptGuard v2** is a **modern** and **user-friendly** file encryption solution for Windows (macOS/Linux roadmap).
+It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon2id**, applies memory protection, optional Reed–Solomon, and a sleek PySide6 interface.
 
----
+-----
 
 ## ✨ Key Features
 
-- **Authenticated Encryption**  
-  AES-256-GCM & ChaCha20-Poly1305 (single-shot & streaming)  
-- **Argon2id KDF**  
-  Memory-hard profiles (Fast, Balanced, Secure) + auto-calibration  
-- **Memory Protection**  
-  SecureBytes (mlock, zeroization), KeyObfuscator  
-- **Integrity & Error-Correction**  
-  HMAC-SHA256, optional Reed–Solomon per chunk  
-- **Encrypted Metadata**  
-  ChaCha20-Poly1305 guards file info, profiles & salts  
-- **User-Friendly GUI**  
-  Drag-&-drop, strength meter, confirm-password, progress bar  
-- **Secure Delete**  
-  Overwrite & remove original file safely  
-- **CLI Support**  
-  `--calibrate-kdf`, `--harden`, headless batch mode  
-- **Logging & Testing**  
-  RotatingFileHandler + SecureFormatter, pytest suite included  
-- **One-file Executable**  
-  Build with PyInstaller (`--onefile --windowed --icon cryptguard.ico`)
+1.  **Authenticated Encryption**
 
----
+      * AES-256-GCM (default) or ChaCha20-Poly1305.
 
-## 🚀 Quick Start
+2.  **Argon2id KDF**
 
-1. **Clone & Install**  
-   ```bash
-   git clone https://github.com/YourUser/CryptGuardv2.git
-   cd CryptGuardv2
-   pip install -r requirements.txt
-````
+      * Profiles: **Fast**, **Balanced** (default), **Secure**.
+      * Automatic calibration `--calibrate-kdf`.
 
-2. **Run GUI**
+3.  **Smart Encryption Modes**
 
-   ```bash
-   python main_app.py
-   ```
+      * **Single-Shot** (≤ \~10 MiB) with 1 MiB sub-chunks.
+      * **Streaming** (≥ 100 MiB) with 8 MiB chunks and parallel threads.
 
-3. **Run CLI**
+4.  **Integrity & Redundancy**
 
-   ```bash
-   # Calibrate Argon2 for ~0.5 s derivation:
-   python -m crypto_core --calibrate-kdf
+      * Global HMAC-SHA256 over `.enc`.
+      * **Reed–Solomon** (32 B) per chunk (optional).
 
-   # Harden process (DEP, anti-debug):
-   python -m crypto_core --harden
+5.  **Encrypted Metadata**
 
-   # Encrypt a file:
-   python -m crypto_core encrypt file.txt
+      * Salt + Nonce + ChaCha20-Poly1305 guarding the original name and parameters.
 
-   # Decrypt:
-   python -m crypto_core decrypt file.txt.enc
-   ```
+6.  **Secure Memory Handling**
 
-4. **Build Executable**
+      * `SecureBytes` (mlock/VirtualLock + zeroize).
+      * `KeyObfuscator` (XOR-mask + timed exposure).
 
-   ```bash
-   pip install pyinstaller pillow
-   pyinstaller --onefile --windowed --icon cryptguard.ico main_app.py
-   ```
+7.  **Local Rate-Limiter**
 
----
+      * Exponential delay per file (`tries.db`) to mitigate brute-force.
 
-## 📂 Repository Layout
+8.  **Process Hardening** (Windows)
 
-```text
-CryptGuardv2/
-├─ crypto_core/
-│  ├─ __init__.py
-│  ├─ config.py
-│  ├─ logger.py
-│  ├─ utils.py
-│  ├─ secure_bytes.py
-│  ├─ key_obfuscator.py
-│  ├─ argon_utils.py
-│  ├─ rs_codec.py
-│  ├─ metadata.py
-│  ├─ rate_limit.py
-│  ├─ security_warning.py
-│  ├─ process_protection.py
-│  ├─ kdf.py
-│  ├─ chunk_crypto.py
-│  ├─ file_crypto.py
-│  ├─ file_crypto_chacha.py
-│  └─ file_crypto_chacha_stream.py
-├─ main_app.py
-├─ cryptoguard.ico       # multi-res ICO file
-├─ README.md
-├─ ROADMAP.md
-└─ requirements.txt
+      * Permanent DEP, anti-debug, no core-dump (`--harden`).
+
+9.  **User-Friendly GUI**
+
+      * Drag-&-drop, confirm-password, zxcvbn strength-meter, progress-bar, secure-delete toggle.
+
+10. **One-File Executable**
+
+      * Build via PyInstaller `--onefile --windowed --icon cryptguard.ico`.
+
+-----
+
+## 🆕 What's New in v2.5.0
+
+| Category           | Highlights                                                          |
+| ------------------ | ------------------------------------------------------------------- |
+| **Performance** | Parallel chunk processing (up to 12 threads) + buffered I/O.        |
+| **Memory Hardening** | `SecureBytes` 100% refactored, `KeyObfuscator` refactored.          |
+| **Rate-Limiter** | SQLite + `2^(n-1)` s delay after consecutive failures.              |
+| **GUI Revamp** | Dark teal theme, hover animations, accurate progress bar (0–100%). |
+| **Logging** | Rotating `encryptor.log` (1 MB × 5), SecureFormatter removes hex blobs. |
+| **Packaging** | Complete `.spec` script + multi-resolution vector icon.             |
+
+-----
+
+## 🚀 Getting Started
+
+### 1\) Ready-to-use Executable (Windows)
+
+1.  Download `CryptGuard.exe` from the [link suspeito removido] tab.
+2.  Run with a double-click **or** via the terminal:
+
+<!-- end list -->
+
+```bash
+CryptGuard.exe
 ```
 
----
+### 2\) Running from source code (Python 3.9+)
+
+```bash
+git clone https://github.com/YourUser/CryptGuardv2.git
+cd CryptGuardv2
+pip install -r requirements.txt
+python main_app.py          # starts GUI
+```
+
+Fine-tuning (Argon2 profiles, chunk size) in `crypto_core/config.py`.
+
+### 3\) Build one-file executable
+
+```bash
+pip install pyinstaller pillow
+pyinstaller --onefile --windowed --icon cryptguard.ico main_app.py
+```
+
+### 🔑 Typical Usage (CLI)
+
+```bash
+# calibrate Argon2 for ~0.5s on your machine
+python -m crypto_core --calibrate-kdf
+
+# enable extra hardening
+python -m crypto_core --harden
+
+# encrypt
+python -m crypto_core encrypt path/to/file.pdf
+
+# decrypt
+python -m crypto_core decrypt file.pdf.enc
+```
+
+-----
+
+## 🗂️ Project Structure
+
+```
+CryptGuardv2/
+ ├─ crypto_core/
+ │   ├─ __init__.py
+ │   ├─ config.py
+ │   ├─ logger.py
+ │   ├─ utils.py
+ │   ├─ secure_bytes.py
+ │   ├─ key_obfuscator.py
+ │   ├─ argon_utils.py
+ │   ├─ rs_codec.py
+ │   ├─ metadata.py
+ │   ├─ rate_limit.py
+ │   ├─ security_warning.py
+ │   ├─ process_protection.py
+ │   ├─ kdf.py
+ │   ├─ chunk_crypto.py
+ │   ├─ file_crypto.py
+ │   ├─ file_crypto_chacha.py
+ │   └─ file_crypto_chacha_stream.py
+ ├─ main_app.py
+ ├─ cryptguard.ico
+ ├─ ROADMAP.md
+ ├─ requirements.txt
+ └─ README.md
+```
+
+-----
+
+## ⚠️ Security Recommendations
+
+  * Use strong passwords (phrases ≥ 4 words or ≥ 12 varied characters).
+  * Back up `.enc` and `.meta` files to external media.
+  * Enable `--harden` in sensitive environments.
+  * For SSDs, secure-delete is better than nothing, but consider full-disk encryption.
+
+-----
 
 ## 🤝 Contributing
 
-1. Fork & clone
-2. Create feature branch
-3. Write tests (pytest)
-4. Submit PR & await review
+Fork ➜ branch ➜ commits with pytest tests ➜ Pull Request.
+See `CONTRIBUTING.md`.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+-----
 
----
+## 📜 License & Disclaimer
 
-## 📜 License
+Apache 2.0 – see `LICENSE`.
+No warranties; use at your own risk.
 
-Licensed under **Apache 2.0**. See [LICENSE](LICENSE) for full text.
+-----
 
-````
+## 🙏 Acknowledgments
+
+argon2-cffi, cryptography, PySide6, reedsolo, psutil, zxcvbn-python.
+
+**CryptGuard v2 – Secure • Modern • User-Friendly**
