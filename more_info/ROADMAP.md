@@ -1,73 +1,58 @@
-```markdown
-# 🚀 CryptGuardv2 Roadmap
+# CryptGuard v2 Roadmap
 
-Este documento detalha as funcionalidades atuais e futuras planejadas para o **CryptGuardv2**, refletindo as grandes atualizações introduzidas nesta versão GUI avançada.
-
----
-
-## 🔑 Funcionalidades Principais Atuais
-
-| Status | Funcionalidade                                        | Detalhes                                  |
-|--------|-------------------------------------------------------|-------------------------------------------|
-| ✅      | **Criptografia/Descriptografia AES-256-GCM**         | Streaming e Single-shot para arquivos     |
-| ✅      | **Criptografia/Descriptografia ChaCha20-Poly1305**   | Alternativa leve, single-shot e streaming |
-| ✅      | **Argon2id (com calibração automática)**             | Derivação segura e resistente a GPUs      |
-| ✅      | **HMAC-SHA256 Global**                               | Verificação de integridade completa       |
-| ✅      | **Reed-Solomon opcional**                            | Recuperação limitada de corrupção leve    |
-| ✅      | **Rate-Limiter local (protege contra força-bruta)**  | Atraso exponencial por tentativas falhas  |
-| ✅      | **Proteção avançada em RAM**                         | Obfuscação XOR e VirtualLock              |
-| ✅      | **Secure Delete (opcional)**                         | Exclusão segura após criptografia         |
-| ✅      | **Interface gráfica moderna (PySide6)**              | Drag-and-drop, medidor de força de senha  |
-| ✅      | **Logs detalhados**                                  | Auditoria facilitada                      |
+**Current Version:** v2.5 (July 2025)
 
 ---
 
-## 🚧 Futuras Funcionalidades
+## 🏁 1. Current Features
 
-| Prioridade | Funcionalidade                                   | Descrição                                       |
-|------------|--------------------------------------------------|-------------------------------------------------|
-| 🔶         | **Hidden Volumes**                               | Volumes ocultos com negação plausível           |
-| 🔶         | **Key-Rolling GUI**                               | Troca segura da senha via GUI                   |
-| 🔶         | **Ephemeral Tokens via GUI**                      | Gerador seguro de tokens de sessão              |
-| 🔷         | **Multi-línguas (PT, EN, ES)**                    | Internacionalização da interface                |
-| 🔷         | **Notificações de segurança integradas**          | Alertas críticos integrados ao sistema          |
-| 🔷         | **Backup automático e criptografado**             | Backup automático periódico com criptografia    |
+### Core Encryption
+- **AES-256-GCM** (streaming) & **ChaCha20-Poly1305** (single-shot & streaming)  
+- **Argon2id**-based KDF (Fast, Balanced, Secure profiles) with auto-calibration  
+- **HKDF-SHA256** sub-key separation: `enc_key` + `hmac_key`  
 
-🔶 = Médio prazo, 🔷 = Longo prazo
+### Integrity & Redundancy
+- **HMAC-SHA256** global authentication tag  
+- **Reed–Solomon** per-chunk optional error-correction (32 bytes parity)  
+- **Metadata encryption** with ChaCha20-Poly1305 (salt + nonce + ciphertext)  
 
----
+### Memory & Process Hardening
+- **SecureBytes** (mlock/VirtualLock + multi-pass zeroization)  
+- **KeyObfuscator** (XOR mask + timed exposure)  
+- Optional `--harden` flag: DEP, error-mode, anti-debug checks  
 
-## 🔐 Perfis de Segurança Configuráveis (Argon2id)
+### Usability / UX
+- **PySide6 GUI**: drag-&-drop, file picker, confirm-password, strength meter, progress bar  
+- **Secure Delete**: overwrite + remove original file  
+- **Atomic Writes**: safe rename + chmod(600)  
+- **Rotating Log**: SecureFormatter + 1 MB×5 backups  
+- **CLI flags**: `--calibrate-kdf`, `--harden`  
 
-CryptGuardv2 utiliza perfis pré-definidos Argon2id para ajustar performance e segurança:
-
-- **Ultra Rápido** (mínima segurança, máxima velocidade)
-- **Balanceado (padrão)** (equilíbrio ideal entre segurança e performance)
-- **Seguro** (máxima segurança, recomendado para arquivos sensíveis)
-
----
-
-## 🛠 Manutenção e Versões
-
-- **Versão atual**: **2.0 GUI**
-  - Novo backend paralelo para arquivos grandes
-  - GUI moderna e intuitiva usando PySide6
-  - Melhorias substanciais de segurança e performance
-
-- **Compatibilidade**:
-  - Compatível com arquivos `.enc` das versões anteriores CLI v1.2.0+
+### Testing & Packaging
+- **pytest** suite: round-trip, bad-password, corrupt data, edge cases  
+- **PyInstaller** build: `--onefile --windowed --icon cryptguard.ico`  
 
 ---
 
-## 🤝 Como Contribuir
+## 🔜 2. Near-Term Roadmap (v2.x)
 
-Veja [CONTRIBUTING.md](CONTRIBUTING.md) para se envolver:
-- Relate bugs e sugira funcionalidades via **Issues**.
-- Submeta **Pull Requests** com melhorias diretas.
-- Problemas de segurança: consulte [SECURITY.md](../SECURITY.md).
+1. **Multi-Platform Builds**  
+   - Native macOS (`.app`) and Linux (AppImage / DEB)  
+2. **Hidden Volumes** & Plausible Deniability  
+3. **Key Rolling** for encrypted archives  
+4. **Exportable Checksums** & Verification Mode  
+5. **FIPS-compliant Mode** & PKCS#11 Token Support  
 
 ---
 
-**Última atualização**: Julho de 2025  
-© Equipe CryptGuard – Segurança digital ao seu alcance.
-```
+## 🚀 3. Long-Term Goals (v3.0+)
+
+- **Automated Updater** with signed releases  
+- **Plugin API** for custom algorithms  
+- **Enterprise Dashboard** for centralized key management  
+- **Encrypted Cloud Sync** integration (S3, Azure Blob)  
+- **Formal Security Audit** & Certifications  
+
+---
+
+_Last updated: July 2025_  
