@@ -1,4 +1,7 @@
-cryptography==44.0.1
-argon2-cffi==23.1.0
-reedsolo==1.7.0
-zxcvbn-python==4.4.24
+cryptography>=44.0.1
+argon2-cffi>=23.1.0
+reedsolo>=1.7.0
+PySide6>=6.5.0
+psutil>=5.9.0
+zxcvbn-python>=4.4.24
+pillow>=10.0.0
