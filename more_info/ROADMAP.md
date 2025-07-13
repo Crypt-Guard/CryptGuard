@@ -49,9 +49,6 @@
 
 - **Automated Updater** with signed releases  
 - **Plugin API** for custom algorithms  
-- **Enterprise Dashboard** for centralized key management  
-- **Encrypted Cloud Sync** integration (S3, Azure Blob)  
-- **Formal Security Audit** & Certifications  
 
 ---
 
