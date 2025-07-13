@@ -142,11 +142,7 @@ CryptGuardv2/
  │   ├─ file_crypto.py
  │   ├─ file_crypto_chacha.py
  │   └─ file_crypto_chacha_stream.py
- ├─ main_app.py
- ├─ cryptguard.ico
- ├─ ROADMAP.md
- ├─ requirements.txt
- └─ README.md
+ └─ main_app.py
 ```
 
 -----
