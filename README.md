@@ -1,4 +1,4 @@
-# 🔐 CryptGuard v2 – Version 2.3.0
+# 🔐 CryptGuardv2 – Version 2.3.0
 
 [](https://www.google.com/search?q=LICENSE)
 [](https://www.python.org/)
