@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-CryptGuardv2 – v2.3-secure  ✨
-GUI escura inspirada no KeyGuard, com:
-• Sidebar minimalista
-• Cabeçalho destacado
-• Botões arredondados com animação
-• Seleção de algoritmo / perfil de segurança
-• Barra de progresso + tempo decorrido
-Integra-se ao núcleo crypto_core (AES-GCM, ChaCha20, RS, HMAC…).
-"""
-
 import sys, time
 from pathlib import Path
 from PySide6.QtCore    import Qt, Signal, QThread, QEasingCurve, QPropertyAnimation
