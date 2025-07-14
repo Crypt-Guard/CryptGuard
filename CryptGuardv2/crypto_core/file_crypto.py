@@ -85,8 +85,15 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
         for fut in concurrent.futures.as_completed(futures):
             i, payload = fut.result()
             if rs_use:
-                cipher = payload[12+16+4:]
-                payload = payload[:12+16+4] + rs_encode_data(cipher, RS_PARITY_BYTES)
+                # ------- reparar comprimento -------
+                nonce    = payload[:12]
+                tag      = payload[12:28]
+                # skip past (12 nonce + 16 tag + 4 old length)
+                cipher   = payload[32:]
+                cipher_rs = rs_encode_data(cipher, RS_PARITY_BYTES)
+
+                new_len  = struct.pack("<I", len(cipher_rs))
+                payload  = nonce + tag + new_len + cipher_rs
             pq.put((i, payload))
 
     out_path = src.with_suffix(src.suffix + ENC_EXT)
@@ -151,7 +158,9 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         for fut in concurrent.futures.as_completed(futures):
             pq.put(fut.result())
 
-    dest = src.with_name(generate_unique_filename(src.stem, src.suffix.replace(ENC_EXT, "")))
+    orig_name = src.name[:-len(ENC_EXT)]                    # strip only ".enc"
+    stem, ext = os.path.splitext(orig_name)                 # split name + original ext
+    dest = src.with_name(f"{stem}_{secrets.token_hex(4)}{ext}")
     processed = 0
     with dest.open("wb") as fout:
         while not pq.empty():
