@@ -2,18 +2,6 @@
 """
 CryptGuard v2 – Modern GUI
 
-A full‑featured PySide6 interface inspired by KeyGuard’s polished look and the
-Wifi‑Share web app’s vivid gradients.  Highlights:
-- Adaptive dark / light theme with a toggle
-- Animated gradient header
-- Drop‑zone with ripple highlight
-- Password strength meter (zxcvbn)
-- Optional secure‑delete checkbox
-- Live MB/s throughput readout next to progress bar
-- Responsive layout (works ≥ 640 × 400)
-
-Back‑end hooks remain IDENTICAL – the worker still calls encrypt/decrypt
-functions from crypto_core.
 """
 from __future__ import annotations
 
