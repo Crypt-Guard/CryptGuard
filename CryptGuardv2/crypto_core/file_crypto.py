@@ -61,7 +61,7 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
     salt  = secrets.token_bytes(16)
 
     # Argon2id → KeyObfuscator com chave mestra
-    master_obf = derive_key(SecureBytes(password), salt, profile)
+    master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
 
     # HKDF → chaves finais
     with TimedExposure(master_obf) as master:
@@ -115,7 +115,7 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 chunk=CHUNK_SIZE, size=size, ts=int(start))
     encrypt_meta_json(out_path.with_suffix(out_path.suffix + META_EXT),
-                      meta, SecureBytes(password))
+                      meta, SecureBytes(password.encode()))
 
     logger.info("AES enc %s (%.1f MiB)", src.name, size/1048576)
     master_obf.clear()
@@ -136,12 +136,12 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         if magic != MAGIC or tag_alg != b"AESG":
             raise ValueError("Formato de arquivo desconhecido.")
 
-        master_obf = derive_key(SecureBytes(password), salt, profile_hint)
+        master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
         with TimedExposure(master_obf) as master:
             enc_key, hmac_key = _hkdf(master)
 
         meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
-                                 SecureBytes(password))
+                                 SecureBytes(password.encode()))
         rs_use = meta["use_rs"]
 
         futures, pq = [], queue.PriorityQueue()
