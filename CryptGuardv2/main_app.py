@@ -33,20 +33,21 @@ from PySide6.QtWidgets import (
 
 # ─── crypto_core back‑end ───────────────────────────────────────────────
 from crypto_core import (
-    encrypt_aes, decrypt_aes,
+    encrypt_aes, decrypt_aes, encrypt_ctr, decrypt_ctr,
     encrypt_chacha, decrypt_chacha,
     encrypt_chacha_stream, decrypt_chacha_stream,
     SecurityProfile, LOG_PATH
 )
 from crypto_core.config import STREAMING_THRESHOLD
 from json import loads
+import json
 
 try:
     from zxcvbn import zxcvbn
 except ImportError:
     zxcvbn = None
 
-ALGOS = ["AES‑256‑GCM", "ChaCha20‑Poly1305"]
+ALGOS = ["AES-256-GCM", "AES-256-CTR", "ChaCha20-Poly1305"]
 
 # ══════════════════════ worker ═══════════════════════════════════════════
 class CryptoWorker(QThread):
@@ -163,7 +164,8 @@ class MainWindow(QWidget):
         self.file_line = QLineEdit(); self.file_line.setPlaceholderText("Drop a file or click Select…")
         self.file_line.setReadOnly(True); self.file_line.setAcceptDrops(False)
         self.setAcceptDrops(True)
-        btn_pick = AccentButton("Select…"); btn_pick.clicked.connect(self._pick_file)
+        btn_pick = AccentButton("Select…")
+        btn_pick.clicked.connect(self._pick)
         lay_file = QHBoxLayout(); lay_file.addWidget(self.file_line); lay_file.addWidget(btn_pick)
 
         # Algorithm + profile combos
@@ -179,8 +181,9 @@ class MainWindow(QWidget):
         lay_pwd = QHBoxLayout(); lay_pwd.addWidget(self.pwd); lay_pwd.addWidget(self.str_bar)
 
         # Secure delete checkbox
-        self.chk_del = QCheckBox("Secure‑delete original after encrypt")
-
+        self.chk_del     = QCheckBox("Secure-delete original after encrypt")
+        self.chk_archive = QCheckBox("Archive folder before encrypt (ZIP)")
+        
         # Action buttons
         self.btn_enc = AccentButton("Encrypt")
         self.btn_dec = AccentButton("Decrypt")
@@ -197,15 +200,19 @@ class MainWindow(QWidget):
             "QProgressBar::chunk{background:#29B6F6;}"
         )
         self.lbl_speed = QLabel("Speed: – MB/s")
-        lay_prog = QHBoxLayout(); lay_prog.addWidget(self.prg, 1); lay_prog.addWidget(self.lbl_speed)
-
+        h_speed = QHBoxLayout(); h_speed.addStretch(); h_speed.addWidget(self.lbl_speed)
+        lay_prog = QHBoxLayout(); lay_prog.addWidget(self.prg, 1)
+        
         # Central layout
-        center = QVBoxLayout(); center.setSpacing(16); center.setContentsMargins(22, 22, 22, 22)
+        center = QVBoxLayout(); center.setSpacing(16); center.setContentsMargins(22,22,22,22)
         center.addLayout(lay_file)
         center.addLayout(lay_alg); center.addLayout(lay_prof)
         center.addLayout(lay_pwd); center.addWidget(self.chk_del, 0, Qt.AlignLeft)
+        center.addWidget(self.chk_archive, 0, Qt.AlignLeft)
         center.addLayout(lay_btn)
-        center.addLayout(lay_prog); center.addStretch()
+        center.addLayout(lay_prog)
+        center.addLayout(h_speed)
+        center.addStretch()
         central_frame = QFrame(); central_frame.setLayout(center); central_frame.setStyleSheet("background:#263238;")
 
         # Status bar
@@ -228,7 +235,8 @@ class MainWindow(QWidget):
 
     def dropEvent(self, e):
         url = e.mimeData().urls()[0].toLocalFile()
-        self.file_line.setText(url); self.status.showMessage("File loaded via drag & drop")
+        self.file_line.setText(url)
+        self.status.showMessage("File/Folder loaded via drag & drop")
 
     # ── Helpers -----------------------------------------------------------------
     def _field(self, lbl: str, widget):
@@ -263,37 +271,80 @@ class MainWindow(QWidget):
         self.str_bar.setStyleSheet(chunk_style)
 
     # ── File pick ---------------------------------------------------------------
-    def _pick_file(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Choose a file", "", "All (*.*)")
-        if f:
-            self.file_line.setText(f); self.status.showMessage("File selected.")
+    # ----------------------------------------------------------------- pick
+    def _pick(self):
+        """Dialogo de seleção: FILE ou FOLDER com rótulos claros."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Select type")
+        msg.setText("Choose what you want to encrypt / decrypt:")
+        file_btn   = msg.addButton("File",   QMessageBox.AcceptRole)
+        folder_btn = msg.addButton("Folder", QMessageBox.AcceptRole)
+        msg.addButton(QMessageBox.Cancel)
+
+        msg.exec()
+        clicked = msg.clickedButton()
+        if clicked is None or clicked == msg.button(QMessageBox.Cancel):
+            return
+
+        if clicked == file_btn:
+            f, _ = QFileDialog.getOpenFileName(self, "Choose file", "", "All (*.*)")
+            if f:
+                self.file_line.setText(f)
+                self.status.showMessage("File selected.")
+        else:
+            folder = QFileDialog.getExistingDirectory(self, "Choose folder", "")
+            if folder:
+                self.file_line.setText(folder)
+                self.status.showMessage("Folder selected.")
 
     # ── Start process -----------------------------------------------------------
     def _start(self, encrypt: bool):
         path, pwd = self.file_line.text(), self.pwd.text()
-        if not path: return self.status.showMessage("Select a file first.")
-        if not pwd : return self.status.showMessage("Enter password.")
-
-        size = Path(path).stat().st_size
-        profile = list(SecurityProfile)[self.cmb_prof.currentIndex()]
+        if not path:   return self.status.showMessage("Select a file first.")
+        if not pwd:    return self.status.showMessage("Enter password.")
+ 
+        src = path
+        tmp_zip = None
+ 
+        if encrypt and self.chk_archive.isChecked():
+             try:
+                 from crypto_core.utils import archive_folder
+                 tmp_zip = archive_folder(src)
+                 src = str(tmp_zip)
+             except Exception as e:
+                 return self.status.showMessage(f"Zip error: {e}")
+ 
         algo_idx = self.cmb_alg.currentIndex()
-        stream   = (algo_idx == 1 and size >= STREAMING_THRESHOLD)
-
-        if encrypt:
-            func = encrypt_aes if algo_idx == 0 else (encrypt_chacha_stream if stream else encrypt_chacha)
-            self._total_bytes = size
+        profile  = list(SecurityProfile)[self.cmb_prof.currentIndex()]
+        # choose encrypt/decrypt funcs
+        if algo_idx == 0:
+            func_enc, func_dec = encrypt_aes, decrypt_aes
+        elif algo_idx == 1:
+            func_enc, func_dec = encrypt_ctr, decrypt_ctr
         else:
-            func = decrypt_aes if algo_idx == 0 else (decrypt_chacha_stream if stream else decrypt_chacha)
-            # estimate plaintext size from .meta
+            size = Path(src).stat().st_size
+            stream       = size >= STREAMING_THRESHOLD
+            func_enc     = encrypt_chacha_stream if stream else encrypt_chacha
+            func_dec     = decrypt_chacha_stream if stream else decrypt_chacha
+ 
+        delete_flag = self.chk_del.isChecked() if encrypt else False
+        self._tmp_zip = tmp_zip
+        # total bytes ----------------------------------------------------
+        if encrypt:
+            self._total_bytes = Path(src).stat().st_size
+        else:
+            meta_file = Path(src + ".meta")
             try:
-                meta = Path(path + ".meta").read_bytes()
-                self._total_bytes = loads(meta[28:])['size']  # salt(16)+nonce(12)
+                from crypto_core.metadata import decrypt_meta_json
+                meta = decrypt_meta_json(meta_file, pwd)
+                self._total_bytes = meta.get("size", Path(src).stat().st_size)
             except Exception:
-                self._total_bytes = size
+                self._total_bytes = Path(src).stat().st_size
 
-        # UI prep
-        self._toggle(False); self.prg.setValue(0); self.lbl_speed.setText("Speed: – MB/s")
-        self.worker = CryptoWorker(func, path, pwd, profile, self.chk_del.isChecked())
+        self._toggle(False)
+        self.prg.setValue(0)
+        func = func_enc if encrypt else func_dec
+        self.worker = CryptoWorker(func, src, pwd, profile, delete_flag)
         self.worker.progress.connect(self._progress)
         self.worker.finished.connect(self._done)
         self.worker.error.connect(self._err)
@@ -301,19 +352,26 @@ class MainWindow(QWidget):
         self.worker.start(); self.pwd.clear()
 
     def _progress(self, done: int, elapsed: float):
-        pct = min(int(done * 100 / self._total_bytes), 100) if self._total_bytes else 0
+        pct = int(min(done * 100 / self._total_bytes, 99))
         self.prg.setValue(pct)
-        mbps = done / 1048576 / elapsed if elapsed else 0
-        self.lbl_speed.setText(f"Speed: {mbps:,.1f} MB/s")
-
+        speed = (done / elapsed) / 1_048_576 if elapsed else 0.0
+        self.lbl_speed.setText(f"Speed: {speed:,.1f} MB/s")
+ 
     def _done(self, out_path: str):
-        self.prg.setValue(100)
+        self.prg.setValue(100)                       # garante 100 %
+        if hasattr(self, "_tmp_zip") and self._tmp_zip:
+            Path(self._tmp_zip).unlink(missing_ok=True)
         QMessageBox.information(self, "Success", f"Output file:\n{out_path}")
-        self.status.showMessage("✔️ Finished", 6000); self._toggle(True)
+        self.status.showMessage("✔️ Done.", 8000)
+        self._toggle(True)
 
     def _err(self, msg: str):
+        if getattr(self, "_tmp_zip", None):
+            try: os.remove(self._tmp_zip)
+            except Exception: pass
         QMessageBox.critical(self, "Error", msg)
-        self.status.showMessage(f"Error: {msg}", 10000); self._toggle(True)
+        self.status.showMessage(f"Error: {msg}", 10000)
+        self._toggle(True)
 
     def _toggle(self, enable: bool):
         for w in (self.btn_enc, self.btn_dec, self.cmb_alg, self.cmb_prof, self.chk_del):
