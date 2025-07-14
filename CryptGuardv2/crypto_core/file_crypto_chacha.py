@@ -45,9 +45,9 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
 
     src  = Path(src_path); data = src.read_bytes(); size = len(data)
     salt = secrets.token_bytes(16)
-    master = derive_key(SecureBytes(password), salt, profile)
+    master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
 
-    with TimedExposure(master) as m: enc_key, hmac_key = _hkdf(m)
+    with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
     rs_use = USE_RS and RS_PARITY_BYTES>0
     n_sub  = math.ceil(size / SINGLE_SHOT_SUBCHUNK_SIZE)
     out    = bytearray()
@@ -68,9 +68,9 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
     meta = dict(alg="CHACHA", profile=profile.name, use_rs=rs_use,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 subchunk=SINGLE_SHOT_SUBCHUNK_SIZE, size=size, ts=int(time.time()))
-    encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT), meta, SecureBytes(password))
+    encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT), meta, SecureBytes(password.encode()))
 
-    master.clear()
+    master_obf.clear()
     logger.info("ChaCha enc %s (%d KiB)", src.name, size>>10)
     return str(dest)
 
@@ -87,10 +87,10 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
     if magic!=MAGIC or tag_alg!=b"CH20": raise ValueError("Formato inválido.")
 
     n_sub, = struct.unpack("<I", blob[24:28])
-    master = derive_key(SecureBytes(password), salt, profile_hint)
-    with TimedExposure(master) as m: enc_key, hmac_key = _hkdf(m)
+    master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+    with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
 
-    meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password))
+    meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
     rs_use = meta["use_rs"]
 
     pos = 28; plain = bytearray(); processed = 0
@@ -112,6 +112,6 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
             raise ValueError("Falha na verificação HMAC.")
     reset(enc_path)
 
-    master.clear()
+    master_obf.clear()
     logger.info("ChaCha dec %s", dest.name)
     return str(dest)
