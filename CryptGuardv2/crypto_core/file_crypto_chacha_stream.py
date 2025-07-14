@@ -45,8 +45,8 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
 
     src = Path(src_path); size = src.stat().st_size
     salt = secrets.token_bytes(16)
-    master = derive_key(SecureBytes(password), salt, profile)
-    with TimedExposure(master) as m: enc_key, hmac_key = _hkdf(m)
+    master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
+    with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
     enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
     rs_use = USE_RS and RS_PARITY_BYTES>0
@@ -71,9 +71,9 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
     meta = dict(alg="CHS", profile=profile.name, use_rs=rs_use,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 chunk=CHUNK_SIZE, size=size, ts=int(time.time()))
-    encrypt_meta_json(dest.with_suffix(dest.suffix+META_EXT), meta, SecureBytes(password))
+    encrypt_meta_json(dest.with_suffix(dest.suffix+META_EXT), meta, SecureBytes(password.encode()))
 
-    enc_obf.clear(); master.clear()
+    enc_obf.clear(); master_obf.clear()
     logger.info("ChaCha-stream enc %s (%.1f MiB)", src.name, size/1048576)
     return str(dest)
 
@@ -90,11 +90,11 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         salt = fin.read(16); magic, tag = fin.read(4), fin.read(4)
         if magic!=MAGIC or tag!=b"CHS3": raise ValueError("Formato inválido.")
 
-        master = derive_key(SecureBytes(password), salt, profile_hint)
-        with TimedExposure(master) as m: enc_key, hmac_key = _hkdf(m)
+        master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+        with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
         enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
-        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password))
+        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
         rs_use = meta["use_rs"]
 
         pq, futures = queue.PriorityQueue(), []
@@ -119,6 +119,6 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
             raise ValueError("Falha na verificação HMAC.")
     reset(enc_path)
 
-    enc_obf.clear(); master.clear()
+    enc_obf.clear(); master_obf.clear()
     logger.info("ChaCha-stream dec %s", dest.name)
     return str(dest)
