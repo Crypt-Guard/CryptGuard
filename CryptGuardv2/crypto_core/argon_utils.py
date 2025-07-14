@@ -16,7 +16,18 @@ _DEFAULT = dict(time_cost=3, memory_cost=128*1024, parallelism=4)
 
 def _available_ram() -> int: return psutil.virtual_memory().available
 
-def generate_key_from_password(pswd_sb:SecureBytes, salt:bytes, params:dict|None=None):
+def generate_key_from_password(
+    pwd_sb: SecureBytes,
+    salt: bytes,
+    params: dict | None = None,
+):
+    """
+    Deriva chave de 32 B via Argon2id.  
+    Retorna **KeyObfuscator** (já mascarado) + dicionário de parâmetros usados.
+
+    Nota: a limpeza (pwd_sb.clear()) é agora responsabilidade do chamador,
+    garantindo que o objeto não seja reutilizado após ter sido zerado.
+    """
     p = dict(params or load_calibrated_params() or _DEFAULT)
     need = p["memory_cost"]*1024
     if need > _available_ram()//2:
@@ -24,8 +35,17 @@ def generate_key_from_password(pswd_sb:SecureBytes, salt:bytes, params:dict|None
         while need > _available_ram()//2 and p["memory_cost"]>8*1024:
             p["memory_cost"]//=2; need=p["memory_cost"]*1024
 
-    raw = hash_secret_raw(pswd_sb.to_bytes(), salt, **p, hash_len=_KEY_LEN, type=Type.ID)
-    obf = KeyObfuscator(SecureBytes(raw)); obf.obfuscate(); pswd_sb.clear()
+    raw = hash_secret_raw(
+        secret=pwd_sb.to_bytes(),
+        salt=salt,
+        time_cost=p["time_cost"],
+        memory_cost=p["memory_cost"],
+        parallelism=p["parallelism"],
+        hash_len=_KEY_LEN,
+        type=Type.ID,
+    )
+    obf = KeyObfuscator(SecureBytes(raw))
+    obf.obfuscate()
     return obf, p
 
 def calibrate_kdf():

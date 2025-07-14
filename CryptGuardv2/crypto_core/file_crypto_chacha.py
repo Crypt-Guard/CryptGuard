@@ -39,13 +39,14 @@ def _dec_block(nonce:bytes, ct:bytes, enc_key:bytes, rs_use:bool)->bytes:
     return ChaCha20Poly1305(enc_key).decrypt(nonce, ct, None)
 
 # ---- ENCRYPT ----------------------------------------------------------------------
-def encrypt_file(src_path:str|os.PathLike, password:str,
-                 profile:SecurityProfile=SecurityProfile.BALANCED,
+def encrypt_file(src_path: str, password, profile=SecurityProfile.BALANCED,
                  progress_cb:Optional[Callable[[int],None]]=None) -> str:
+
+    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
 
     src  = Path(src_path); data = src.read_bytes(); size = len(data)
     salt = secrets.token_bytes(16)
-    master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
+    master_obf = derive_key(pwd_sb, salt, profile)
 
     with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
     rs_use = USE_RS and RS_PARITY_BYTES>0
@@ -68,9 +69,9 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
     meta = dict(alg="CHACHA", profile=profile.name, use_rs=rs_use,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 subchunk=SINGLE_SHOT_SUBCHUNK_SIZE, size=size, ts=int(time.time()))
-    encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT), meta, SecureBytes(password.encode()))
+    encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT), meta, pwd_sb)
 
-    master_obf.clear()
+    pwd_sb.clear()
     logger.info("ChaCha enc %s (%d KiB)", src.name, size>>10)
     return str(dest)
 

@@ -56,12 +56,15 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
                  profile:SecurityProfile=SecurityProfile.BALANCED,
                  progress_cb:Optional[Callable[[int],None]]=None) -> str:
 
+    # ① wrap incoming password
+    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
+
     src   = Path(src_path)
     size  = src.stat().st_size
     salt  = secrets.token_bytes(16)
 
     # Argon2id → KeyObfuscator com chave mestra
-    master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
+    master_obf = derive_key(pwd_sb, salt, profile)
 
     # HKDF → chaves finais
     with TimedExposure(master_obf) as master:
@@ -115,16 +118,20 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 chunk=CHUNK_SIZE, size=size, ts=int(start))
     encrypt_meta_json(out_path.with_suffix(out_path.suffix + META_EXT),
-                      meta, SecureBytes(password.encode()))
+                      meta, pwd_sb)
 
     logger.info("AES enc %s (%.1f MiB)", src.name, size/1048576)
     master_obf.clear()
+    pwd_sb.clear()               # ③ wipe when done
     return str(out_path)
 
 # ───────────────────────────────────────── DECRYPT ───────────────────────────────
 def decrypt_file(enc_path:str|os.PathLike, password:str,
                  profile_hint:SecurityProfile=SecurityProfile.BALANCED,
                  progress_cb:Optional[Callable[[int],None]]=None) -> str:
+
+    # ① wrap incoming password
+    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
 
     if not check_allowed(enc_path):
         raise RuntimeError("Muitas tentativas falhas; aguarde antes de tentar novamente.")
@@ -136,12 +143,12 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         if magic != MAGIC or tag_alg != b"AESG":
             raise ValueError("Formato de arquivo desconhecido.")
 
-        master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+        master_obf = derive_key(pwd_sb, salt, profile_hint)
         with TimedExposure(master_obf) as master:
             enc_key, hmac_key = _hkdf(master)
 
         meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
-                                 SecureBytes(password.encode()))
+                                 pwd_sb)
         rs_use = meta["use_rs"]
 
         futures, pq = [], queue.PriorityQueue()
@@ -178,5 +185,6 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
     reset(enc_path)
 
     master_obf.clear()
+    pwd_sb.clear()               # ③ wipe when done
     logger.info("AES dec %s", dest.name)
     return str(dest)

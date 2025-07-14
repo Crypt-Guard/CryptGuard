@@ -24,7 +24,7 @@ from .config          import (
     SIGN_METADATA,
     META_EXT
 )
-from .secure_bytes    import SecureBytes
+from crypto_core.secure_bytes import SecureBytes
 from .kdf             import derive_key
 from .key_obfuscator  import TimedExposure, KeyObfuscator
 from .chunk_crypto    import encrypt_chunk, decrypt_chunk
@@ -45,7 +45,8 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
 
     src = Path(src_path); size = src.stat().st_size
     salt = secrets.token_bytes(16)
-    master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
+    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
+    master_obf = derive_key(pwd_sb, salt, profile)
     with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
     enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
@@ -71,7 +72,7 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
     meta = dict(alg="CHS", profile=profile.name, use_rs=rs_use,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 chunk=CHUNK_SIZE, size=size, ts=int(time.time()))
-    encrypt_meta_json(dest.with_suffix(dest.suffix+META_EXT), meta, SecureBytes(password.encode()))
+    encrypt_meta_json(dest.with_suffix(dest.suffix+META_EXT), meta, pwd_sb)
 
     enc_obf.clear(); master_obf.clear()
     logger.info("ChaCha-stream enc %s (%.1f MiB)", src.name, size/1048576)
@@ -90,7 +91,8 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         salt = fin.read(16); magic, tag = fin.read(4), fin.read(4)
         if magic!=MAGIC or tag!=b"CHS3": raise ValueError("Formato inválido.")
 
-        master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+        pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
+        master_obf = derive_key(pwd_sb, salt, profile_hint)
         with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
         enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
