@@ -136,8 +136,17 @@ class MainWindow(QWidget):
     # ── UI ------------------------------------------------------------------
     def _build_ui(self):
         # Header with gradient + title + theme toggle
-        header = GradientHeader()
+        header = QFrame()
         header.setFixedHeight(64)
+        header.setStyleSheet(
+            """
+            QFrame {
+                background: #263238;
+                color: #ECEFF1;
+                border-bottom: 2px solid #37474F;
+            }
+            """
+        )
         hlay = QHBoxLayout(header); hlay.setContentsMargins(18, 0, 18, 0)
         title = QLabel("🔐 CryptGuard v2", font=QFont("Inter", 20, QFont.DemiBold))
         title.setStyleSheet("color:white")
@@ -306,15 +315,6 @@ class MainWindow(QWidget):
         QMessageBox.critical(self, "Error", msg)
         self.status.showMessage(f"Error: {msg}", 10000); self._toggle(True)
 
-    def _toggle(self, enable: bool):
-        for w in (self.btn_enc, self.btn_dec, self.cmb_alg, self.cmb_prof, self.chk_del):
-            w.setEnabled(enable)
-
-# ══════════════════════ main ═══════════════════════════════════════════════
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    win = MainWindow(); win.show()
-    sys.exit(app.exec())
     def _toggle(self, enable: bool):
         for w in (self.btn_enc, self.btn_dec, self.cmb_alg, self.cmb_prof, self.chk_del):
             w.setEnabled(enable)
