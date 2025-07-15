@@ -1,4 +1,4 @@
-# 🔐 CryptGuardv2 – Version 2.3.0
+# 🔐 CryptGuardv2 – Version 2.6.0  <sub>(July 2025)</sub>
 
 [](https://www.google.com/search?q=LICENSE)
 [](https://www.python.org/)
@@ -14,7 +14,7 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 1.  **Authenticated Encryption**
 
-      * AES-256-GCM (default) or ChaCha20-Poly1305.
+      * AES‑256‑GCM, ChaCha20‑Poly1305 **ou XChaCha20‑Poly1305** (24‑byte nonce).
 
 2.  **Argon2id KDF**
 
@@ -23,8 +23,8 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 3.  **Smart Encryption Modes**
 
-      * **Single-Shot** (≤ \~10 MiB) with 1 MiB sub-chunks.
-      * **Streaming** (≥ 100 MiB) with 8 MiB chunks and parallel threads.
+      * **Single‑Shot** ≤ 10 MiB (AES / ChaCha / **XChaCha**).
+      * **Streaming** ≥ 100 MiB com paralelismo (AES, ChaCha, **XChaCha**).
 
 4.  **Integrity & Redundancy**
 
@@ -50,7 +50,7 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 9.  **User-Friendly GUI**
 
-      * Drag-&-drop, confirm-password, zxcvbn strength-meter, progress-bar, secure-delete toggle.
+      * Drag‑&‑drop, confirm‑password, medidor zxcvbn, **botão Cancel**, diálogo único Arquivo/Pasta, barra de progresso 0–100 %, velocímetro locale‑aware, secure‑delete toggle.
 
 10. **One-File Executable**
 
@@ -58,16 +58,15 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 -----
 
-## 🆕 What's New in v2.5.0
+## 🆕 What's New in v2.6.0
 
-| Category           | Highlights                                                          |
-| ------------------ | ------------------------------------------------------------------- |
-| **Performance** | Parallel chunk processing (up to 12 threads) + buffered I/O.        |
-| **Memory Hardening** | `SecureBytes` 100% refactored, `KeyObfuscator` refactored.          |
-| **Rate-Limiter** | SQLite + `2^(n-1)` s delay after consecutive failures.              |
-| **GUI Revamp** | Dark teal theme, hover animations, accurate progress bar (0–100%). |
-| **Logging** | Rotating `encryptor.log` (1 MB × 5), SecureFormatter removes hex blobs. |
-| **Packaging** | Complete `.spec` script + multi-resolution vector icon.             |
+| Category             | Highlights                                                                 |
+| -------------------- | -------------------------------------------------------------------------- |
+| **Encryption**       | Novo **XChaCha20‑Poly1305** (single & streaming, nonce 24 B randômico).    |
+| **UX**               | Botão **Cancel**, picker único, feedback imediato de progresso, velocímetro.|
+| **Performance**      | Streaming XChaCha zero‑copy; progress‑callback chunk‑a‑chunk.              |
+| **Security**         | Log ACL no Windows, SecureBytes `__del__`, secure‑delete para pastas.      |
+| **Robustez**         | Rate‑limit migrado para **SQLite** compartilhado, prompt auto‑calibração Argon2. |
 
 -----
 
@@ -139,9 +138,12 @@ CryptGuardv2/
  │   ├─ process_protection.py
  │   ├─ kdf.py
  │   ├─ chunk_crypto.py
+ │   ├─ file_crypto_ctr.py
  │   ├─ file_crypto.py
  │   ├─ file_crypto_chacha.py
- │   └─ file_crypto_chacha_stream.py
+ │   ├─ file_crypto_chacha_stream.py
+ │   ├─ file_crypto_xchacha.py
+ │   └─ file_crypto_xchacha_stream.py
  └─ main_app.py
 ```
 
