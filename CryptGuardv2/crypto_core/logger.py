@@ -1,9 +1,10 @@
 """
-Logger com SecureFormatter – remove bytes sensíveis (>12 bytes de hex).
+Logger com SecureFormatter – remove bytes sensíveis (hex + Base64).
 """
 import logging
 import os
 import re
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -12,35 +13,41 @@ LOG_PATH = Path(os.getenv("LOCALAPPDATA", Path.home())) / "CryptGuard" / "crypto
 
 # Ensure directory and file exist
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-LOG_PATH.touch(exist_ok=True)        # <-- cria arquivo vazio se não existir
+LOG_PATH.touch(exist_ok=True)
 
-_HEX_RE = re.compile(r"0x[a-fA-F0-9]{12,}")
+# ① Padrões de dados sensíveis
+_SENSITIVE_RE = re.compile(
+    r"""
+    (?:0x)?[0-9A-Fa-f]{16,}      # hex longo, com/sem 0x (≥64 bits)
+  | [A-Za-z0-9+/]{24,}={0,2}     # Base64 (≥18 bytes ≈128 bits)
+  """,
+    re.VERBOSE,
+)
 
 class SecureFormatter(logging.Formatter):
     def format(self, record):
         msg = super().format(record)
-        # oculta sequências grandes de hex
-        return _HEX_RE.sub("<hex-omitted>", msg)
+        # ② mascara segredos antes de gravar
+        return _SENSITIVE_RE.sub("<redacted>", msg)
 
+# ③ configuração de logger
 _fmt = "%(asctime)s | %(levelname)s | %(message)s"
 handler = RotatingFileHandler(LOG_PATH, maxBytes=5_000_000, backupCount=3)
 handler.setFormatter(SecureFormatter(_fmt))
 
 logger = logging.getLogger("crypto_core")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.INFO if os.getenv("ENV") != "prod" else logging.WARNING)
 logger.addHandler(handler)
 logger.propagate = False
 
+# opcional: imprimir no stderr em modo debug
+if os.getenv("CG_DEBUG"):
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(SecureFormatter("%(levelname)s: %(message)s"))
+    logger.addHandler(sh)
+
 def get_logger():
     return logger
-
-# Configuração do logger (se não existir)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
 
 def warn_critical(message: str):
     """Registra uma mensagem de aviso crítico"""

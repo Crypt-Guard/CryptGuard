@@ -20,7 +20,7 @@ from .kdf            import derive_key
 from .key_obfuscator import TimedExposure
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
-from .utils          import write_atomic_secure
+from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
 
@@ -62,18 +62,22 @@ def encrypt_file(src_path: str, password, profile=SecurityProfile.BALANCED,
         processed += len(chunk)
         if progress_cb: progress_cb(processed)
 
-    dest = src.with_suffix(src.suffix + ENC_EXT)
-    write_atomic_secure(dest, bytes(out))
+    enc_path = src.with_suffix(src.suffix + ENC_EXT)
+    write_atomic_secure(enc_path, bytes(out))
 
-    hmac_hex = hmac.new(hmac_key, dest.read_bytes(), hashlib.sha256).hexdigest() if SIGN_METADATA else None
+    hmac_hex = (hmac.new(hmac_key, enc_path.read_bytes(), hashlib.sha256)
+                .hexdigest() if SIGN_METADATA else None)
     meta = dict(alg="CHACHA", profile=profile.name, use_rs=rs_use,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 subchunk=SINGLE_SHOT_SUBCHUNK_SIZE, size=size, ts=int(time.time()))
-    encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT), meta, pwd_sb)
+    encrypt_meta_json(enc_path.with_suffix(enc_path.suffix + META_EXT),
+                      meta, pwd_sb)
+
+    zip_path = pack_enc_zip(enc_path)
 
     pwd_sb.clear()
     logger.info("ChaCha enc %s (%d KiB)", src.name, size>>10)
-    return str(dest)
+    return str(zip_path)
 
 # ---- DECRYPT ----------------------------------------------------------------------
 def decrypt_file(enc_path:str|os.PathLike, password:str,
@@ -83,7 +87,11 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
     if not check_allowed(enc_path):
         raise RuntimeError("Limite de tentativas excedido – aguarde.")
 
-    src = Path(enc_path)
+    # suporta .zip
+    if str(enc_path).lower().endswith(".zip"):
+        src, _tmp = unpack_enc_zip(Path(enc_path))
+    else:
+        src, _tmp = Path(enc_path), None
     
     # Use mmap for memory-efficient file reading
     with open(src, "rb") as f_src, \
@@ -104,11 +112,17 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
             nonce = blob[pos:pos+12]; pos+=12
             (clen,) = struct.unpack("<I", blob[pos:pos+4]); pos+=4
             ct  = blob[pos:pos+clen]; pos+=clen
-            plain += _dec_block(nonce, ct, enc_key, rs_use)
-            processed += len(plain)
+            chunk = _dec_block(nonce, ct, enc_key, rs_use)
+            plain += chunk
+            processed += len(chunk)
             if progress_cb: progress_cb(processed)
 
-    dest = src.with_name(src.stem)
+    parent = Path(enc_path).parent
+    orig   = src.name[:-len(ENC_EXT)]
+    dest   = parent / orig
+    if dest.exists():
+        from .utils import generate_unique_filename
+        dest = generate_unique_filename(dest)
     write_atomic_secure(dest, bytes(plain))
 
     if SIGN_METADATA and meta["hmac"]:

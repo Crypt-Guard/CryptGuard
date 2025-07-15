@@ -25,7 +25,7 @@ from .kdf            import derive_key
 from .key_obfuscator import TimedExposure, KeyObfuscator
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
-from .utils          import write_atomic_secure
+from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
 
@@ -83,14 +83,37 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
 
     rs_use = USE_RS and RS_PARITY_BYTES > 0
     pq, futures = queue.PriorityQueue(), []
+    total_chunks = 0
+    
     with src.open("rb") as fin, concurrent.futures.ThreadPoolExecutor() as ex:
         idx = 0
         while (chunk := fin.read(CHUNK_SIZE)):
             nonce = secrets.token_bytes(_NONCE)
             fut = ex.submit(_enc_chunk, idx, chunk, nonce, enc_obf, rs_use)
             futures.append(fut); idx += 1
+        total_chunks = idx
+        
+        # Process futures with exception handling
+        errors = []
         for fut in concurrent.futures.as_completed(futures):
-            pq.put(fut.result())
+            exc = fut.exception()
+            if exc:
+                errors.append(exc)
+                # Cancel remaining futures
+                for f in futures:
+                    f.cancel()
+                break
+            else:
+                pq.put(fut.result())
+        
+        if errors:
+            enc_obf.clear(); master.clear(); pwd_sb.clear()
+            raise errors[0]
+
+    # Verify all chunks were processed
+    if pq.qsize() != total_chunks:
+        enc_obf.clear(); master.clear(); pwd_sb.clear()
+        raise RuntimeError(f"Chunk count mismatch: expected {total_chunks}, got {pq.qsize()}")
 
     out = bytearray()
     out += salt + MAGIC + b"XCS3"                # header para stream XChaCha
@@ -99,8 +122,18 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
         if progress_cb:
             progress_cb(len(out))
 
+    # Use temporary file during write
     dest = src.with_suffix(src.suffix + ENC_EXT)
-    write_atomic_secure(dest, bytes(out))
+    dest_temp = dest.with_suffix(dest.suffix + ".part")
+    
+    try:
+        write_atomic_secure(dest_temp, bytes(out))
+        dest_temp.rename(dest)
+        dest = pack_enc_zip(dest)
+    except Exception as e:
+        dest_temp.unlink(missing_ok=True)
+        enc_obf.clear(); master.clear(); pwd_sb.clear()
+        raise e
 
     hmac_hex = (hmac.new(hmac_key, dest.read_bytes(), hashlib.sha256)
                 .hexdigest() if SIGN_METADATA else None)
@@ -111,7 +144,7 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
     encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT),
                       meta, pwd_sb)
     pwd_sb.clear()
-    logger.info("XChaCha‑stream enc %s (%.1f MiB)",
+    logger.info("XChaCha‑stream enc %s (%.1f MiB)",
                 src.name, size/1048576)
     return str(dest)
 
@@ -123,50 +156,94 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
     if not check_allowed(enc_path):
         raise RuntimeError("Aguarde antes de novas tentativas.")
 
-    src = Path(enc_path)
-    with src.open("rb") as fin:
-        salt  = fin.read(16)
-        magic = fin.read(4); tag = fin.read(4)
-        if magic != MAGIC or tag != b"XCS3":
-            raise ValueError("Formato inválido.")
-
-        pwd_sb = (password if isinstance(password, SecureBytes)
-                  else SecureBytes(password.encode()))
-        master = derive_key(pwd_sb, salt, profile_hint)
-        with TimedExposure(master) as m:
-            enc_key, hmac_key = _hkdf(m)
-        enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
-
-        meta   = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
-                                   SecureBytes(password.encode()))
-        rs_use = meta["use_rs"]
-
-        pq, futures = queue.PriorityQueue(), []
-        ex = concurrent.futures.ThreadPoolExecutor()
-        idx = 0
-        while (hdr := fin.read(_NONCE + 4)):
-            if len(hdr) < (_NONCE + 4):
-                break
-            nonce = hdr[:_NONCE]
-            (clen,) = struct.unpack("<I", hdr[_NONCE:_NONCE+4])
-            cipher_blob = fin.read(clen)
-            futures.append(ex.submit(_dec_chunk, idx, nonce,
-                                     cipher_blob, enc_obf, rs_use))
-            idx += 1
-        for fut in concurrent.futures.as_completed(futures):
-            pq.put(fut.result())
+    if str(enc_path).lower().endswith(".zip"):
+        src, _tmp = unpack_enc_zip(Path(enc_path))
+    else:
+        src, _tmp = Path(enc_path), None
 
     dest = src.with_name(src.stem)
-    with dest.open("wb") as fout:
-        while not pq.empty():
-            _, chunk = pq.get(); fout.write(chunk)
+    dest_temp = dest.with_suffix(dest.suffix + ".part")
 
-    if SIGN_METADATA and meta["hmac"]:
-        calc = hmac.new(hmac_key, src.read_bytes(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calc, meta["hmac"]):
-            register_failure(enc_path)
-            raise ValueError("Falha na verificação HMAC.")
-    reset(enc_path)
+    try:
+        with src.open("rb") as fin:
+            salt  = fin.read(16)
+            magic = fin.read(4); tag = fin.read(4)
+            if magic != MAGIC or tag != b"XCS3":
+                raise ValueError("Formato inválido.")
+
+            pwd_sb = (password if isinstance(password, SecureBytes)
+                      else SecureBytes(password.encode()))
+            master = derive_key(pwd_sb, salt, profile_hint)
+            with TimedExposure(master) as m:
+                enc_key, hmac_key = _hkdf(m)
+            enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
+
+            meta   = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
+                                       SecureBytes(password.encode()))
+            rs_use = meta["use_rs"]
+
+            pq, futures = queue.PriorityQueue(), []
+            ex = concurrent.futures.ThreadPoolExecutor()
+            total_chunks = 0
+            
+            try:
+                idx = 0
+                while (hdr := fin.read(_NONCE + 4)):
+                    if len(hdr) < (_NONCE + 4):
+                        break
+                    nonce = hdr[:_NONCE]
+                    (clen,) = struct.unpack("<I", hdr[_NONCE:_NONCE+4])
+                    cipher_blob = fin.read(clen)
+                    futures.append(ex.submit(_dec_chunk, idx, nonce,
+                                             cipher_blob, enc_obf, rs_use))
+                    idx += 1
+                total_chunks = idx
+                
+                # Process futures with exception handling
+                errors = []
+                for fut in concurrent.futures.as_completed(futures):
+                    exc = fut.exception()
+                    if exc:
+                        errors.append(exc)
+                        # Cancel remaining futures
+                        for f in futures:
+                            f.cancel()
+                        break
+                    else:
+                        pq.put(fut.result())
+                
+                if errors:
+                    raise errors[0]
+                    
+            finally:
+                ex.shutdown(wait=False)
+
+        # Verify all chunks were processed
+        if pq.qsize() != total_chunks:
+            raise RuntimeError(f"Chunk count mismatch: expected {total_chunks}, got {pq.qsize()}")
+
+        with dest_temp.open("wb") as fout:
+            while not pq.empty():
+                _, chunk = pq.get(); fout.write(chunk)
+
+        if SIGN_METADATA and meta["hmac"]:
+            calc = hmac.new(hmac_key, src.read_bytes(), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(calc, meta["hmac"]):
+                register_failure(enc_path)
+                raise ValueError("Falha na verificação HMAC.")
+        
+        # Move temp file to final destination
+        dest_temp.rename(dest)
+        reset(enc_path)
+
+    except Exception as e:
+        # Cleanup partial file on any error
+        dest_temp.unlink(missing_ok=True)
+        if 'enc_obf' in locals():
+            enc_obf.clear()
+        if 'master' in locals():
+            master.clear()
+        raise e
 
     enc_obf.clear(); master.clear()
     logger.info("XChaCha‑stream dec %s", dest.name)

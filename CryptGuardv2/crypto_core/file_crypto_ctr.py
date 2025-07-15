@@ -26,7 +26,10 @@ from .secure_bytes    import SecureBytes
 from .kdf             import derive_key
 from .key_obfuscator  import TimedExposure
 from .metadata        import encrypt_meta_json, decrypt_meta_json
-from .utils           import generate_unique_filename, write_atomic_secure
+from .utils           import (
+    generate_unique_filename, write_atomic_secure,
+    pack_enc_zip, unpack_enc_zip,
+)
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
 
@@ -59,8 +62,12 @@ def encrypt_file(
     enc  = _aes_ctr(enc_key, iv)
     h    = hmac.new(hmac_key, digestmod=hashlib.sha256)
 
+    # build and MAC the header to prevent IV tampering
+    header = salt + MAGIC + b"ACTR" + iv     # header (40 B)
     out = bytearray()
-    out += salt + MAGIC + b"ACTR" + iv      # header (32 B)
+    out += header
+    h.update(header)
+
     processed = 0
 
     with src.open("rb") as fin:
@@ -73,17 +80,18 @@ def encrypt_file(
                 progress_cb(processed)
 
     out += h.digest()
-    dest = src.with_suffix(src.suffix + ENC_EXT)
-    write_atomic_secure(dest, bytes(out))
+    enc_path = src.with_suffix(src.suffix + ENC_EXT)
+    write_atomic_secure(enc_path, bytes(out))
 
     meta = dict(alg="AESCTR", profile=profile.name, size=size,
                 ts=int(time.time()), iv=iv.hex())
-    encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT),
+    encrypt_meta_json(enc_path.with_suffix(enc_path.suffix + META_EXT),
                       meta, SecureBytes(password.encode()))
 
+    zip_path = pack_enc_zip(enc_path)          # 👉 empacota .enc + .meta em ZIP
     master_obf.clear()
     logger.info("AES-CTR enc %s (%.1f MiB)", src.name, size/1048576)
-    return str(dest)
+    return str(zip_path)
 
 # ─── DECRYPT ────────────────────────────────────────────────────────────
 def decrypt_file(
@@ -95,19 +103,25 @@ def decrypt_file(
     if not check_allowed(enc_path):
         raise RuntimeError("Please wait before another attempt (rate limiter).")
 
-    src  = Path(enc_path)
+    # Permite .zip ou .enc puro
+    if str(enc_path).lower().endswith(".zip"):
+        src, _tmp = unpack_enc_zip(Path(enc_path))
+    else:
+        src, _tmp = Path(enc_path), None
+    # ------------------------------------------------------------------
     data = src.read_bytes()
     salt, magic, tag_alg, iv = data[:16], data[16:20], data[20:24], data[24:40]
     if magic != MAGIC or tag_alg != b"ACTR":
         raise ValueError("Unknown format.")
-
-    pos = 40      # start of length|cipher blocks
+    pos = 40
 
     master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
     with TimedExposure(master_obf) as master:
         enc_key, hmac_key = _hkdf(master)
     dec = _aes_ctr(enc_key, iv)
     h   = hmac.new(hmac_key, digestmod=hashlib.sha256)
+    # include header in HMAC so IV/magic/salt are authenticated
+    h.update(data[:pos])
 
     meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
                              SecureBytes(password.encode()))
@@ -118,8 +132,9 @@ def decrypt_file(
         (clen,) = struct.unpack("<I", data[pos:pos+4]); pos += 4
         ct      = data[pos:pos+clen];     pos += clen
         h.update(ct)
-        plain += dec.update(ct)
-        processed += len(plain)
+        dec_chunk = dec.update(ct)
+        plain += dec_chunk
+        processed += len(dec_chunk)
         if progress_cb:
             progress_cb(processed)
 
@@ -130,7 +145,8 @@ def decrypt_file(
     # if HMAC ok, replace old dest logic:
     orig_name = src.name[:-len(ENC_EXT)]          # remove only ".enc"
     stem, ext = os.path.splitext(orig_name)       # e.g. ("foo", ".png")
-    dest = src.with_name(f"{stem}_{secrets.token_hex(4)}{ext}")
+    parent = Path(enc_path).parent
+    dest   = parent / f"{stem}_{secrets.token_hex(4)}{ext}"
     write_atomic_secure(dest, bytes(plain))
 
     reset(enc_path)

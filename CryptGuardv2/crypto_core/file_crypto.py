@@ -24,7 +24,7 @@ from .key_obfuscator  import TimedExposure
 from .kdf             import derive_key
 from .rs_codec        import rs_encode_data, rs_decode_data
 from .metadata        import encrypt_meta_json, decrypt_meta_json
-from .utils           import write_atomic_secure, generate_unique_filename
+from .utils           import write_atomic_secure, generate_unique_filename, pack_enc_zip, unpack_enc_zip
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
 from .security_warning import warn
@@ -84,40 +84,71 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
             futures.append(ex.submit(_enc_chunk, idx, chunk, nonce, enc_key))
             idx += 1
 
+        total_chunks = idx
         out_path = src.with_suffix(src.suffix + ENC_EXT)
-        with out_path.open("wb") as fout:
-            fout.write(salt + MAGIC + b"AESG")
-            
-            # Escreve no destino assim que o próximo índice esperado estiver pronto
-            expected = 0
-            pending: Dict[int, bytes] = {}
-            for fut in concurrent.futures.as_completed(futures):
-                i, payload = fut.result()
-                if rs_use:
-                    # ------- reparar comprimento -------
-                    nonce    = payload[:12]
-                    tag      = payload[12:28]
-                    # skip past (12 nonce + 16 tag + 4 old length)
-                    cipher   = payload[32:]
-                    cipher_rs = rs_encode_data(cipher, RS_PARITY_BYTES)
-
-                    new_len  = struct.pack("<I", len(cipher_rs))
-                    payload  = nonce + tag + new_len + cipher_rs
+        
+        try:
+            with out_path.open("wb") as fout:
+                fout.write(salt + MAGIC + b"AESG")
                 
-                if i == expected:
-                    fout.write(payload)
-                    processed += len(payload) - (12+16+4)
-                    if progress_cb: progress_cb(processed)
-                    expected += 1
-                    # flush cadeia já em cache
-                    while expected in pending:
-                        pl = pending.pop(expected)
-                        fout.write(pl)
-                        processed += len(pl) - (12+16+4)
+                # Escreve no destino assim que o próximo índice esperado estiver pronto
+                expected = 0
+                pending: Dict[int, bytes] = {}
+                errors = []
+                
+                for fut in concurrent.futures.as_completed(futures):
+                    exc = fut.exception()
+                    if exc:
+                        errors.append(exc)
+                        # Cancela o resto assim que detectar o primeiro problema
+                        for f in futures:
+                            f.cancel()
+                        break
+                    
+                    i, payload = fut.result()
+                    if rs_use:
+                        # ------- reparar comprimento -------
+                        nonce    = payload[:12]
+                        tag      = payload[12:28]
+                        # skip past (12 nonce + 16 tag + 4 old length)
+                        cipher   = payload[32:]
+                        cipher_rs = rs_encode_data(cipher, RS_PARITY_BYTES)
+
+                        new_len  = struct.pack("<I", len(cipher_rs))
+                        payload  = nonce + tag + new_len + cipher_rs
+                    
+                    if i == expected:
+                        fout.write(payload)
+                        processed += len(payload) - (12+16+4)
                         if progress_cb: progress_cb(processed)
                         expected += 1
-                else:
-                    pending[i] = payload
+                        # flush cadeia já em cache
+                        while expected in pending:
+                            pl = pending.pop(expected)
+                            fout.write(pl)
+                            processed += len(pl) - (12+16+4)
+                            if progress_cb: progress_cb(processed)
+                            expected += 1
+                    else:
+                        pending[i] = payload
+
+                if errors:
+                    # Limpa artefatos parciais
+                    if out_path.exists():
+                        out_path.unlink(missing_ok=True)
+                    raise errors[0]
+                
+                # Verifica se todos os chunks foram processados
+                if expected != total_chunks:
+                    if out_path.exists():
+                        out_path.unlink(missing_ok=True)
+                    raise ValueError(f"Processamento incompleto: {expected}/{total_chunks} chunks")
+                    
+        except Exception:
+            # Limpa arquivo parcial em caso de erro
+            if out_path.exists():
+                out_path.unlink(missing_ok=True)
+            raise
 
     # HMAC global
     hmac_hex = None
@@ -128,8 +159,11 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
     meta = dict(alg="AESGCM", profile=profile.name, use_rs=rs_use,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 chunk=CHUNK_SIZE, size=size, ts=int(start))
-    encrypt_meta_json(out_path.with_suffix(out_path.suffix + META_EXT),
-                      meta, pwd_sb)
+    meta_path = out_path.with_suffix(out_path.suffix + META_EXT)
+    encrypt_meta_json(meta_path, meta, pwd_sb)
+
+    # Comprime .enc + .meta em um .zip
+    out_path = pack_enc_zip(out_path)
 
     logger.info("AES enc %s (%.1f MiB)", src.name, size/1048576)
     master_obf.clear()
@@ -147,7 +181,12 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
     if not check_allowed(enc_path):
         raise RuntimeError("Muitas tentativas falhas; aguarde antes de tentar novamente.")
 
-    src = Path(enc_path)
+    # Permite .zip ou .enc puro
+    if str(enc_path).lower().endswith(".zip"):
+        src, _tmp = unpack_enc_zip(Path(enc_path))
+    else:
+        src, _tmp = Path(enc_path), None
+
     with src.open("rb", buffering=CHUNK_SIZE*4) as fin:
         salt = fin.read(16)
         magic, tag_alg = fin.read(4), fin.read(4)
@@ -162,7 +201,7 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
                                  pwd_sb)
         rs_use = meta["use_rs"]
 
-        futures, pq = [], queue.PriorityQueue()
+        futures = []
         ex = concurrent.futures.ThreadPoolExecutor(_optimal_workers(meta["size"]))
         idx = 0; header = 12+16+4
         while (hdr := fin.read(header)):
@@ -173,30 +212,65 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
             futures.append(ex.submit(_dec_chunk, idx, hdr[:28], cipher, enc_key))
             idx += 1
 
-    orig_name = src.name[:-len(ENC_EXT)]                    # strip only ".enc"
-    stem, ext = os.path.splitext(orig_name)                 # split name + original ext
-    dest = src.with_name(f"{stem}_{secrets.token_hex(4)}{ext}")
+    total_chunks = idx
+    # grava fora do temp dir, na mesma pasta do .zip/.enc original
+    parent = Path(enc_path).parent
+    orig_name = src.name[:-len(ENC_EXT)]              # remove ".enc"
+    dest = parent / orig_name
+    if dest.exists():                               # evita overwrite
+        dest = generate_unique_filename(dest)
+
     processed = 0
-    with dest.open("wb") as fout:
-        # Escreve no destino assim que o próximo índice esperado estiver pronto
-        expected = 0
-        pending: Dict[int, bytes] = {}
-        for fut in concurrent.futures.as_completed(futures):
-            idx, chunk = fut.result()
-            if idx == expected:
-                fout.write(chunk)
-                processed += len(chunk)
-                if progress_cb: progress_cb(processed)
-                expected += 1
-                # flush cadeia já em cache
-                while expected in pending:
-                    chunk = pending.pop(expected)
+    try:
+        with dest.open("wb") as fout:
+            # Escreve no destino assim que o próximo índice esperado estiver pronto
+            expected = 0
+            pending: Dict[int, bytes] = {}
+            errors = []
+            
+            for fut in concurrent.futures.as_completed(futures):
+                exc = fut.exception()
+                if exc:
+                    errors.append(exc)
+                    # Cancela o resto assim que detectar o primeiro problema
+                    for f in futures:
+                        f.cancel()
+                    break
+                
+                idx, chunk = fut.result()
+                if idx == expected:
                     fout.write(chunk)
                     processed += len(chunk)
                     if progress_cb: progress_cb(processed)
                     expected += 1
-            else:
-                pending[idx] = chunk
+                    # flush cadeia já em cache
+                    while expected in pending:
+                        chunk = pending.pop(expected)
+                        fout.write(chunk)
+                        processed += len(chunk)
+                        if progress_cb: progress_cb(processed)
+                        expected += 1
+                else:
+                    pending[idx] = chunk
+
+            if errors:
+                # Limpa artefatos parciais
+                if dest.exists():
+                    dest.unlink(missing_ok=True)
+                register_failure(enc_path)
+                raise errors[0]
+            
+            # Verifica se todos os chunks foram processados
+            if expected != total_chunks:
+                if dest.exists():
+                    dest.unlink(missing_ok=True)
+                raise ValueError(f"Processamento incompleto: {expected}/{total_chunks} chunks")
+                
+    except Exception:
+        # Limpa arquivo parcial em caso de erro
+        if dest.exists():
+            dest.unlink(missing_ok=True)
+        raise
 
     # HMAC verify
     if SIGN_METADATA and meta["hmac"]:
