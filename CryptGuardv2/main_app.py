@@ -5,7 +5,7 @@ CryptGuard v2 – Modern GUI
 """
 from __future__ import annotations
 
-import sys, time, os, secrets
+import sys, time, os, secrets, locale
 from pathlib import Path
 from typing import Optional
 
@@ -26,16 +26,30 @@ from crypto_core import (
     encrypt_chacha_stream, decrypt_chacha_stream,
     SecurityProfile, LOG_PATH
 )
+# Novo módulo XChaCha (adicionado ao projeto conforme instruções)
+from crypto_core.file_crypto_xchacha import (
+    encrypt_file as encrypt_xchacha,
+    decrypt_file as decrypt_xchacha,
+)
+from crypto_core.file_crypto_xchacha_stream import (
+    encrypt_file as encrypt_xchacha_stream,
+    decrypt_file as decrypt_xchacha_stream,
+)
 from crypto_core.config import STREAMING_THRESHOLD
 from json import loads
 import json
+
+locale.setlocale(locale.LC_ALL, '')            # para formatação de velocidade
 
 try:
     from zxcvbn import zxcvbn
 except ImportError:
     zxcvbn = None
 
-ALGOS = ["AES-256-GCM", "AES-256-CTR", "ChaCha20-Poly1305"]
+ALGOS = ["AES-256-GCM",
+         "AES-256-CTR",
+         "ChaCha20-Poly1305",
+         "XChaCha20-Poly1305"]  # novo item
 
 # ══════════════════════ worker ═══════════════════════════════════════════
 class CryptoWorker(QThread):
@@ -173,11 +187,18 @@ class MainWindow(QWidget):
         self.chk_archive = QCheckBox("Archive folder before encrypt (ZIP)")
         
         # Action buttons
-        self.btn_enc = AccentButton("Encrypt")
-        self.btn_dec = AccentButton("Decrypt")
+        self.btn_enc    = AccentButton("Encrypt")
+        self.btn_dec    = AccentButton("Decrypt")
+        self.btn_cancel = AccentButton("Cancel")       # botão moderno
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self._cancel_current_task)
         self.btn_enc.clicked.connect(lambda: self._start(True))
         self.btn_dec.clicked.connect(lambda: self._start(False))
-        lay_btn = QHBoxLayout(); lay_btn.addWidget(self.btn_enc); lay_btn.addWidget(self.btn_dec); lay_btn.addStretch()
+        lay_btn = QHBoxLayout()
+        lay_btn.addWidget(self.btn_enc)
+        lay_btn.addWidget(self.btn_dec)
+        lay_btn.addWidget(self.btn_cancel)
+        lay_btn.addStretch()
 
         # Progress + speed
         self.prg = QProgressBar()
@@ -304,16 +325,23 @@ class MainWindow(QWidget):
  
         algo_idx = self.cmb_alg.currentIndex()
         profile  = list(SecurityProfile)[self.cmb_prof.currentIndex()]
-        # choose encrypt/decrypt funcs
-        if algo_idx == 0:
+        # Escolher funções de (des)criptografia conforme algoritmo
+        if algo_idx == 0:                       # AES‑GCM
             func_enc, func_dec = encrypt_aes, decrypt_aes
-        elif algo_idx == 1:
+        elif algo_idx == 1:                     # AES‑CTR
             func_enc, func_dec = encrypt_ctr, decrypt_ctr
-        else:
+        elif algo_idx == 2:                     # ChaCha20‑Poly1305
             size = Path(src).stat().st_size
             stream       = size >= STREAMING_THRESHOLD
             func_enc     = encrypt_chacha_stream if stream else encrypt_chacha
             func_dec     = decrypt_chacha_stream if stream else decrypt_chacha
+        else:                                   # XChaCha20‑Poly1305
+            size = Path(src).stat().st_size
+            stream = size >= STREAMING_THRESHOLD
+            func_enc = (encrypt_xchacha_stream if stream
+                        else encrypt_xchacha)
+            func_dec = (decrypt_xchacha_stream if stream
+                        else decrypt_xchacha)
  
         delete_flag = self.chk_del.isChecked() if encrypt else False
         self._tmp_zip = tmp_zip
@@ -338,12 +366,26 @@ class MainWindow(QWidget):
         self.worker.error.connect(self._err)
         self._t_start = time.time()
         self.worker.start(); self.pwd.clear()
+        self.btn_cancel.setEnabled(True)
+
+    # ────────────── Cancelamento ──────────────
+    def _cancel_current_task(self):
+        if hasattr(self, "worker") and self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.status.showMessage("⏹️  Operação cancelada.", 5000)
+            self.btn_cancel.setEnabled(False)
+            self._toggle(True)
 
     def _progress(self, done: int, elapsed: float):
-        pct = int(min(done * 100 / self._total_bytes, 99))
+        pct = round(done * 100 / self._total_bytes)
+        if pct > 100:
+            pct = 100
         self.prg.setValue(pct)
+
         speed = (done / elapsed) / 1_048_576 if elapsed else 0.0
-        self.lbl_speed.setText(f"Speed: {speed:,.1f} MB/s")
+        self.lbl_speed.setText(
+            f"Speed: {locale.format_string('%.1f', speed, grouping=True)} MB/s"
+        )
  
     def _done(self, out_path: str):
         self.prg.setValue(100)                       # garante 100 %
@@ -351,19 +393,30 @@ class MainWindow(QWidget):
             Path(self._tmp_zip).unlink(missing_ok=True)
         QMessageBox.information(self, "Success", f"Output file:\n{out_path}")
         self.status.showMessage("✔️ Done.", 8000)
+        self.btn_cancel.setEnabled(False)
         self._toggle(True)
 
     def _err(self, msg: str):
         if getattr(self, "_tmp_zip", None):
             try: os.remove(self._tmp_zip)
             except Exception: pass
-        QMessageBox.critical(self, "Error", msg)
-        self.status.showMessage(f"Error: {msg}", 10000)
+        friendly = self._translate_error(msg)
+        QMessageBox.critical(self, "Erro", friendly)
+        self.status.showMessage(f"Error: {friendly}", 10000)
+        self.btn_cancel.setEnabled(False)
         self._toggle(True)
 
     def _toggle(self, enable: bool):
-        for w in (self.btn_enc, self.btn_dec, self.cmb_alg, self.cmb_prof, self.chk_del):
+        for w in (self.btn_enc, self.btn_dec, self.cmb_alg,
+                  self.cmb_prof, self.chk_del):
             w.setEnabled(enable)
+        if hasattr(self, "btn_cancel"):
+            self.btn_cancel.setEnabled(not enable)
+
+    def _translate_error(self, msg: str) -> str:
+        if "InvalidTag" in msg or "MAC check failed" in msg:
+            return "Senha ou arquivo incorretos."
+        return msg
 
 # ══════════════════════ main ═══════════════════════════════════════════════
 if __name__ == "__main__":
