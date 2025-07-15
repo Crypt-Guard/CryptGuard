@@ -83,6 +83,7 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
 
     rs_use = USE_RS and RS_PARITY_BYTES > 0
     pq, futures = queue.PriorityQueue(), []
+    processed = 0                           # NOVO
     total_chunks = 0
     
     with src.open("rb") as fin, concurrent.futures.ThreadPoolExecutor() as ex:
@@ -104,7 +105,12 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
                     f.cancel()
                 break
             else:
-                pq.put(fut.result())
+                idx2, payload = fut.result()
+                pq.put((idx2, payload))
+                processed += len(payload)              # bytes prontos
+                if progress_cb:
+                    # Garante que nunca passa de 100 %
+                    progress_cb(min(processed, size))
         
         if errors:
             enc_obf.clear(); master.clear(); pwd_sb.clear()
@@ -115,12 +121,10 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
         enc_obf.clear(); master.clear(); pwd_sb.clear()
         raise RuntimeError(f"Chunk count mismatch: expected {total_chunks}, got {pq.qsize()}")
 
-    out = bytearray()
-    out += salt + MAGIC + b"XCS3"                # header para stream XChaCha
+    out = bytearray(salt + MAGIC + b"XCS3")                # header para stream XChaCha
     while not pq.empty():
-        _, payload = pq.get(); out += payload
-        if progress_cb:
-            progress_cb(len(out))
+        _, payload = pq.get()
+        out += payload
 
     # Use temporary file during write
     dest = src.with_suffix(src.suffix + ENC_EXT)
@@ -128,8 +132,18 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
     
     try:
         write_atomic_secure(dest_temp, bytes(out))
-        dest_temp.rename(dest)
-        dest = pack_enc_zip(dest)
+        dest_temp.rename(dest)              # cria foo.enc
+
+        hmac_hex = (hmac.new(hmac_key, dest.read_bytes(), hashlib.sha256)
+                    .hexdigest() if SIGN_METADATA else None)
+        meta = dict(alg="XCHACHA_STREAM", profile=profile.name, use_rs=rs_use,
+                    rs_bytes=RS_PARITY_BYTES if rs_use else 0,
+                    chunk=CHUNK_SIZE, size=size, hmac=hmac_hex,
+                    ts=int(time.time()))
+        encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT),
+                          meta, pwd_sb)     # grava foo.enc.meta
+
+        dest = pack_enc_zip(dest)           # agora inclui .enc + .enc.meta
     except Exception as e:
         dest_temp.unlink(missing_ok=True)
         enc_obf.clear(); master.clear(); pwd_sb.clear()
@@ -183,6 +197,7 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
             rs_use = meta["use_rs"]
 
             pq, futures = queue.PriorityQueue(), []
+            processed = 0                           # NOVO
             ex = concurrent.futures.ThreadPoolExecutor()
             total_chunks = 0
             
@@ -210,7 +225,12 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
                             f.cancel()
                         break
                     else:
-                        pq.put(fut.result())
+                        idx2, chunk = fut.result()
+                        pq.put((idx2, chunk))
+                        processed += len(chunk)              # bytes prontos
+                        if progress_cb:
+                            # Garante que nunca passa de 100 %
+                            progress_cb(min(processed, meta["size"]))
                 
                 if errors:
                     raise errors[0]
@@ -224,7 +244,8 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
 
         with dest_temp.open("wb") as fout:
             while not pq.empty():
-                _, chunk = pq.get(); fout.write(chunk)
+                _, chunk = pq.get()
+                fout.write(chunk)
 
         if SIGN_METADATA and meta["hmac"]:
             calc = hmac.new(hmac_key, src.read_bytes(), hashlib.sha256).hexdigest()

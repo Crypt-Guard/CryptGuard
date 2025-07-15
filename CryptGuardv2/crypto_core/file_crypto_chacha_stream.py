@@ -52,6 +52,8 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
 
     rs_use = USE_RS and RS_PARITY_BYTES>0
     pq, futures = queue.PriorityQueue(), []
+    processed = 0                           # NOVO
+    
     with src.open("rb") as fin, concurrent.futures.ThreadPoolExecutor() as ex:
         idx = 0
         while (chunk := fin.read(CHUNK_SIZE)):
@@ -71,7 +73,12 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
                     f.cancel()
                 break
             else:
-                pq.put(fut.result())
+                idx2, payload = fut.result()
+                pq.put((idx2, payload))
+                processed += len(payload)              # bytes prontos
+                if progress_cb:
+                    # Garante que nunca passa de 100 %
+                    progress_cb(min(processed, size))
         
         if errors:
             enc_obf.clear(); master_obf.clear()
@@ -82,10 +89,10 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
         enc_obf.clear(); master_obf.clear()
         raise RuntimeError(f"Chunks processados ({pq.qsize()}) != esperados ({total_chunks})")
 
-    out = bytearray(); out += salt + MAGIC + b"CHS3"
+    out = bytearray(salt + MAGIC + b"CHS3")
     while not pq.empty():
-        _, payload = pq.get(); out += payload
-        if progress_cb: progress_cb(len(out))
+        _, payload = pq.get()
+        out += payload
 
     enc_path = src.with_suffix(src.suffix + ENC_EXT)
     temp_path = enc_path.with_suffix(enc_path.suffix + ".part")
@@ -145,6 +152,7 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         rs_use = meta["use_rs"]
 
         pq, futures = queue.PriorityQueue(), []
+        processed = 0                           # NOVO
         ex = concurrent.futures.ThreadPoolExecutor()
         idx = 0
         while (hdr := fin.read(12+4)):
@@ -165,7 +173,12 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
                     f.cancel()
                 break
             else:
-                pq.put(fut.result())
+                idx2, chunk = fut.result()
+                pq.put((idx2, chunk))
+                processed += len(chunk)              # bytes prontos
+                if progress_cb:
+                    # Garante que nunca passa de 100 %
+                    progress_cb(min(processed, meta["size"]))
         
         ex.shutdown(wait=False)
         
@@ -185,7 +198,8 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
     try:
         with temp_dest.open("wb") as fout:
             while not pq.empty():
-                _, chunk = pq.get(); fout.write(chunk)
+                _, chunk = pq.get()
+                fout.write(chunk)
 
         if SIGN_METADATA and meta["hmac"]:
             calc = hmac.new(hmac_key, src.read_bytes(), hashlib.sha256).hexdigest()
