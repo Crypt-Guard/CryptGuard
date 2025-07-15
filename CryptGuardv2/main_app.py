@@ -391,7 +391,9 @@ class MainWindow(QWidget):
         self.prg.setValue(100)                       # garante 100 %
         if hasattr(self, "_tmp_zip") and self._tmp_zip:
             Path(self._tmp_zip).unlink(missing_ok=True)
-        QMessageBox.information(self, "Success", f"Output file:\n{out_path}")
+        # Se empacotado em ZIP, mostra nome do ZIP
+        QMessageBox.information(self, "Success",
+                                f"Output file:\n{Path(out_path).name}")
         self.status.showMessage("✔️ Done.", 8000)
         self.btn_cancel.setEnabled(False)
         self._toggle(True)
