@@ -5,6 +5,11 @@ CryptGuard v2 – Modern GUI
 """
 from __future__ import annotations
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import sys, time, os, secrets, locale
 from pathlib import Path
 from typing import Optional
@@ -358,7 +363,11 @@ class MainWindow(QWidget):
                 self._total_bytes = Path(src).stat().st_size
 
         self._toggle(False)
+        # Set progress bar to indeterminate mode for key derivation
+        self.prg.setMaximum(0)
         self.prg.setValue(0)
+        self.status.showMessage("Deriving key (Argon2)…")
+        
         func = func_enc if encrypt else func_dec
         self.worker = CryptoWorker(func, src, pwd, profile, delete_flag)
         self.worker.progress.connect(self._progress)
@@ -377,6 +386,11 @@ class MainWindow(QWidget):
             self._toggle(True)
 
     def _progress(self, done: int, elapsed: float):
+        # Switch back to normal progress mode on first progress update
+        if self.prg.maximum() == 0:
+            self.prg.setMaximum(100)
+            self.status.showMessage("Processing…")
+        
         pct = round(done * 100 / self._total_bytes)
         if pct > 100:
             pct = 100
@@ -384,7 +398,7 @@ class MainWindow(QWidget):
 
         speed = (done / elapsed) / 1_048_576 if elapsed else 0.0
         self.lbl_speed.setText(
-            f"Speed: {locale.format_string('%.1f', speed, grouping=True)} MB/s"
+            f"Speed: {locale.format_string('%.1f', speed, grouping=True)} MB/s"
         )
  
     def _done(self, out_path: str):
