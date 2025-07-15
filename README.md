@@ -14,7 +14,7 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 1.  **Authenticated Encryption**
 
-      * AES‑256‑GCM, ChaCha20‑Poly1305 **ou XChaCha20‑Poly1305** (24‑byte nonce).
+      * AES‑256‑GCM, ChaCha20‑Poly1305 **or XChaCha20‑Poly1305** (24‑byte nonce).
 
 2.  **Argon2id KDF**
 
@@ -24,7 +24,7 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 3.  **Smart Encryption Modes**
 
       * **Single‑Shot** ≤ 10 MiB (AES / ChaCha / **XChaCha**).
-      * **Streaming** ≥ 100 MiB com paralelismo (AES, ChaCha, **XChaCha**).
+      * **Streaming** ≥ 100 MiB with parallelism (AES, ChaCha, **XChaCha**).
 
 4.  **Integrity & Redundancy**
 
@@ -50,7 +50,7 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 9.  **User-Friendly GUI**
 
-      * Drag‑&‑drop, confirm‑password, medidor zxcvbn, **botão Cancel**, diálogo único Arquivo/Pasta, barra de progresso 0–100 %, velocímetro locale‑aware, secure‑delete toggle.
+      * Drag‑&‑drop, confirm‑password, zxcvbn meter, **Cancel button**, single File/Folder dialog, 0–100% progress bar, locale‑aware speedometer, secure‑delete toggle.
 
 10. **One-File Executable**
 
@@ -62,11 +62,11 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 | Category             | Highlights                                                                 |
 | -------------------- | -------------------------------------------------------------------------- |
-| **Encryption**       | Novo **XChaCha20‑Poly1305** (single & streaming, nonce 24 B randômico).    |
-| **UX**               | Botão **Cancel**, picker único, feedback imediato de progresso, velocímetro.|
-| **Performance**      | Streaming XChaCha zero‑copy; progress‑callback chunk‑a‑chunk.              |
-| **Security**         | Log ACL no Windows, SecureBytes `__del__`, secure‑delete para pastas.      |
-| **Robustez**         | Rate‑limit migrado para **SQLite** compartilhado, prompt auto‑calibração Argon2. |
+| **Encryption**       | New **XChaCha20‑Poly1305** (single & streaming, 24 B random nonce).        |
+| **UX**               | **Cancel** button, single picker, immediate progress feedback, speedometer.|
+| **Performance**      | Zero-copy XChaCha streaming; chunk-by-chunk progress callback.             |
+| **Security**         | ACL logging on Windows, SecureBytes `__del__`, secure-delete for folders.  |
+| **Robustness**       | Rate-limit migrated to shared **SQLite**, auto-calibration prompt for Argon2. |
 
 -----
 
@@ -74,7 +74,7 @@ It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon
 
 ### 1\) Ready-to-use Executable (Windows)
 
-1.  Download `CryptGuard.exe` from the [link suspeito removido] tab.
+1.  Download `CryptGuard.exe` from the [Releases] tab.
 2.  Run with a double-click **or** via the terminal:
 
 <!-- end list -->
