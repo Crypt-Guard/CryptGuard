@@ -5,6 +5,17 @@ import mmap, secrets, ctypes, platform   # atualização de imports
 
 _PASSES = [0xFF, 0x00, 0x55, 0xAA]  # padrão DoD + random extra
 
+def memset(ptr, value, size):
+    """Cross-platform memset implementation"""
+    try:
+        if platform.system() == "Windows":
+            ctypes.windll.msvcrt.memset(ptr, value, size)
+        else:
+            libc = ctypes.CDLL("libc.so.6")
+            libc.memset(ptr, value, size)
+    except Exception:
+        pass
+
 def _mlock(buf):
     try:
         if platform.system() == "Windows":

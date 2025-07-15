@@ -12,6 +12,27 @@ class SecurityProfile(Enum):
     BALANCED = auto()
     SECURE   = auto()
 
+ALGORITHMS = {
+    "AES-GCM": {
+        "module": "file_crypto_aes_gcm",
+        "encrypt": "encrypt_file",
+        "decrypt": "decrypt_file",
+        "nonce": 16,
+    },
+    "ChaCha20-Poly1305": {
+        "module": "file_crypto_chacha",
+        "encrypt": "encrypt_file",
+        "decrypt": "decrypt_file",
+        "nonce": 12,
+    },
+    "XChaCha20-Poly1305": {
+        "module": "file_crypto_xchacha",
+        "encrypt": "encrypt_file",
+        "decrypt": "decrypt_file",
+        "stream": False,       # streaming usará outro módulo se criar depois
+    },
+}
+
 # Esses valores podem ser substituídos em tempo de execução por calibração
 ARGON_PARAMS = {
     SecurityProfile.FAST:     dict(time_cost=1, memory_cost=64*1024,  parallelism=4),

@@ -1,5 +1,5 @@
 """
-Utilidades gerais: escrita atómica, JSON e exclusão segura.
+Utilidades gerais: escrita atômica, JSON e exclusão segura.
 """
 import os, json, secrets, tempfile
 from pathlib import Path
@@ -27,10 +27,22 @@ def generate_unique_filename(base:str, ext:str="") -> str:
     return f"{base}_{secrets.token_hex(4)}{ext}"
 
 # ───── exclusão segura ─────────────────────────────────────────────────
-def secure_delete(path:str|os.PathLike, passes:int=1) -> None:
-    """Sobrescreve o arquivo com bytes aleatórios e remove."""
+def secure_delete(path:str|os.PathLike, passes:int=3) -> None:
+    """
+    Overwrite a *file* **ou** cada arquivo dentro de um *diretório*
+    (recursivamente) e, por fim, removê-lo(s).
+    """
     p = Path(path)
-    if not p.exists(): return
+    if p.is_dir():
+        for child in p.rglob('*'):
+            secure_delete(child, passes=passes)
+        try:
+            p.rmdir()
+        except OSError:
+            pass
+        return
+    if not p.is_file():
+        return
     length = p.stat().st_size
     with p.open("r+b", buffering=0) as f:
         for _ in range(max(1, passes)):

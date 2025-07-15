@@ -7,7 +7,7 @@ file_crypto_chacha.py  –  ChaCha20-Poly1305 (single-shot)
 """
 
 from __future__ import annotations
-import math, os, struct, secrets, hmac, hashlib, time
+import math, os, struct, secrets, hmac, hashlib, time, mmap, tempfile, shutil
 from pathlib import Path
 from typing  import Callable, Optional
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -83,34 +83,42 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
     if not check_allowed(enc_path):
         raise RuntimeError("Limite de tentativas excedido – aguarde.")
 
-    src  = Path(enc_path); blob = src.read_bytes()
-    salt, magic, tag_alg = blob[:16], blob[16:20], blob[20:24]
-    if magic!=MAGIC or tag_alg!=b"CH20": raise ValueError("Formato inválido.")
+    src = Path(enc_path)
+    
+    # Use mmap for memory-efficient file reading
+    with open(src, "rb") as f_src, \
+         mmap.mmap(f_src.fileno(), 0, access=mmap.ACCESS_READ) as blob:
+        
+        salt, magic, tag_alg = blob[:16], blob[16:20], blob[20:24]
+        if magic!=MAGIC or tag_alg!=b"CH20": raise ValueError("Formato inválido.")
 
-    n_sub, = struct.unpack("<I", blob[24:28])
-    master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
-    with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
+        n_sub, = struct.unpack("<I", blob[24:28])
+        master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+        with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
 
-    meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
-    rs_use = meta["use_rs"]
+        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
+        rs_use = meta["use_rs"]
 
-    pos = 28; plain = bytearray(); processed = 0
-    for _ in range(n_sub):
-        nonce = blob[pos:pos+12]; pos+=12
-        (clen,) = struct.unpack("<I", blob[pos:pos+4]); pos+=4
-        ct  = blob[pos:pos+clen]; pos+=clen
-        plain += _dec_block(nonce, ct, enc_key, rs_use)
-        processed += len(plain)
-        if progress_cb: progress_cb(processed)
+        pos = 28; plain = bytearray(); processed = 0
+        for _ in range(n_sub):
+            nonce = blob[pos:pos+12]; pos+=12
+            (clen,) = struct.unpack("<I", blob[pos:pos+4]); pos+=4
+            ct  = blob[pos:pos+clen]; pos+=clen
+            plain += _dec_block(nonce, ct, enc_key, rs_use)
+            processed += len(plain)
+            if progress_cb: progress_cb(processed)
 
     dest = src.with_name(src.stem)
     write_atomic_secure(dest, bytes(plain))
 
     if SIGN_METADATA and meta["hmac"]:
-        calc = hmac.new(hmac_key, src.read_bytes(), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(calc, meta["hmac"]):
-            register_failure(enc_path)
-            raise ValueError("Falha na verificação HMAC.")
+        # Re-read file for HMAC verification using mmap
+        with open(src, "rb") as f_hmac, \
+             mmap.mmap(f_hmac.fileno(), 0, access=mmap.ACCESS_READ) as hmac_data:
+            calc = hmac.new(hmac_key, hmac_data, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(calc, meta["hmac"]):
+                register_failure(enc_path)
+                raise ValueError("Falha na verificação HMAC.")
     reset(enc_path)
 
     master_obf.clear()

@@ -11,7 +11,7 @@ file_crypto.py  –  AES-256-GCM (streaming) v3
 from __future__ import annotations
 import os, time, hmac, hashlib, struct, secrets, queue, concurrent.futures
 from pathlib import Path
-from typing  import Callable, Optional
+from typing  import Callable, Optional, Dict
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf     import HKDF
@@ -71,7 +71,6 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
         enc_key, hmac_key = _hkdf(master)
 
     rs_use  = USE_RS and RS_PARITY_BYTES > 0
-    pq      = queue.PriorityQueue()
     workers = _optimal_workers(size)
     processed = 0
     start = time.time()
@@ -85,28 +84,40 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
             futures.append(ex.submit(_enc_chunk, idx, chunk, nonce, enc_key))
             idx += 1
 
-        for fut in concurrent.futures.as_completed(futures):
-            i, payload = fut.result()
-            if rs_use:
-                # ------- reparar comprimento -------
-                nonce    = payload[:12]
-                tag      = payload[12:28]
-                # skip past (12 nonce + 16 tag + 4 old length)
-                cipher   = payload[32:]
-                cipher_rs = rs_encode_data(cipher, RS_PARITY_BYTES)
+        out_path = src.with_suffix(src.suffix + ENC_EXT)
+        with out_path.open("wb") as fout:
+            fout.write(salt + MAGIC + b"AESG")
+            
+            # Escreve no destino assim que o próximo índice esperado estiver pronto
+            expected = 0
+            pending: Dict[int, bytes] = {}
+            for fut in concurrent.futures.as_completed(futures):
+                i, payload = fut.result()
+                if rs_use:
+                    # ------- reparar comprimento -------
+                    nonce    = payload[:12]
+                    tag      = payload[12:28]
+                    # skip past (12 nonce + 16 tag + 4 old length)
+                    cipher   = payload[32:]
+                    cipher_rs = rs_encode_data(cipher, RS_PARITY_BYTES)
 
-                new_len  = struct.pack("<I", len(cipher_rs))
-                payload  = nonce + tag + new_len + cipher_rs
-            pq.put((i, payload))
-
-    out_path = src.with_suffix(src.suffix + ENC_EXT)
-    with out_path.open("wb") as fout:
-        fout.write(salt + MAGIC + b"AESG")
-        while not pq.empty():
-            _, pl = pq.get()
-            fout.write(pl)
-            processed += len(pl) - (12+16+4)
-            if progress_cb: progress_cb(processed)
+                    new_len  = struct.pack("<I", len(cipher_rs))
+                    payload  = nonce + tag + new_len + cipher_rs
+                
+                if i == expected:
+                    fout.write(payload)
+                    processed += len(payload) - (12+16+4)
+                    if progress_cb: progress_cb(processed)
+                    expected += 1
+                    # flush cadeia já em cache
+                    while expected in pending:
+                        pl = pending.pop(expected)
+                        fout.write(pl)
+                        processed += len(pl) - (12+16+4)
+                        if progress_cb: progress_cb(processed)
+                        expected += 1
+                else:
+                    pending[i] = payload
 
     # HMAC global
     hmac_hex = None
@@ -162,19 +173,30 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
             futures.append(ex.submit(_dec_chunk, idx, hdr[:28], cipher, enc_key))
             idx += 1
 
-        for fut in concurrent.futures.as_completed(futures):
-            pq.put(fut.result())
-
     orig_name = src.name[:-len(ENC_EXT)]                    # strip only ".enc"
     stem, ext = os.path.splitext(orig_name)                 # split name + original ext
     dest = src.with_name(f"{stem}_{secrets.token_hex(4)}{ext}")
     processed = 0
     with dest.open("wb") as fout:
-        while not pq.empty():
-            _, chunk = pq.get()
-            fout.write(chunk)
-            processed += len(chunk)
-            if progress_cb: progress_cb(processed)
+        # Escreve no destino assim que o próximo índice esperado estiver pronto
+        expected = 0
+        pending: Dict[int, bytes] = {}
+        for fut in concurrent.futures.as_completed(futures):
+            idx, chunk = fut.result()
+            if idx == expected:
+                fout.write(chunk)
+                processed += len(chunk)
+                if progress_cb: progress_cb(processed)
+                expected += 1
+                # flush cadeia já em cache
+                while expected in pending:
+                    chunk = pending.pop(expected)
+                    fout.write(chunk)
+                    processed += len(chunk)
+                    if progress_cb: progress_cb(processed)
+                    expected += 1
+            else:
+                pending[idx] = chunk
 
     # HMAC verify
     if SIGN_METADATA and meta["hmac"]:
