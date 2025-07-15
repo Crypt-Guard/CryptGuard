@@ -176,4 +176,5 @@ No warranties; use at your own risk.
 
 argon2-cffi, cryptography, PySide6, reedsolo, psutil, zxcvbn-python.
 
+<p><em>Stay safe &amp; encrypt everything.</em></p></body></html><!--EndFragment-->
 **CryptGuard v2 – Secure • Modern • User-Friendly**
