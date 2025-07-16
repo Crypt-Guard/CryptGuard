@@ -86,7 +86,7 @@ CryptGuard.exe
 ### 2\) Running from source code (Python 3.9+)
 
 ```bash
-git clone https://github.com/YourUser/CryptGuardv2.git
+git clone https://github.com/Crypt-Guard/CryptGuard.git
 cd CryptGuardv2
 pip install -r requirements.txt
 python main_app.py          # starts GUI
