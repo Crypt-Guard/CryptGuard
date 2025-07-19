@@ -42,7 +42,7 @@ ARGON_PARAMS = {
     SecurityProfile.SECURE:   dict(time_cost=6, memory_cost=256*1024, parallelism=4),
 }
 
-META_ARGON_PARAMS   = dict(time_cost=1, memory_cost=32*1024, parallelism=2)
+META_ARGON_PARAMS   = dict(time_cost=2, memory_cost=32*1024, parallelism=2)
 DEFAULT_ARGON_PARAMS = ARGON_PARAMS[SecurityProfile.BALANCED]
 
 STREAMING_THRESHOLD       = 100 * 1024 * 1024
