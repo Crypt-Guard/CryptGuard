@@ -1,127 +1,92 @@
-# 🔐 CryptGuardv2 – Version 2.6.0  <sub>(July 2025)</sub>
+# 🔐 CryptGuard v2 – Version 2.6.1  (July 2025)
 
-[](https://www.google.com/search?q=LICENSE)
-[](https://www.python.org/)
-[](https://www.google.com/search?q=%23-security-recommendations)
-[](https://www.google.com/search?q=CONTRIBUTING.md)
+&#x20;&#x20;
 
-**CryptGuard v2** is a **modern** and **user-friendly** file encryption solution for Windows (macOS/Linux roadmap).
-It combines **AES-256-GCM** and **ChaCha20-Poly1305**, derives keys with **Argon2id**, applies memory protection, optional Reed–Solomon, and a sleek PySide6 interface.
+**CryptGuard v2** is a **modern**, **cross‑platform** and **user‑friendly** file‑encryption suite. It blends state‑of‑the‑art cryptography (AES‑256‑GCM, XChaCha20‑Poly1305) with hardened key management, memory‑safety primitives and a sleek Qt‑based interface.
 
------
+---
 
 ## ✨ Key Features
 
-1.  **Authenticated Encryption**
+| #  | Capability                   | Details                                                                                                 |
+| -- | ---------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 1  | **Authenticated Encryption** | AES‑256‑GCM, ChaCha20‑Poly1305 or **XChaCha20‑Poly1305** (24‑byte random nonce).                        |
+| 2  | **Argon2id KDF – Profiles**  | *Fast*, *Balanced* (default) or *Secure* \| auto‑calibration (`--calibrate-kdf`).                       |
+| 3  | **HKDF‑Salted Key Split**    | Single HKDF‑SHA256 call ⇢ 32 B `enc_key` ‖ 32 B `hmac_key` (salt = Argon2 salt).                        |
+| 4  | **Smart Modes**              | < 10 MiB → single‑shot; ≥ 100 MiB → **streaming** with multithreaded chunk‑pipeline.                    |
+| 5  | **Integrity & Redundancy**   | Global HMAC‑SHA256 (post‑v2.6 fix) + optional Reed–Solomon parity per chunk.                            |
+| 6  | **Encrypted Metadata**       | File name + crypto params sealed with ChaCha20‑Poly1305.                                                |
+| 7  | **Secure Memory**            | `SecureBytes` (mlock/VirtualLock + multi‑pass zeroize) & `KeyObfuscator` hardened with `ctypes.memset`. |
+| 8  | **Rate‑Limiter**             | Exponential delay per file (SQLite) to thwart brute‑force attacks.                                      |
+| 9  | **Process Hardening**        | DEP, anti‑debug, no core‑dump (`--harden`) on Windows; sandbox hints on Linux.                          |
+| 10 | **Polished GUI**             | Drag‑&‑drop • password strength meter • Cancel button • secure‑delete toggle • progress bar w/ speed.   |
 
-      * AES‑256‑GCM, ChaCha20‑Poly1305 **or XChaCha20‑Poly1305** (24‑byte nonce).
+---
 
-2.  **Argon2id KDF**
+## 🆕 What’s New in v2.6.1
 
-      * Profiles: **Fast**, **Balanced** (default), **Secure**.
-      * Automatic calibration `--calibrate-kdf`.
+| Area           | Change                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| **Integrity**  | ✅ **Unified HKDF** across all back‑ends (AES/ChaCha/XChaCha/CTR) – verification bug fixed.         |
+| **Security**   | HKDF now receives the **same 16 B Argon2 salt**, strengthening the *extract* phase.                |
+| **Memory**     | `KeyObfuscator.clear()` now zeroes native buffers via `ctypes.memset`.                             |
+| **Robustness** | Atomic file finalisation with `os.replace()`; clearer SecurityWarnings accept `str` or `Severity`. |
+| **Docs**       | Totally revamped README, updated architecture diagram & usage examples.                            |
 
-3.  **Smart Encryption Modes**
-
-      * **Single‑Shot** ≤ 10 MiB (AES / ChaCha / **XChaCha**).
-      * **Streaming** ≥ 100 MiB with parallelism (AES, ChaCha, **XChaCha**).
-
-4.  **Integrity & Redundancy**
-
-      * Global HMAC-SHA256 over `.enc`.
-      * **Reed–Solomon** (32 B) per chunk (optional).
-
-5.  **Encrypted Metadata**
-
-      * Salt + Nonce + ChaCha20-Poly1305 guarding the original name and parameters.
-
-6.  **Secure Memory Handling**
-
-      * `SecureBytes` (mlock/VirtualLock + zeroize).
-      * `KeyObfuscator` (XOR-mask + timed exposure).
-
-7.  **Local Rate-Limiter**
-
-      * Exponential delay per file (`tries.db`) to mitigate brute-force.
-
-8.  **Process Hardening** (Windows)
-
-      * Permanent DEP, anti-debug, no core-dump (`--harden`).
-
-9.  **User-Friendly GUI**
-
-      * Drag‑&‑drop, confirm‑password, zxcvbn meter, **Cancel button**, single File/Folder dialog, 0–100% progress bar, locale‑aware speedometer, secure‑delete toggle.
-
-10. **One-File Executable**
-
-      * Build via PyInstaller `--onefile --windowed --icon cryptguard.ico`.
-
------
-
-## 🆕 What's New in v2.6.0
-
-| Category             | Highlights                                                                 |
-| -------------------- | -------------------------------------------------------------------------- |
-| **Encryption**       | New **XChaCha20‑Poly1305** (single & streaming, 24 B random nonce).        |
-| **UX**               | **Cancel** button, single picker, immediate progress feedback, speedometer.|
-| **Performance**      | Zero-copy XChaCha streaming; chunk-by-chunk progress callback.             |
-| **Security**         | ACL logging on Windows, SecureBytes `__del__`, secure-delete for folders.  |
-| **Robustness**       | Rate-limit migrated to shared **SQLite**, auto-calibration prompt for Argon2. |
-
------
+---
 
 ## 🚀 Getting Started
 
-### 1\) Ready-to-use Executable (Windows)
+### 1) Ready‑to‑Use Executable (Windows)
 
-1.  Download `CryptGuard.exe` from the [Releases] tab.
-2.  Run with a double-click **or** via the terminal:
-
-<!-- end list -->
+1. Download the latest `CryptGuard.exe` from the **Releases** tab.
+2. Double‑click or launch from a console:
 
 ```bash
 CryptGuard.exe
 ```
 
-### 2\) Running from source code (Python 3.9+)
+### 2) Run from Source (Python 3.11+)
 
 ```bash
 git clone https://github.com/Crypt-Guard/CryptGuard.git
 cd CryptGuardv2
+python -m venv .venv && source .venv/bin/activate  # on Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python main_app.py          # starts GUI
+python main_app.py         # starts GUI
 ```
 
-Fine-tuning (Argon2 profiles, chunk size) in `crypto_core/config.py`.
-
-### 3\) Build one-file executable
+### 3) Build One‑File Executable
 
 ```bash
 pip install pyinstaller pillow
-pyinstaller --onefile --windowed --icon cryptguard.ico main_app.py
+pyinstaller --onefile --windowed --icon assets/cryptguard.ico main_app.py
 ```
 
-### 🔑 Typical Usage (CLI)
+### 🔑 CLI Quick Start
 
 ```bash
-# calibrate Argon2 for ~0.5s on your machine
+# Argon2 calibration (~0.5 s target)
 python -m crypto_core --calibrate-kdf
 
-# enable extra hardening
+# Enable hardening
 python -m crypto_core --harden
 
-# encrypt
+# Encrypt a file (auto‑detects optimum mode)
 python -m crypto_core encrypt path/to/file.pdf
 
-# decrypt
+# Verify integrity without decrypting
+python -m crypto_core verify file.pdf.enc
+
+# Decrypt
 python -m crypto_core decrypt file.pdf.enc
 ```
 
------
+---
 
 ## 🗂️ Project Structure
 
-```
+```text
 CryptGuardv2/
  ├─ crypto_core/
  │   ├─ __init__.py
@@ -129,6 +94,8 @@ CryptGuardv2/
  │   ├─ logger.py
  │   ├─ utils.py
  │   ├─ secure_bytes.py
+ │   ├─ hkdf_utils.py
+ │   ├─ verify_integrity.py
  │   ├─ key_obfuscator.py
  │   ├─ argon_utils.py
  │   ├─ rs_codec.py
@@ -144,38 +111,45 @@ CryptGuardv2/
  │   ├─ file_crypto_chacha_stream.py
  │   ├─ file_crypto_xchacha.py
  │   └─ file_crypto_xchacha_stream.py
- └─ main_app.py
+ ├─ assets/cryptguard.ico
+ └─ main_app.py                   # PySide6 launcher
 ```
 
------
+---
 
-## ⚠️ Security Recommendations
+## ⚠️ Security Best Practices
 
-  * Use strong passwords (phrases ≥ 4 words or ≥ 12 varied characters).
-  * Back up `.enc` and `.meta` files to external media.
-  * Enable `--harden` in sensitive environments.
-  * For SSDs, secure-delete is better than nothing, but consider full-disk encryption.
+- Choose passphrases ≥ 4 random words or ≥ 12 high‑entropy characters.
+- Back up `.enc` + `.meta` files to offline media.
+- Enable *secure‑delete* on spinning disks (SSD still keeps remnants – prefer full‑disk encryption).
+- Run `--harden` in hostile or production environments.
+- Keep CryptGuardv2 and its dependencies up‑to‑date.
 
------
+---
 
 ## 🤝 Contributing
 
-Fork ➜ branch ➜ commits with pytest tests ➜ Pull Request.
-See `CONTRIBUTING.md`.
+1. Fork → new branch → implement feature / fix (with pytest tests).
+2. Ensure `pre-commit run --all-files` passes.
+3. Open a Pull Request describing **what** and **why**.
 
------
+See **CONTRIBUTING.md** for coding style & signing guidelines.
+
+---
 
 ## 📜 License & Disclaimer
 
-Apache 2.0 – see `LICENSE`.
-No warranties; use at your own risk.
+CryptGuard v2 is distributed under the **Apache License 2.0**.\
+Use at your own risk; no warranties expressed or implied.
 
------
+---
 
 ## 🙏 Acknowledgments
 
-argon2-cffi, cryptography, PySide6, reedsolo, psutil, zxcvbn-python.
+- **argon2‑cffi** – password hashing & KDF
+- **cryptography** – AES & ChaCha primitives
+- **PySide6 / Qt** – cross‑platform GUI
+- **reedsolo** – Reed–Solomon codec
+- **zxcvbn‑python** – password strength meter
 
-<p><em>Stay safe &amp; encrypt everything.</em></p></body></html><!--EndFragment-->
-
-**CryptGuard v2 – Secure • Modern • User-Friendly**
+> *Stay safe & encrypt everything.*
