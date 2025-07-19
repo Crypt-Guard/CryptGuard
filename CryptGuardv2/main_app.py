@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CryptGuard v2 – Modern GUI
+CryptGuardv2 – Modern GUI
 
 """
 from __future__ import annotations
@@ -11,11 +11,14 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 import sys, time, os, secrets, locale
+import zipfile  # Add zipfile import
+import tempfile  # Add tempfile import
+import shutil   # Add shutil import
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore    import (Qt, Signal, QThread, QSize, QPoint, QEvent,
-                               QPropertyAnimation, QEasingCurve)
+                               QPropertyAnimation, QEasingCurve, QTimer)
 from PySide6.QtGui     import (QFont, QColor, QPalette, QIcon, QPainter,
                                QLinearGradient, QBrush, QDesktopServices)
 from PySide6.QtWidgets import (
@@ -31,6 +34,7 @@ from crypto_core import (
     encrypt_chacha_stream, decrypt_chacha_stream,
     SecurityProfile, LOG_PATH
 )
+from crypto_core.secure_bytes import SecureBytes
 # Novo módulo XChaCha (adicionado ao projeto conforme instruções)
 from crypto_core.file_crypto_xchacha import (
     encrypt_file as encrypt_xchacha,
@@ -134,7 +138,7 @@ class GradientHeader(QFrame):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CryptGuardv2 – secure")
+        self.setWindowTitle("CryptGuardv2 – secure 2.6.1")
         self.resize(800, 540); self.setMinimumSize(640, 440)
         self._total_bytes = 0
         self.dark = True
@@ -156,7 +160,7 @@ class MainWindow(QWidget):
             """
         )
         hlay = QHBoxLayout(header); hlay.setContentsMargins(18, 0, 18, 0)
-        title = QLabel("🔐 CryptGuard v2", font=QFont("Inter", 20, QFont.DemiBold))
+        title = QLabel("🔐 CryptGuardv2", font=QFont("Inter", 20, QFont.DemiBold))
         title.setStyleSheet("color:white")
         hlay.addWidget(title)
         hlay.addStretch()
@@ -188,20 +192,23 @@ class MainWindow(QWidget):
         lay_pwd = QHBoxLayout(); lay_pwd.addWidget(self.pwd); lay_pwd.addWidget(self.str_bar)
 
         # Secure delete checkbox
-        self.chk_del     = QCheckBox("Secure-delete original after encrypt")
+        self.chk_del     = QCheckBox("Secure-delete input after operation")
         self.chk_archive = QCheckBox("Archive folder before encrypt (ZIP)")
         
         # Action buttons
         self.btn_enc    = AccentButton("Encrypt")
         self.btn_dec    = AccentButton("Decrypt")
+        self.btn_verify = AccentButton("Verify")
         self.btn_cancel = AccentButton("Cancel")       # botão moderno
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel_current_task)
         self.btn_enc.clicked.connect(lambda: self._start(True))
         self.btn_dec.clicked.connect(lambda: self._start(False))
+        self.btn_verify.clicked.connect(self._verify)
         lay_btn = QHBoxLayout()
         lay_btn.addWidget(self.btn_enc)
         lay_btn.addWidget(self.btn_dec)
+        lay_btn.addWidget(self.btn_verify)
         lay_btn.addWidget(self.btn_cancel)
         lay_btn.addStretch()
 
@@ -317,8 +324,24 @@ class MainWindow(QWidget):
         if not path:   return self.status.showMessage("Select a file first.")
         if not pwd:    return self.status.showMessage("Enter password.")
  
+        self._is_encrypt = encrypt  # Track operation type for _done
+        pwd_sb = SecureBytes(pwd.encode())
+        original_path = path
         src = path
         tmp_zip = None
+
+        # Directory handling - prevent permission errors
+        src_path = Path(src)
+        if src_path.is_dir():
+            if not encrypt:
+                QMessageBox.warning(self, "Invalid Selection", 
+                                  "Please select a file (not folder) for decrypt or verify operations.")
+                return self.status.showMessage("Select a file for decrypt/verify.")
+            if not self.chk_archive.isChecked():
+                # Force archive for directories
+                QMessageBox.information(self, "Auto-Archive", 
+                                      "Folders require ZIP archiving for encryption. Enabling automatically.")
+                self.chk_archive.setChecked(True)
  
         if encrypt and self.chk_archive.isChecked():
              try:
@@ -326,6 +349,7 @@ class MainWindow(QWidget):
                  tmp_zip = archive_folder(src)
                  src = str(tmp_zip)
              except Exception as e:
+                 pwd_sb.clear()
                  return self.status.showMessage(f"Zip error: {e}")
  
         algo_idx = self.cmb_alg.currentIndex()
@@ -348,8 +372,9 @@ class MainWindow(QWidget):
             func_dec = (decrypt_xchacha_stream if stream
                         else decrypt_xchacha)
  
-        delete_flag = self.chk_del.isChecked() if encrypt else False
+        delete_flag = self.chk_del.isChecked()
         self._tmp_zip = tmp_zip
+        self._original_path = original_path
         # total bytes ----------------------------------------------------
         if encrypt:
             self._total_bytes = Path(src).stat().st_size
@@ -357,10 +382,12 @@ class MainWindow(QWidget):
             meta_file = Path(src + ".meta")
             try:
                 from crypto_core.metadata import decrypt_meta_json
-                meta = decrypt_meta_json(meta_file, pwd)
+                meta = decrypt_meta_json(meta_file, pwd_sb)
                 self._total_bytes = meta.get("size", Path(src).stat().st_size)
             except Exception:
                 self._total_bytes = Path(src).stat().st_size
+            finally:
+                pwd_sb.clear()
 
         self._toggle(False)
         # Set progress bar to indeterminate mode for key derivation
@@ -381,9 +408,23 @@ class MainWindow(QWidget):
     def _cancel_current_task(self):
         if hasattr(self, "worker") and self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
-            self.status.showMessage("⏹️  Operação cancelada.", 5000)
+            # Aguarde até 5s para terminar graciosamente
+            if not self.worker.wait(5000):  # ms
+                # Timeout: Force quit (raro, mas seguro com QTimer)
+                timer = QTimer(self)
+                timer.timeout.connect(self.worker.quit)
+                timer.start(100)  # Quit após pequeno delay
+                self.worker.wait(1000)  # Aguarde mais 1s
+            self.status.showMessage("⏹️ Operação cancelada.", 5000)
             self.btn_cancel.setEnabled(False)
             self._toggle(True)
+            # Cleanup any temporary ZIP and trigger finish handlers
+            if getattr(self, "_tmp_zip", None):
+                try:
+                    os.remove(self._tmp_zip)
+                except Exception:
+                    pass
+            self.worker.finished.emit("")  # ensure downstream cleanup runs
 
     def _progress(self, done: int, elapsed: float):
         # Switch back to normal progress mode on first progress update
@@ -405,7 +446,73 @@ class MainWindow(QWidget):
         self.prg.setValue(100)                       # garante 100 %
         if hasattr(self, "_tmp_zip") and self._tmp_zip:
             Path(self._tmp_zip).unlink(missing_ok=True)
-        # Se empacotado em ZIP, mostra nome do ZIP
+        
+        # Auto-unpack ZIP files only for decrypt operations (not encrypt)
+        if not self._is_encrypt and out_path.endswith('.zip') and zipfile.is_zipfile(out_path):
+            dest_dir = Path(out_path).with_suffix('')  # Remove .zip
+            
+            # Create temp dir for safe extraction (avoid locks in final destination)
+            with tempfile.TemporaryDirectory() as tmp_extract:
+                tmp_path = Path(tmp_extract)
+                try:
+                    with zipfile.ZipFile(out_path, 'r') as zf:
+                        for member in zf.infolist():
+                            # Skip problematic files like desktop.ini (hidden/system files)
+                            filename = member.filename.lower()
+                            if (filename.endswith('desktop.ini') or 
+                                filename.startswith('.') or 
+                                filename.endswith('thumbs.db')):  # Skip common Windows system files
+                                continue
+                            
+                            target = tmp_path / member.filename
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            # Manual extraction with error handling
+                            if not member.is_dir():
+                                with zf.open(member) as source, open(target, "wb") as dest:
+                                    shutil.copyfileobj(source, dest)
+                    
+                    # Move from temp to final destination (overwrite if necessary)
+                    if dest_dir.exists():
+                        if dest_dir.is_file():
+                            dest_dir.unlink()  # Remove conflicting file
+                        elif dest_dir.is_dir():
+                            shutil.rmtree(dest_dir)  # Remove existing directory
+                    
+                    # Move entire extraction to final destination
+                    try:
+                        shutil.move(str(tmp_path), str(dest_dir))
+                    except Exception as e:
+                        QMessageBox.warning(self, "Move Error",
+                                            f"Falha ao mover pasta extraída: {e}")
+                        self.status.showMessage("❌ Move failed.", 10000)
+                        return
+                except PermissionError as e:
+                    # Specific handling for permission issues (OneDrive sync, system files)
+                    QMessageBox.warning(self, "Permission Error", 
+                                      f"Failed to extract: {e}\n\n"
+                                      "Try:\n"
+                                      "• Pause OneDrive sync temporarily\n"
+                                      "• Run as administrator\n"
+                                      "• Extract to a location outside OneDrive")
+                    self.status.showMessage("❌ Permission error during extraction.", 10000)
+                    self.btn_cancel.setEnabled(False)
+                    self._toggle(True)
+                    return
+                except Exception as e:
+                    QMessageBox.critical(self, "Extraction Error", 
+                                       f"Failed to extract ZIP: {e}")
+                    self.status.showMessage(f"❌ Extraction failed: {e}", 10000)
+                    self.btn_cancel.setEnabled(False)
+                    self._toggle(True)
+                    return
+            
+            Path(out_path).unlink(missing_ok=True)  # Remove ZIP after successful extraction
+            out_path = str(dest_dir)  # Show folder in message
+        
+        if self.chk_del.isChecked():
+            from crypto_core.utils import secure_delete
+            secure_delete(self._original_path, passes=1)
         QMessageBox.information(self, "Success",
                                 f"Output file:\n{Path(out_path).name}")
         self.status.showMessage("✔️ Done.", 8000)
@@ -423,11 +530,26 @@ class MainWindow(QWidget):
         self._toggle(True)
 
     def _toggle(self, enable: bool):
-        for w in (self.btn_enc, self.btn_dec, self.cmb_alg,
+        for w in (self.btn_enc, self.btn_dec, self.btn_verify, self.cmb_alg,
                   self.cmb_prof, self.chk_del):
             w.setEnabled(enable)
         if hasattr(self, "btn_cancel"):
             self.btn_cancel.setEnabled(not enable)
+
+    def _verify(self):
+        from crypto_core.verify_integrity import verify_integrity
+        path, pwd = self.file_line.text(), self.pwd.text()
+        if not path or not pwd:
+            return self.status.showMessage("Select file and enter password.")
+        profile = list(SecurityProfile)[self.cmb_prof.currentIndex()]
+        try:
+            if verify_integrity(path, pwd, profile):
+                QMessageBox.information(self, "Verify", "Integridade OK.")
+            else:
+                raise ValueError("Integridade falhou.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Verificação falhou: {str(e)}")
+        self.pwd.clear()
 
     def _translate_error(self, msg: str) -> str:
         if "InvalidTag" in msg or "MAC check failed" in msg:
