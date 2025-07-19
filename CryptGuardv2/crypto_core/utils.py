@@ -1,7 +1,7 @@
 """
 Utilidades gerais: escrita atômica, JSON e exclusão segura.
 """
-import os, json, secrets, tempfile
+import os, json, secrets, tempfile, shutil
 from pathlib import Path
 from typing import Tuple
 import zipfile
@@ -14,7 +14,7 @@ META_EXT = ".meta"
 # Chunk size for secure deletion (1 MiB)
 SECURE_DELETE_CHUNK_SIZE = 1024 * 1024
 
-# ───── gravação atómica ────────────────────────────────────────────────
+# ───── gravação atômica ────────────────────────────────────────────────
 def write_atomic_secure(dest: str | Path, data: bytes) -> None:
     dest = Path(dest)  # Ensure dest is always a Path object
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -77,6 +77,18 @@ def secure_delete(path:str|os.PathLike, passes:int=3) -> None:
                 f.write(chunk)
             f.flush(); os.fsync(f.fileno())
     p.unlink()
+
+# ───────────────────────── Archive helpers ─────────────────────────
+def archive_folder(folder_path: str | Path) -> Path:
+    """
+    Cria ZIP recursivo preservando estrutura.
+    Retorna path do ZIP temporário.
+    """
+    folder = Path(folder_path)
+    base_name = str(folder.with_suffix(''))  # Remove ext se tiver
+    zip_path = folder.with_suffix('.zip')
+    shutil.make_archive(base_name, 'zip', root_dir=folder)
+    return zip_path
 
 # ───────────────────────── ZIP helpers ─────────────────────────
 def pack_enc_zip(enc_path: Path) -> Path:

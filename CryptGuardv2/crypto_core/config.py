@@ -3,9 +3,11 @@ Constantes e parâmetros (pode ser sobrescrito por calibração Argon2).
 """
 from enum import Enum, auto
 import os
-import json
 import time
 from pathlib import Path
+import argon2
+from .argon_utils import calibrate_kdf
+from .process_protection import enable_process_hardening as _apply_full_hardening
 
 class SecurityProfile(Enum):
     FAST     = auto()
@@ -33,7 +35,7 @@ ALGORITHMS = {
     },
 }
 
-# Esses valores podem ser substituídos em tempo de execução por calibração
+# Esses valores podem ser substituídos em tempo de execução por calibração
 ARGON_PARAMS = {
     SecurityProfile.FAST:     dict(time_cost=1, memory_cost=64*1024,  parallelism=4),
     SecurityProfile.BALANCED: dict(time_cost=3, memory_cost=128*1024, parallelism=4),
@@ -60,56 +62,13 @@ META_SALT_SIZE = 16
 LOG_PATH = Path(os.path.expanduser("~")) / "AppData" / "Local" / "CryptGuard" / "crypto.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# Standardized calibration path
+CALIB_PATH = Path.home() / ".my_encryptor" / "argon_calib.json"
+
 # Or in the application directory
-# LOG_PATH = Path(__file__).parent.parent / "crypto.log"
-
-def load_calibrated_params():
-    """Carrega parâmetros calibrados do arquivo de configuração"""
-    config_path = Path(__file__).parent / "calibrated_params.json"
-    if config_path.exists():
-        try:
-            with open(config_path, 'r') as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return ARGON_PARAMS
-
-def calibrate_kdf(target_time=1.0):
-    """Calibra os parâmetros do KDF para o tempo alvo especificado"""
-    import argon2
-    
-    # Parâmetros base para calibração
-    memory_cost = 65536  # 64 MB
-    parallelism = 1
-    time_cost = 1
-    
-    # Testa diferentes valores de time_cost
-    for tc in range(1, 10):
-        start = time.time()
-        argon2.hash_password_raw(
-            password=b'test_password',
-            salt=b'test_salt_16bytes',
-            time_cost=tc,
-            memory_cost=memory_cost,
-            parallelism=parallelism,
-            hash_len=32,
-            type=argon2.Type.ID
-        )
-        elapsed = time.time() - start
-        
-        if elapsed >= target_time:
-            return {
-                'time_cost': tc,
-                'memory_cost': memory_cost,
-                'parallelism': parallelism
-            }
-    
-    return ARGON_PARAMS
-
 def enable_process_hardening():
-    """Habilita proteções de processo quando possível"""
-    import os
-    import sys
+    """Habilita proteções de processo quando possível (usa process_protection.py)."""
+    _apply_full_hardening()
     
     # Exemplo de hardening básico
     if hasattr(os, 'setpriority'):

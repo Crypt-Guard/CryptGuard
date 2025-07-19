@@ -14,29 +14,24 @@ from pathlib import Path
 from typing  import Callable, Optional, Dict
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf     import HKDF
 from cryptography.hazmat.primitives.hashes       import SHA256
 from cryptography.exceptions import InvalidTag
 
 from .config          import *
 from .secure_bytes    import SecureBytes
 from .key_obfuscator  import TimedExposure
-from .kdf             import derive_key
 from .rs_codec        import rs_encode_data, rs_decode_data
 from .metadata        import encrypt_meta_json, decrypt_meta_json
 from .utils           import write_atomic_secure, generate_unique_filename, pack_enc_zip, unpack_enc_zip
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
 from .security_warning import warn
+from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
+from .kdf        import derive_key                # Argon2‑derive_key continua aqui
 
 # ───────────────────────────────────────── helpers ────────────────────────────────
 def _optimal_workers(sz:int) -> int:
     return 4 if sz < 100*2**20 else 8 if sz < 2**30 else 12
-
-def _hkdf(master:SecureBytes) -> tuple[bytes, bytes]:
-    """Deriva (enc_key, hmac_key) de 32 bytes cada."""
-    k = HKDF(algorithm=SHA256(), length=64, salt=None, info=b"PFA-keys").derive(master.to_bytes())
-    return k[:32], k[32:]          # 64 = 32 + 32
 
 def _enc_chunk(i:int, data:bytes, nonce:bytes, enc_key:bytes) -> tuple[int, bytes]:
     ct = AESGCM(enc_key).encrypt(nonce, data, None)
@@ -68,7 +63,7 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
 
     # HKDF → chaves finais
     with TimedExposure(master_obf) as master:
-        enc_key, hmac_key = _hkdf(master)
+        enc_key, hmac_key = _hkdf(master, info=b"PFA-keys", salt=salt)
 
     rs_use  = USE_RS and RS_PARITY_BYTES > 0
     workers = _optimal_workers(size)
@@ -195,7 +190,7 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
 
         master_obf = derive_key(pwd_sb, salt, profile_hint)
         with TimedExposure(master_obf) as master:
-            enc_key, hmac_key = _hkdf(master)
+            enc_key, hmac_key = _hkdf(master, info=b"PFA-keys", salt=salt)
 
         meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
                                  pwd_sb)

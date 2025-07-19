@@ -4,6 +4,7 @@ da chave limpa em RAM.
 """
 import secrets, contextlib
 from .secure_bytes import SecureBytes
+import ctypes
 
 class KeyObfuscator:
     __slots__ = ("_masked", "_mask")
@@ -23,8 +24,13 @@ class KeyObfuscator:
         pass
 
     def clear(self):
-        self._masked = b"\x00" * len(self._masked)
-        self._mask   = b"\x00" * len(self._mask)
+        if self._masked:
+            buf = bytearray(self._masked)
+            ctypes.memset(ctypes.addressof(ctypes.c_char.from_buffer(buf)), 0, len(buf))
+        if self._mask:
+            buf2 = bytearray(self._mask)
+            ctypes.memset(ctypes.addressof(ctypes.c_char.from_buffer(buf2)), 0, len(buf2))
+        self._masked = b""; self._mask = b""
 
 # --------------------------- exposure helper
 class TimedExposure(contextlib.AbstractContextManager):

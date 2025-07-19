@@ -17,8 +17,6 @@ from pathlib import Path
 from typing  import Callable, Optional
 
 from cryptography.hazmat.primitives.ciphers         import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.kdf.hkdf        import HKDF
-from cryptography.hazmat.primitives.hashes          import SHA256
 from cryptography.hazmat.backends                   import default_backend
 
 from .config          import *
@@ -32,13 +30,10 @@ from .utils           import (
 )
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
+from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
+from .kdf        import derive_key                # Argon2‑derive_key continua aqui
 
 # ─── helpers ────────────────────────────────────────────────────────────
-def _hkdf(master: SecureBytes):
-    k = HKDF(algorithm=SHA256(), length=64, salt=None,
-             info=b"CGv2-keys").derive(master.to_bytes())
-    return k[:32], k[32:]                        # enc_key, hmac_key
-
 def _aes_ctr(enc_key: bytes, iv: bytes):
     return Cipher(algorithms.AES(enc_key), modes.CTR(iv),
                   backend=default_backend()).encryptor()
@@ -56,7 +51,7 @@ def encrypt_file(
 
     master_obf = derive_key(SecureBytes(password.encode()), salt, profile)
     with TimedExposure(master_obf) as master:
-        enc_key, hmac_key = _hkdf(master)
+        enc_key, hmac_key = _hkdf(master, info=b"CGv2-keys", salt=salt)
 
     iv = secrets.token_bytes(16)
     enc  = _aes_ctr(enc_key, iv)
@@ -117,7 +112,7 @@ def decrypt_file(
 
     master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
     with TimedExposure(master_obf) as master:
-        enc_key, hmac_key = _hkdf(master)
+        enc_key, hmac_key = _hkdf(master, info=b"CGv2-keys", salt=salt)
     dec = _aes_ctr(enc_key, iv)
     h   = hmac.new(hmac_key, digestmod=hashlib.sha256)
     # include header in HMAC so IV/magic/salt are authenticated
@@ -147,6 +142,12 @@ def decrypt_file(
     stem, ext = os.path.splitext(orig_name)       # e.g. ("foo", ".png")
     parent = Path(enc_path).parent
     dest   = parent / f"{stem}_{secrets.token_hex(4)}{ext}"
+    write_atomic_secure(dest, bytes(plain))
+
+    reset(enc_path)
+    master_obf.clear()
+    logger.info("AES-CTR dec %s", dest.name)
+    return str(dest)
     write_atomic_secure(dest, bytes(plain))
 
     reset(enc_path)

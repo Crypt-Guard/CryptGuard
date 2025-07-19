@@ -13,24 +13,19 @@ from Crypto.Cipher import ChaCha20_Poly1305      # suporta 8/12/24 B nonce
 
 from .config         import *
 from .secure_bytes   import SecureBytes
-from .kdf            import derive_key
 from .key_obfuscator import TimedExposure
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
 from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
+from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
+from .kdf        import derive_key                # Argon2‑derive_key continua aqui
+
 
 _NONCE = 24  # XChaCha20‑Poly1305
 
 # ---- helpers ----------------------------------------------------------------------
-def _hkdf(master: SecureBytes):
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-    from cryptography.hazmat.primitives.hashes    import SHA256
-    k = HKDF(algorithm=SHA256(), length=64, salt=None,
-             info=b"PFA-keys").derive(master.to_bytes())
-    return k[:32], k[32:]          # enc_key, hmac_key
-
 def _enc_block(chunk: bytes, nonce: bytes,
                enc_key: bytes, rs_use: bool) -> bytes:
     cipher = ChaCha20_Poly1305.new(key=enc_key, nonce=nonce)
@@ -56,28 +51,32 @@ def encrypt_file(src_path: str, password,
     pwd_sb = (password if isinstance(password, SecureBytes)
               else SecureBytes(password.encode()))
 
-    src   = Path(src_path)
-    data  = src.read_bytes()
-    size  = len(data)
-    salt  = secrets.token_bytes(16)
-    mkey  = derive_key(pwd_sb, salt, profile)
+    src = Path(src_path)
+    
+    # Use mmap for memory-efficient file reading
+    with open(src, "rb") as f_src, \
+         mmap.mmap(f_src.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        
+        size = len(data)
+        salt = secrets.token_bytes(16)
+        mkey = derive_key(pwd_sb, salt, profile)
 
-    with TimedExposure(mkey) as m:
-        enc_key, hmac_key = _hkdf(m)
+        with TimedExposure(mkey) as m:
+            enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
 
-    rs_use = USE_RS and RS_PARITY_BYTES > 0
-    n_sub  = math.ceil(size / SINGLE_SHOT_SUBCHUNK_SIZE)
-    out    = bytearray()
-    out += salt + MAGIC + b"XC20" + struct.pack("<I", n_sub)
+        rs_use = USE_RS and RS_PARITY_BYTES > 0
+        n_sub  = math.ceil(size / SINGLE_SHOT_SUBCHUNK_SIZE)
+        out    = bytearray()
+        out += salt + MAGIC + b"XC20" + struct.pack("<I", n_sub)
 
-    processed = 0
-    for i in range(n_sub):
-        chunk = data[i*SINGLE_SHOT_SUBCHUNK_SIZE : (i+1)*SINGLE_SHOT_SUBCHUNK_SIZE]
-        nonce = secrets.token_bytes(_NONCE)
-        out += _enc_block(chunk, nonce, enc_key, rs_use)
-        processed += len(chunk)
-        if progress_cb:
-            progress_cb(processed)
+        processed = 0
+        for i in range(n_sub):
+            chunk = data[i*SINGLE_SHOT_SUBCHUNK_SIZE : (i+1)*SINGLE_SHOT_SUBCHUNK_SIZE]
+            nonce = secrets.token_bytes(_NONCE)
+            out += _enc_block(chunk, nonce, enc_key, rs_use)
+            processed += len(chunk)
+            if progress_cb:
+                progress_cb(processed)
 
     enc_path = src.with_suffix(src.suffix + ENC_EXT)
     write_atomic_secure(enc_path, bytes(out))
@@ -121,7 +120,7 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
         master = derive_key(SecureBytes(password.encode()),
                             salt, profile_hint)
         with TimedExposure(master) as m:
-            enc_key, hmac_key = _hkdf(m)
+            enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
 
         meta   = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT),
                                    SecureBytes(password.encode()))

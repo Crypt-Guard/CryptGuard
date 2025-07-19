@@ -13,15 +13,14 @@ from pathlib import Path
 from typing  import Callable, Optional
 
 from Crypto.Cipher import ChaCha20_Poly1305          # suporta 24 B nonce
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.hashes    import SHA256
+from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
+from .kdf        import derive_key                # Argon2‑derive_key continua aqui
 
 from .config         import (
     SecurityProfile, USE_RS, RS_PARITY_BYTES, CHUNK_SIZE, MAGIC,
     ENC_EXT, SIGN_METADATA, META_EXT, STREAMING_THRESHOLD
 )
 from .secure_bytes   import SecureBytes
-from .kdf            import derive_key
 from .key_obfuscator import TimedExposure, KeyObfuscator
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
@@ -32,11 +31,6 @@ from .rate_limit     import check_allowed, register_failure, reset
 _NONCE = 24                      # XChaCha20‑Poly1305
 
 # ───────────────────────── helpers ─────────────────────────
-def _hkdf(master: SecureBytes):
-    k = HKDF(algorithm=SHA256(), length=64, salt=None,
-             info=b"PFA-keys").derive(master.to_bytes())
-    return k[:32], k[32:]        # enc_key, hmac_key
-
 def _aad(idx: int) -> bytes:
     return f"|chunk={idx}".encode()
 
@@ -78,7 +72,7 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
               else SecureBytes(password.encode()))
     master = derive_key(pwd_sb, salt, profile)
     with TimedExposure(master) as m:
-        enc_key, hmac_key = _hkdf(m)
+        enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
     enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
     rs_use = USE_RS and RS_PARITY_BYTES > 0
@@ -132,7 +126,7 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
     
     try:
         write_atomic_secure(dest_temp, bytes(out))
-        dest_temp.rename(dest)              # cria foo.enc
+        os.replace(dest_temp, dest)              # cria foo.enc
 
         hmac_hex = (hmac.new(hmac_key, dest.read_bytes(), hashlib.sha256)
                     .hexdigest() if SIGN_METADATA else None)
@@ -189,7 +183,7 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
                       else SecureBytes(password.encode()))
             master = derive_key(pwd_sb, salt, profile_hint)
             with TimedExposure(master) as m:
-                enc_key, hmac_key = _hkdf(m)
+                enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
             enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
             meta   = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
@@ -254,7 +248,7 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
                 raise ValueError("Falha na verificação HMAC.")
         
         # Move temp file to final destination
-        dest_temp.rename(dest)
+        os.replace(dest_temp, dest)
         reset(enc_path)
 
     except Exception as e:

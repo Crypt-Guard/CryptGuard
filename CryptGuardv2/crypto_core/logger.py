@@ -18,9 +18,13 @@ LOG_PATH.touch(exist_ok=True)
 # ① Padrões de dados sensíveis
 _SENSITIVE_RE = re.compile(
     r"""
-    (?:0x)?[0-9A-Fa-f]{16,}      # hex longo, com/sem 0x (≥64 bits)
-  | [A-Za-z0-9+/]{24,}={0,2}     # Base64 (≥18 bytes ≈128 bits)
-  """,
+    (?:
+        (?<=key=)(?:0x)?[0-9A-Fa-f]{16,}      # hex após key=
+      | (?<=nonce=)(?:0x)?[0-9A-Fa-f]{16,}    # hex após nonce=
+      | (?<=key=)[A-Za-z0-9+/]{24,}={0,2}     # Base64 após key=
+      | (?<=nonce=)[A-Za-z0-9+/]{24,}={0,2}   # Base64 após nonce=
+    )
+    """,
     re.VERBOSE,
 )
 

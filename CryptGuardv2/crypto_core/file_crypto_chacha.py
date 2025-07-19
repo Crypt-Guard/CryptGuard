@@ -11,8 +11,6 @@ import math, os, struct, secrets, hmac, hashlib, time, mmap, tempfile, shutil
 from pathlib import Path
 from typing  import Callable, Optional
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.hazmat.primitives.kdf.hkdf     import HKDF
-from cryptography.hazmat.primitives.hashes       import SHA256
 
 from .config         import *
 from .secure_bytes   import SecureBytes
@@ -24,11 +22,11 @@ from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
 
-# ---- helpers ----------------------------------------------------------------------
-def _hkdf(master:SecureBytes):
-    k = HKDF(algorithm=SHA256(), length=64, salt=None, info=b"PFA-keys").derive(master.to_bytes())
-    return k[:32], k[32:]    # enc_key, hmac_key
+from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
+from .kdf        import derive_key                # Argon2‑derive_key continua aqui
 
+
+# ---- helpers ----------------------------------------------------------------------
 def _enc_block(chunk:bytes, nonce:bytes, enc_key:bytes, rs_use:bool)->bytes:
     ct = ChaCha20Poly1305(enc_key).encrypt(nonce, chunk, None)
     if rs_use: ct = rs_encode_data(ct, RS_PARITY_BYTES)
@@ -44,23 +42,30 @@ def encrypt_file(src_path: str, password, profile=SecurityProfile.BALANCED,
 
     pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
 
-    src  = Path(src_path); data = src.read_bytes(); size = len(data)
-    salt = secrets.token_bytes(16)
-    master_obf = derive_key(pwd_sb, salt, profile)
+    src = Path(src_path)
+    
+    # Use mmap for memory-efficient file reading
+    with open(src, "rb") as f_src, \
+         mmap.mmap(f_src.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        
+        size = len(data)
+        salt = secrets.token_bytes(16)
+        master_obf = derive_key(pwd_sb, salt, profile)
 
-    with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
-    rs_use = USE_RS and RS_PARITY_BYTES>0
-    n_sub  = math.ceil(size / SINGLE_SHOT_SUBCHUNK_SIZE)
-    out    = bytearray()
-    out += salt + MAGIC + b"CH20" + struct.pack("<I", n_sub)
+        with TimedExposure(master_obf) as m:
+            enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
+        rs_use = USE_RS and RS_PARITY_BYTES>0
+        n_sub  = math.ceil(size / SINGLE_SHOT_SUBCHUNK_SIZE)
+        out    = bytearray()
+        out += salt + MAGIC + b"CH20" + struct.pack("<I", n_sub)
 
-    processed = 0
-    for i in range(n_sub):
-        chunk = data[i*SINGLE_SHOT_SUBCHUNK_SIZE : (i+1)*SINGLE_SHOT_SUBCHUNK_SIZE]
-        nonce = secrets.token_bytes(12)
-        out += _enc_block(chunk, nonce, enc_key, rs_use)
-        processed += len(chunk)
-        if progress_cb: progress_cb(processed)
+        processed = 0
+        for i in range(n_sub):
+            chunk = data[i*SINGLE_SHOT_SUBCHUNK_SIZE : (i+1)*SINGLE_SHOT_SUBCHUNK_SIZE]
+            nonce = secrets.token_bytes(12)
+            out += _enc_block(chunk, nonce, enc_key, rs_use)
+            processed += len(chunk)
+            if progress_cb: progress_cb(processed)
 
     enc_path = src.with_suffix(src.suffix + ENC_EXT)
     write_atomic_secure(enc_path, bytes(out))
@@ -102,7 +107,8 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
 
         n_sub, = struct.unpack("<I", blob[24:28])
         master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
-        with TimedExposure(master_obf) as m: enc_key, hmac_key = _hkdf(m)
+        with TimedExposure(master_obf) as m:
+            enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
 
         meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
         rs_use = meta["use_rs"]
@@ -135,6 +141,9 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
                 raise ValueError("Falha na verificação HMAC.")
     reset(enc_path)
 
+    master_obf.clear()
+    logger.info("ChaCha dec %s", dest.name)
+    return str(dest)
     master_obf.clear()
     logger.info("ChaCha dec %s", dest.name)
     return str(dest)
