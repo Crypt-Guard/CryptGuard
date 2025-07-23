@@ -163,8 +163,7 @@ CryptGuardv2/
  │   ├─ file_crypto_chacha.py
  │   ├─ file_crypto_chacha_stream.py
  │   ├─ file_crypto_xchacha.py
- │   ├─ file_crypto_xchacha_stream.py
- │   └─ tamper_expire.py
+ │   └─ file_crypto_xchacha_stream.py
  ├─ assets/cryptguard.ico
  └─ main_app.py                   # PySide6 launcher
 ```
