@@ -22,12 +22,13 @@ from .secure_bytes    import SecureBytes
 from .key_obfuscator  import TimedExposure
 from .rs_codec        import rs_encode_data, rs_decode_data
 from .metadata        import encrypt_meta_json, decrypt_meta_json
-from .utils           import write_atomic_secure, generate_unique_filename, pack_enc_zip, unpack_enc_zip
+from .utils           import write_atomic_secure, generate_unique_filename, pack_enc_zip, unpack_enc_zip, check_expiry, ExpiredFileError
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
 from .security_warning import warn
 from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
 from .kdf        import derive_key                # Argon2‑derive_key continua aqui
+from .config     import MAX_CLOCK_SKEW_SEC
 
 # ───────────────────────────────────────── helpers ────────────────────────────────
 def _optimal_workers(sz:int) -> int:
@@ -49,7 +50,8 @@ def _dec_chunk(i:int, hdr:bytes, cipher:bytes, enc_key:bytes) -> tuple[int, byte
 # ───────────────────────────────────────── ENCRYPT ───────────────────────────────
 def encrypt_file(src_path:str|os.PathLike, password:str,
                  profile:SecurityProfile=SecurityProfile.BALANCED,
-                 progress_cb:Optional[Callable[[int],None]]=None) -> str:
+                 progress_cb:Optional[Callable[[int],None]]=None,
+                 expires_at: int | None = None) -> str:
 
     # ① wrap incoming password
     pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
@@ -155,7 +157,7 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 chunk=CHUNK_SIZE, size=size, ts=int(start))
     meta_path = out_path.with_suffix(out_path.suffix + META_EXT)
-    encrypt_meta_json(meta_path, meta, pwd_sb)
+    encrypt_meta_json(meta_path, meta, pwd_sb, expires_at)
 
     # Comprime .enc + .meta em um .zip
     out_path = pack_enc_zip(out_path)
@@ -194,6 +196,7 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
 
         meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
                                  pwd_sb)
+        check_expiry(meta, MAX_CLOCK_SKEW_SEC)
         rs_use = meta["use_rs"]
 
         futures = []

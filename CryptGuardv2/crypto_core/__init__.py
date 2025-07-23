@@ -12,6 +12,7 @@ Também expõe as funções públicas de criptografia/descriptografia
 """
 from __future__ import annotations
 import sys, argparse, importlib
+from importlib import util
 from pathlib import Path
 
 from .logger             import logger, warn_critical
@@ -23,7 +24,7 @@ init_db()
 
 # ─── dependências mínimas ───────────────────────────────────────────────
 _REQ = {"psutil", "argon2", "reedsolo", "PySide6", "cryptography"}
-_missing = [pkg for pkg in _REQ if importlib.util.find_spec(pkg) is None]
+_missing = [pkg for pkg in _REQ if util.find_spec(pkg) is None]
 if _missing:
     warn_critical(f"Dependências ausentes: {_missing}. Instale-as e execute novamente.")
     sys.exit(1)

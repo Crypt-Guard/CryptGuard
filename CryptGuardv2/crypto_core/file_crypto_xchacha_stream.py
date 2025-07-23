@@ -18,13 +18,13 @@ from .kdf        import derive_key                # Argon2‑derive_key continua
 
 from .config         import (
     SecurityProfile, USE_RS, RS_PARITY_BYTES, CHUNK_SIZE, MAGIC,
-    ENC_EXT, SIGN_METADATA, META_EXT, STREAMING_THRESHOLD
+    ENC_EXT, SIGN_METADATA, META_EXT, STREAMING_THRESHOLD, MAX_CLOCK_SKEW_SEC
 )
 from .secure_bytes   import SecureBytes
 from .key_obfuscator import TimedExposure, KeyObfuscator
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
-from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
+from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip, check_expiry, ExpiredFileError
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
 
@@ -62,7 +62,8 @@ def _dec_chunk(idx: int, nonce: bytes, cipher_blob: bytes,
 # ───────────────────────── ENCRYPT ─────────────────────────
 def encrypt_file(src_path: str | os.PathLike, password: str,
                  profile: SecurityProfile = SecurityProfile.BALANCED,
-                 progress_cb: Optional[Callable[[int], None]] = None) -> str:
+                 progress_cb: Optional[Callable[[int], None]] = None,
+                 expires_at: int | None = None) -> str:
 
     src   = Path(src_path)
     size  = src.stat().st_size
@@ -135,7 +136,7 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
                     chunk=CHUNK_SIZE, size=size, hmac=hmac_hex,
                     ts=int(time.time()))
         encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT),
-                          meta, pwd_sb)     # grava foo.enc.meta
+                          meta, pwd_sb, expires_at)     # grava foo.enc.meta
 
         dest = pack_enc_zip(dest)           # agora inclui .enc + .enc.meta
     except Exception as e:
@@ -150,7 +151,7 @@ def encrypt_file(src_path: str | os.PathLike, password: str,
                 chunk=CHUNK_SIZE, size=size, hmac=hmac_hex,
                 ts=int(time.time()))
     encrypt_meta_json(dest.with_suffix(dest.suffix + META_EXT),
-                      meta, pwd_sb)
+                      meta, pwd_sb, expires_at)
     pwd_sb.clear()
     logger.info("XChaCha‑stream enc %s (%.1f MiB)",
                 src.name, size/1048576)
@@ -179,15 +180,14 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
             if magic != MAGIC or tag != b"XCS3":
                 raise ValueError("Formato inválido.")
 
-            pwd_sb = (password if isinstance(password, SecureBytes)
-                      else SecureBytes(password.encode()))
+            pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
             master = derive_key(pwd_sb, salt, profile_hint)
             with TimedExposure(master) as m:
                 enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
             enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
-            meta   = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
-                                       SecureBytes(password.encode()))
+            meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT), pwd_sb)
+            check_expiry(meta, MAX_CLOCK_SKEW_SEC)
             rs_use = meta["use_rs"]
 
             pq, futures = queue.PriorityQueue(), []
@@ -261,5 +261,7 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
         raise e
 
     enc_obf.clear(); master.clear()
+    logger.info("XChaCha‑stream dec %s", dest.name)
+    return str(dest)
     logger.info("XChaCha‑stream dec %s", dest.name)
     return str(dest)

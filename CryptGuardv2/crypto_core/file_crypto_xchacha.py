@@ -1,7 +1,7 @@
 """
 file_crypto_xchacha.py – XChaCha20‑Poly1305 (single‑shot com features)
 • Mesmo design do file_crypto_chacha.py
-• NONCE de 24 bytes  → risco de colisão ~0 para random nonce
+• NONCE de 24 bytes  → risco de colisão ~0 para random nonce
 """
 from __future__ import annotations
 import math, os, struct, secrets, hmac, hashlib, time, mmap, tempfile, shutil
@@ -9,19 +9,19 @@ from pathlib import Path
 from typing import Callable, Optional
 
 # —— usa PyCryptodome (3.15+) ————————————————————————————
-from Crypto.Cipher import ChaCha20_Poly1305      # suporta 8/12/24 B nonce
+from Crypto.Cipher import ChaCha20_Poly1305      # suporta 8/12/24 B nonce
 
 from .config         import *
 from .secure_bytes   import SecureBytes
 from .key_obfuscator import TimedExposure
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
-from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
+from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip, check_expiry, ExpiredFileError
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
 from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
 from .kdf        import derive_key                # Argon2‑derive_key continua aqui
-
+from .config     import MAX_CLOCK_SKEW_SEC
 
 _NONCE = 24  # XChaCha20‑Poly1305
 
@@ -47,7 +47,8 @@ def _dec_block(nonce: bytes, ct_blob: bytes,
 # ---- ENCRYPT ----------------------------------------------------------------------
 def encrypt_file(src_path: str, password,
                  profile=SecurityProfile.BALANCED,
-                 progress_cb: Optional[Callable[[int], None]] = None) -> str:
+                 progress_cb: Optional[Callable[[int], None]] = None,
+                 expires_at: int | None = None) -> str:
     pwd_sb = (password if isinstance(password, SecureBytes)
               else SecureBytes(password.encode()))
 
@@ -88,7 +89,7 @@ def encrypt_file(src_path: str, password,
                 subchunk=SINGLE_SHOT_SUBCHUNK_SIZE, size=size,
                 ts=int(time.time()))
     encrypt_meta_json(enc_path.with_suffix(enc_path.suffix + META_EXT),
-                      meta, pwd_sb)
+                      meta, pwd_sb, expires_at)
 
     zip_path = pack_enc_zip(enc_path)
 
@@ -117,13 +118,13 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
             raise ValueError("Formato inválido.")
 
         n_sub, = struct.unpack("<I", blob[24:28])
-        master = derive_key(SecureBytes(password.encode()),
-                            salt, profile_hint)
+        pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
+        master = derive_key(pwd_sb, salt, profile_hint)
         with TimedExposure(master) as m:
             enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
 
-        meta   = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT),
-                                   SecureBytes(password.encode()))
+        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), pwd_sb)
+        check_expiry(meta, MAX_CLOCK_SKEW_SEC)
         rs_use = meta["use_rs"]
 
         pos, plain, processed = 28, bytearray(), 0
@@ -162,4 +163,5 @@ def decrypt_file(enc_path: str | os.PathLike, password: str,
 
     master.clear()
     logger.info("XChaCha dec %s", dest.name)
+    return str(dest)
     return str(dest)

@@ -18,9 +18,10 @@ from .kdf            import derive_key
 from .key_obfuscator import TimedExposure
 from .rs_codec       import rs_encode_data, rs_decode_data
 from .metadata       import encrypt_meta_json, decrypt_meta_json
-from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip
+from .utils          import write_atomic_secure, pack_enc_zip, unpack_enc_zip, check_expiry, ExpiredFileError
 from .logger         import logger
 from .rate_limit     import check_allowed, register_failure, reset
+from .config         import MAX_CLOCK_SKEW_SEC
 
 from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
 from .kdf        import derive_key                # Argon2‑derive_key continua aqui
@@ -38,7 +39,8 @@ def _dec_block(nonce:bytes, ct:bytes, enc_key:bytes, rs_use:bool)->bytes:
 
 # ---- ENCRYPT ----------------------------------------------------------------------
 def encrypt_file(src_path: str, password, profile=SecurityProfile.BALANCED,
-                 progress_cb:Optional[Callable[[int],None]]=None) -> str:
+                 progress_cb:Optional[Callable[[int],None]]=None,
+                 expires_at: int | None = None) -> str:
 
     pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
 
@@ -76,7 +78,7 @@ def encrypt_file(src_path: str, password, profile=SecurityProfile.BALANCED,
                 rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                 subchunk=SINGLE_SHOT_SUBCHUNK_SIZE, size=size, ts=int(time.time()))
     encrypt_meta_json(enc_path.with_suffix(enc_path.suffix + META_EXT),
-                      meta, pwd_sb)
+                      meta, pwd_sb, expires_at)
 
     zip_path = pack_enc_zip(enc_path)
 
@@ -106,11 +108,13 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
         if magic!=MAGIC or tag_alg!=b"CH20": raise ValueError("Formato inválido.")
 
         n_sub, = struct.unpack("<I", blob[24:28])
-        master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+        pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
+        master_obf = derive_key(pwd_sb, salt, profile_hint)
         with TimedExposure(master_obf) as m:
             enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
 
-        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
+        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), pwd_sb)
+        check_expiry(meta, MAX_CLOCK_SKEW_SEC)
         rs_use = meta["use_rs"]
 
         pos = 28; plain = bytearray(); processed = 0

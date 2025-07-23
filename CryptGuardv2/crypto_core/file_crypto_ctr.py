@@ -26,12 +26,13 @@ from .key_obfuscator  import TimedExposure
 from .metadata        import encrypt_meta_json, decrypt_meta_json
 from .utils           import (
     generate_unique_filename, write_atomic_secure,
-    pack_enc_zip, unpack_enc_zip,
+    pack_enc_zip, unpack_enc_zip, check_expiry, ExpiredFileError
 )
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
 from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
 from .kdf        import derive_key                # Argon2‑derive_key continua aqui
+from .config     import MAX_CLOCK_SKEW_SEC
 
 # ─── helpers ────────────────────────────────────────────────────────────
 def _aes_ctr(enc_key: bytes, iv: bytes):
@@ -44,6 +45,7 @@ def encrypt_file(
     password: str,
     profile: SecurityProfile = SecurityProfile.BALANCED,
     progress_cb: Optional[Callable[[int], None]] = None,
+    expires_at: int | None = None,
 ) -> str:
     src   = Path(src_path)
     size  = src.stat().st_size
@@ -81,7 +83,7 @@ def encrypt_file(
     meta = dict(alg="AESCTR", profile=profile.name, size=size,
                 ts=int(time.time()), iv=iv.hex())
     encrypt_meta_json(enc_path.with_suffix(enc_path.suffix + META_EXT),
-                      meta, SecureBytes(password.encode()))
+                      meta, SecureBytes(password.encode()), expires_at)
 
     zip_path = pack_enc_zip(enc_path)          # 👉 empacota .enc + .meta em ZIP
     master_obf.clear()
@@ -110,7 +112,8 @@ def decrypt_file(
         raise ValueError("Unknown format.")
     pos = 40
 
-    master_obf = derive_key(SecureBytes(password.encode()), salt, profile_hint)
+    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(password.encode())
+    master_obf = derive_key(pwd_sb, salt, profile_hint)
     with TimedExposure(master_obf) as master:
         enc_key, hmac_key = _hkdf(master, info=b"CGv2-keys", salt=salt)
     dec = _aes_ctr(enc_key, iv)
@@ -119,7 +122,8 @@ def decrypt_file(
     h.update(data[:pos])
 
     meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
-                             SecureBytes(password.encode()))
+                             pwd_sb)
+    check_expiry(meta, MAX_CLOCK_SKEW_SEC)
     total_plain = meta["size"]
 
     plain, processed = bytearray(), 0
@@ -148,9 +152,6 @@ def decrypt_file(
     master_obf.clear()
     logger.info("AES-CTR dec %s", dest.name)
     return str(dest)
-    write_atomic_secure(dest, bytes(plain))
-
-    reset(enc_path)
     master_obf.clear()
     logger.info("AES-CTR dec %s", dest.name)
     return str(dest)

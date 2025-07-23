@@ -21,14 +21,15 @@ from .config          import (
     MAGIC,
     ENC_EXT,
     SIGN_METADATA,
-    META_EXT
+    META_EXT,
+    MAX_CLOCK_SKEW_SEC
 )
 from crypto_core.secure_bytes import SecureBytes
 from .kdf             import derive_key
 from .key_obfuscator  import TimedExposure, KeyObfuscator
 from .chunk_crypto    import encrypt_chunk, decrypt_chunk
 from .metadata        import encrypt_meta_json, decrypt_meta_json
-from .utils           import write_atomic_secure, pack_enc_zip, unpack_enc_zip
+from .utils           import write_atomic_secure, pack_enc_zip, unpack_enc_zip, check_expiry, ExpiredFileError
 from .logger          import logger
 from .rate_limit      import check_allowed, register_failure, reset
 from .hkdf_utils import derive_keys as _hkdf      # só isso vem do hkdf_utils
@@ -37,7 +38,8 @@ from .kdf        import derive_key                # Argon2‑derive_key continua
 # ---- ENCRYPT ----------------------------------------------------------------------
 def encrypt_file(src_path:str|os.PathLike, password:str,
                  profile:SecurityProfile=SecurityProfile.BALANCED,
-                 progress_cb:Optional[Callable[[int],None]]=None) -> str:
+                 progress_cb:Optional[Callable[[int],None]]=None,
+                 expires_at: int | None = None) -> str:
 
     src = Path(src_path); size = src.stat().st_size
     salt = secrets.token_bytes(16)
@@ -103,7 +105,7 @@ def encrypt_file(src_path:str|os.PathLike, password:str,
                     rs_bytes=RS_PARITY_BYTES if rs_use else 0, hmac=hmac_hex,
                     chunk=CHUNK_SIZE, size=size, ts=int(time.time()))
         encrypt_meta_json(temp_path.with_suffix(temp_path.suffix+META_EXT),
-                          meta, pwd_sb)
+                          meta, pwd_sb, expires_at)
         
         # Rename to final path only after everything succeeds
         os.replace(temp_path, enc_path)
@@ -146,7 +148,9 @@ def decrypt_file(enc_path:str|os.PathLike, password:str,
             enc_key, hmac_key = _hkdf(m, info=b"PFA-keys", salt=salt)
         enc_obf = KeyObfuscator(SecureBytes(enc_key)); enc_obf.obfuscate()
 
-        meta = decrypt_meta_json(src.with_suffix(src.suffix+META_EXT), SecureBytes(password.encode()))
+        meta = decrypt_meta_json(src.with_suffix(src.suffix + META_EXT),
+                                pwd_sb)
+        check_expiry(meta, MAX_CLOCK_SKEW_SEC)
         rs_use = meta["use_rs"]
 
         pq, futures = queue.PriorityQueue(), []
