@@ -1,4 +1,4 @@
-# 🔐 CryptGuard v2 – Version 2.6.2 (July 2025)
+# 🔐 CryptGuard v2 – Version 2.6.3 (July 2025)
 
 **CryptGuard v2** is a **modern**, **cross‑platform**, and **user‑friendly** file‑encryption suite. It blends state‑of‑the‑art cryptography (AES‑256‑GCM, XChaCha20‑Poly1305) with hardened key management, memory‑safety primitives, and a sleek Qt‑based interface.
 
@@ -8,12 +8,12 @@
 
 | #  | Capability                   | Details                                                                                                 |
 | -- | ---------------------------- | ------------------------------------------------------------------------------------------------------- |
-| 1  | **Authenticated Encryption** | AES‑256‑GCM, ChaCha20‑Poly1305, or **XChaCha20‑Poly1305** (24‑byte random nonce).                       |
-| 2  | **Argon2id KDF – Profiles**  | *Fast*, *Balanced* (default), or *Secure* \| auto‑calibration (`--calibrate-kdf`).                      |
+| 1  | **Authenticated Encryption** | AES‑256‑GCM, ChaCha20‑Poly1305, or **XChaCha20‑Poly1305** (24‑byte random nonce). Header is now authenticated as AAD to prevent rollback/downgrade attacks. |
+| 2  | **Argon2id KDF – Profiles**  | *Fast*, *Balanced* (default), or *Secure* \| auto‑calibration (`--calibrate-kdf`). Default parameters increased for GPU resistance.           |
 | 3  | **HKDF‑Salted Key Split**    | Single HKDF‑SHA256 call ⇢ 32 B `enc_key` ‖ 32 B `hmac_key` (salt = Argon2 salt).                        |
 | 4  | **Smart Modes**              | < 10 MiB → single‑shot; ≥ 100 MiB → **streaming** with multithreaded chunk‑pipeline.                    |
-| 5  | **Integrity & Redundancy**   | Global HMAC‑SHA256 (post‑v2.6 fix) + optional Reed–Solomon parity per chunk.                            |
-| 6  | **Encrypted Metadata**       | File name + crypto params sealed with ChaCha20‑Poly1305.                                                |
+| 5  | **Integrity & Redundancy**   | Global HMAC‑SHA256 (mandatory for AES‑CTR) + optional Reed–Solomon parity per chunk. Metadata rollback protection enforced.                   |
+| 6  | **Encrypted Metadata**       | File name + crypto params sealed with ChaCha20‑Poly1305. Metadata HMAC appended for integrity.           |
 | 7  | **Secure Memory**            | `SecureBytes` (mlock/VirtualLock + multi‑pass zeroize) & `KeyObfuscator` hardened with `ctypes.memset`. |
 | 8  | **Rate‑Limiter**             | Exponential delay per file (SQLite) to thwart brute‑force attacks.                                      |
 | 9  | **Process Hardening**        | DEP, anti‑debug, no core‑dump (`--harden`) on Windows; sandbox hints on Linux.                          |
@@ -32,6 +32,47 @@
 | **Robustness** | Atomic file finalisation with `os.replace()`; clearer SecurityWarnings accept `str` or `Severity`. |
 | **Docs**       | Totally revamped README, updated architecture diagram & usage examples.                            |
 | **New Feature** | ✨ **Time-Limited Encryption**: Set expiration dates for encrypted files, rendering them undecryptable post-deadline. |
+
+---
+
+## 🔑 Security Updates (CryptGuard v2.6.3)
+
+> *This section lists only the **security‑related** changes introduced after version 2.6.2. No new features were added.*
+
+| Area                               | Change & Rationale                                                                                                                                                                                                                        |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **✔ Associated Data (AAD)**        | AES‑256‑GCM, ChaCha20‑Poly1305 and XChaCha20‑Poly1305 now authenticate the **file header**—`salt ‖ MAGIC ‖ alg_tag`—as *associated data*. This prevents downgrade/rollback attacks where an attacker swaps the algorithm tag or the salt. |
+| **✔ Mandatory HMAC for AES‑CTR**   | AES‑256‑CTR is intrinsically malleable; a global **HMAC‑SHA‑256** is now required and verified ahead of decryption. Files missing the HMAC are rejected.                                                                                  |
+| **✔ Stronger Argon2id KDF**        | Default parameters were doubled (or more) to resist modern GPUs: *Fast*→`t=2,m=64 MiB`, *Balanced*→`t=4,m=128 MiB`, *Secure*→`t=8,m=256 MiB`, parallelism ≥ 2.                                                                            |
+| **✔ Metadata Rollback Protection** | The global HMAC is appended to **both** the encrypted payload *(last 32 B)* **and** the encrypted metadata blob. Any attempt to mix‑and‑match old `.meta` with a newer `.enc` fails integrity checks.                                     |
+| **✔ Reed‑Solomon Guard**           | If a chunk is ≤ `RS_PARITY_BYTES` *and* contains parity, decryption now aborts instead of guessing, averting silent corruption.                                                                                                           |
+| **✔ Unified Tag Handling**         | XChaCha20‑Poly1305 (PyCryptodome) and ChaCha20‑Poly1305 (cryptography) share a hardened codec that avoids duplicate AAD injection and always slices the 16‑byte tag correctly.                                                            |
+| **✔ UTF‑8 Safe Logging**           | Console handler wraps `stderr.buffer` in a UTF‑8 TextIOWrapper, eliminating *"bytes‑like object"* errors and preserving full stacktraces on Windows.                                                                                      |
+| **✔ Clean File Names**             | Restored files no longer receive endless `_deadbeef` hex suffixes.  When a collision occurs, CryptGuard now appends ` (1)`, ` (2)`, … for clarity.                                                                                        |
+| **✔ Zip‑Decrypt Temp Safety**      | Decryption of `.zip` bundles keeps the extraction directory alive for the entire session, preventing **FileNotFoundError** on slow disks.                                                                                                 |
+
+---
+
+### Migration Notes
+
+* Files created **before v2.6.3** remain decryptable.  However, if they were written in AES‑CTR **without** the global HMAC, CryptGuard will now refuse to open them. Re‑encrypt those files with the new version to gain full integrity protection.
+* Because the header is now authenticated, altering `alg_tag` (e.g. from `AESG` to `ACTR`) instantly invalidates the MAC—decrypt will fail with a clear *"InvalidTag"* error.
+
+---
+
+### Verifying the Update
+
+Run the bundled test‑suite:
+
+```bash
+pip install -r dev-requirements.txt
+pytest -n auto
+```
+
+You should see `✔ All tests passed` including:
+
+* **Swap tests** – ensure AES‑GCM↔CTR and ChaCha↔XChaCha cannot decrypt each other after the header‑AAD patch.
+* **Bit‑flip test** – a single‑byte corruption is detected by AEAD/HMAC.
 
 ---
 
@@ -82,6 +123,8 @@ cryptguard enc --expires "2025‑12‑31T23:59:59Z" secrets.zip
 - Relies on the host clock. Add NTP/TSA enforcement for stronger anti‑rollback.
 - “Expiration” *denies access*; it does **not** shred the payload. Use `cryptguard purge --expired` for auto‑deletion.
 - A user with the password can always re‑encrypt a local plaintext copy—they just can’t change the deadline on the existing `.enc`.
+- **AES‑CTR files without a global HMAC (pre‑v2.6.3) are no longer accepted.** Re‑encrypt for full integrity.
+- **Header authentication** means any tampering with the algorithm tag or salt will cause decryption to fail.
 
 ---
 
@@ -158,12 +201,10 @@ CryptGuardv2/
  │   ├─ process_protection.py
  │   ├─ kdf.py
  │   ├─ chunk_crypto.py
- │   ├─ file_crypto_ctr.py
- │   ├─ file_crypto.py
- │   ├─ file_crypto_chacha.py
- │   ├─ file_crypto_chacha_stream.py
- │   ├─ file_crypto_xchacha.py
- │   └─ file_crypto_xchacha_stream.py
+ │   ├─ aes_backends
+ │   ├─ chacha_backends.py
+ │   ├─ crypto_base.py
+ │   ├─ factories.py
  ├─ assets/cryptguard.ico
  └─ main_app.py                   # PySide6 launcher
 ```
