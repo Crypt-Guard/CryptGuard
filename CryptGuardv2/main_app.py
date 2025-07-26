@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CryptGuardv2 – secure GUI 2.6.2
+CryptGuardv2 – secure GUI 2.6.3
 """
 from __future__ import annotations
 
@@ -29,24 +29,12 @@ from PySide6.QtWidgets import (
 )
 
 # ─── Projeto (backend) ───────────────────────────────────────────────────────
-from crypto_core import (
-    encrypt_aes, decrypt_aes, encrypt_ctr, decrypt_ctr,
-    encrypt_chacha, decrypt_chacha,
-    encrypt_chacha_stream, decrypt_chacha_stream,
-    SecurityProfile, LOG_PATH
-)
-from crypto_core.secure_bytes import SecureBytes
-# Novo módulo XChaCha (adicionado ao projeto conforme instruções)
-from crypto_core.file_crypto_xchacha import (
-    encrypt_file as encrypt_xchacha,
-    decrypt_file as decrypt_xchacha,
-)
-from crypto_core.file_crypto_xchacha_stream import (
-    encrypt_file as encrypt_xchacha_stream,
-    decrypt_file as decrypt_xchacha_stream,
-)
-from crypto_core.config import STREAMING_THRESHOLD
-from crypto_core.utils import secure_delete
+from crypto_core import encrypt as cg_encrypt, decrypt as cg_decrypt, SecurityProfile, LOG_PATH
+from crypto_core.config  import STREAMING_THRESHOLD, MAGIC
+from crypto_core.secure_bytes import SecureBytes          # ainda usado na leitura de meta
+from crypto_core.utils   import secure_delete
+from crypto_core.logger import logger     # ← novo
+
 from json import loads
 import json
 import warnings
@@ -164,35 +152,34 @@ class CryptoWorker(QThread):
 
     def run(self):
         try:
-            pwd_sb = SecureBytes(self.pwd.encode())
-            
             def progress_callback(bytes_done: int):
                 if self.isInterruptionRequested():
                     raise InterruptedError("Operation cancelled by user")
                 elapsed = time.time() - self._start_time
                 self.progress.emit(bytes_done, elapsed)
-            
+
             result = self.func(
-                self.src, pwd_sb, self.profile,
+                self.src,
+                self.pwd,                   # ← string bruta
+                self.profile,
                 progress_cb=progress_callback,
-                **self.extra
+                **self.extra,
             )
-            
-            pwd_sb.clear()
+
             if not self.isInterruptionRequested():
                 self.finished.emit(result)
-                
+
         except InterruptedError:
-            # Operation was cancelled, cleanup handled by main thread
-            pass
+            pass  # cancelado
         except Exception as e:
+            logger.exception("CryptoWorker error")      # ← registra traceback
             self.error.emit(str(e))
 
 # ══════════════════════ Main Window ══════════════════════════════════════
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CryptGuardv2 – secure 2.6.2")
+        self.setWindowTitle("CryptGuardv2 – secure 2.6.3")
         self.resize(800, 540)
         self.setMinimumSize(640, 440)
         self._apply_palette()
@@ -367,6 +354,7 @@ class MainWindow(QWidget):
     def dropEvent(self, e: QDropEvent):             # noqa: N802
         url = e.mimeData().urls()[0].toLocalFile()
         self.file_line.setText(url)
+        self._detect_algo(url)
         self.status.showMessage("File/folder loaded via drag & drop")
 
     # ───────────────────────── File picker dialog ───────────────────────
@@ -383,10 +371,45 @@ class MainWindow(QWidget):
             return
         if clicked == file_btn:
             f, _ = QFileDialog.getOpenFileName(self, "Choose file")
-            if f: self.file_line.setText(f); self.status.showMessage("File selected.")
+            if f:
+                self.file_line.setText(f)
+                self._detect_algo(f)
+                self.status.showMessage("File selected.")
         else:
             folder = QFileDialog.getExistingDirectory(self, "Choose folder")
-            if folder: self.file_line.setText(folder); self.status.showMessage("Folder selected.")
+            if folder:
+                self.file_line.setText(folder)
+                self._detect_algo(folder)
+                self.status.showMessage("Folder selected.")
+
+    # ───────────────────────── Detect algorithm from file ─────────────────
+    def _detect_algo(self, path: str):
+        """Detect algorithm from file header and set combo box accordingly."""
+        try:
+            src = Path(path)
+            if not src.exists() or src.is_dir():
+                return
+            with src.open("rb") as f:
+                f.seek(16)
+                magic = f.read(4)
+                if magic != MAGIC:
+                    return  # Only detect for encrypted files
+                tag_bytes = f.read(4)
+                tag = tag_bytes.decode("ascii", errors="ignore")
+            alg_map = {
+                "AESG": 0,  # AES-256-GCM
+                "ACTR": 1,  # AES-256-CTR
+                "CH20": 2,  # ChaCha20-Poly1305
+                "CHS3": 2,  # ChaCha20-Poly1305 (streaming)
+                "XC20": 3,  # XChaCha20-Poly1305
+                "XCS3": 3,  # XChaCha20-Poly1305 (streaming)
+            }
+            idx = alg_map.get(tag, -1)
+            if idx >= 0:
+                self.cmb_alg.setCurrentIndex(idx)
+                self.status.showMessage(f"Detected algorithm: {self.cmb_alg.currentText()}")
+        except Exception as e:
+            self.status.showMessage(f"Could not detect algorithm: {e}")
 
     # ───────────────────────── Progress callbacks ───────────────────────
     def _progress(self, done: int, elapsed: float):
@@ -538,12 +561,15 @@ class MainWindow(QWidget):
         return msg
 
     # ───────────────────────── Start encrypt/decrypt ────────────────────
-    def _start(self, encrypt: bool):
+    def _start(self, do_encrypt: bool):
+        # Habilita seleção apenas se vamos **criptografar**
+        self.cmb_alg.setEnabled(do_encrypt)
+        
         path, pwd = self.file_line.text(), self.pwd.text()
         if not path:   return self.status.showMessage("Select a file first.")
         if not pwd:    return self.status.showMessage("Enter password.")
  
-        self._is_encrypt = encrypt  # Track operation type for _done
+        self._is_encrypt = do_encrypt  # Track operation type for _done
         original_path = path
         src = path
         tmp_zip = None
@@ -551,7 +577,7 @@ class MainWindow(QWidget):
         # Directory handling - prevent permission errors
         src_path = Path(src)
         if src_path.is_dir():
-            if not encrypt:
+            if not do_encrypt:
                 QMessageBox.warning(self, "Invalid Selection", 
                                   "Please select a file (not folder) for decrypt or verify operations.")
                 return self.status.showMessage("Select a file for decrypt/verify.")
@@ -561,7 +587,7 @@ class MainWindow(QWidget):
                                       "Folders require ZIP archiving for encryption. Enabling automatically.")
                 self.chk_archive.setChecked(True)
  
-        if encrypt and self.chk_archive.isChecked():
+        if do_encrypt and self.chk_archive.isChecked():
              try:
                  from crypto_core.utils import archive_folder
                  tmp_zip = archive_folder(src)
@@ -585,29 +611,38 @@ class MainWindow(QWidget):
 
         algo_idx = self.cmb_alg.currentIndex()
         profile  = list(SecurityProfile)[self.cmb_prof.currentIndex()]
-        # Escolher funções de (des)criptografia conforme algoritmo
-        if algo_idx == 0:                       # AES‑GCM
-            func_enc, func_dec = encrypt_aes, decrypt_aes
-        elif algo_idx == 1:                     # AES‑CTR
-            func_enc, func_dec = encrypt_ctr, decrypt_ctr
-        elif algo_idx == 2:                     # ChaCha20‑Poly1305
-            stream       = src_size >= STREAMING_THRESHOLD
-            func_enc     = encrypt_chacha_stream if stream else encrypt_chacha
-            func_dec     = decrypt_chacha_stream if stream else decrypt_chacha
-        else:                                   # XChaCha20‑Poly1305
+        
+        # ─── mapear seleção GUI → tag de 4 bytes/algoritmo ────────────────
+        if algo_idx == 0:                                   # AES‑GCM
+            alg_tag, stream = "AESG", False
+        elif algo_idx == 1:                                 # AES‑CTR
+            alg_tag, stream = "ACTR", False
+        elif algo_idx == 2:                                 # ChaCha20‑Poly1305
             stream = src_size >= STREAMING_THRESHOLD
-            func_enc = (encrypt_xchacha_stream if stream
-                        else encrypt_xchacha)
-            func_dec = (decrypt_xchacha_stream if stream
-                        else decrypt_xchacha)
- 
+            alg_tag = "CHS3" if stream else "CH20"
+        else:                                               # XChaCha20‑Poly1305
+            stream = src_size >= STREAMING_THRESHOLD
+            alg_tag = "XCS3" if stream else "XC20"
+
+        if not do_encrypt:
+            # Mostra qual algoritmo será usado
+            alg_name = {
+                "AESG": "AES‑256‑GCM",
+                "ACTR": "AES‑256‑CTR",
+                "CH20": "ChaCha20‑Poly1305",
+                "CHS3": "ChaCha20‑Poly1305 (stream)",
+                "XC20": "XChaCha20‑Poly1305",
+                "XCS3": "XChaCha20‑Poly1305 (stream)",
+            }.get(alg_tag, alg_tag)
+            self.status.showMessage(f"Algoritmo detectado: {alg_name} — AAD verificada")
+
         delete_flag = self.chk_del.isChecked()
         self._tmp_zip = tmp_zip
         self._original_path = original_path
 
         # expiração
         extra: Dict[str, int] = {}
-        if encrypt and self.chk_exp.isChecked():
+        if do_encrypt and self.chk_exp.isChecked():
             qd = self.date_exp.date()
             exp_dt = datetime(qd.year(), qd.month(), qd.day(), tzinfo=timezone.utc)
             if exp_dt.date() < datetime.now(timezone.utc).date():
@@ -615,7 +650,7 @@ class MainWindow(QWidget):
             extra["expires_at"] = int(exp_dt.timestamp())
 
         # total bytes ----------------------------------------------------
-        if encrypt:
+        if do_encrypt:
             self._total_bytes = src_size
         else:
             meta_file = Path(src + ".meta")
@@ -634,9 +669,34 @@ class MainWindow(QWidget):
         self.prg.setValue(0)
         self.status.showMessage("Deriving key (Argon2)…")
         
-        func = func_enc if encrypt else func_dec
-        # Pass raw password string to worker, let it create SecureBytes
-        self.worker = CryptoWorker(func, src, pwd, profile, delete_flag, extra=extra)
+        # ─── preparar worker usando API unificada ─────────────────────────
+        if do_encrypt:
+            func = lambda path, pwd, prof, *, progress_cb=None, **kw: cg_encrypt(
+                path,
+                pwd,
+                algo=alg_tag,
+                streaming=stream,
+                profile=prof,
+                progress_cb=progress_cb,
+                **kw,
+            )
+        else:
+            func = lambda path, pwd, prof_hint, *, progress_cb=None, **kw: cg_decrypt(
+                path,
+                pwd,
+                progress_cb=progress_cb,
+                profile_hint=prof_hint,
+                **kw,
+            )
+
+        self.worker = CryptoWorker(
+            func,
+            src,
+            pwd,
+            profile,
+            delete_flag,
+            extra=extra,
+        )
         self.worker.progress.connect(self._progress)
         self.worker.finished.connect(self._done)
         self.worker.error.connect(self._err)
@@ -654,12 +714,9 @@ class MainWindow(QWidget):
                     return
             # Fallback: click directly on the widget to try to activate it
             self.date_exp.setFocus()
-
-# ══════════════════════ main ═══════════════════════════════════════════════
+    
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    win = MainWindow(); win.show()
-    sys.exit(app.exec())
-    app = QApplication(sys.argv)
-    win = MainWindow(); win.show()
+    win = MainWindow()
+    win.show()
     sys.exit(app.exec())
