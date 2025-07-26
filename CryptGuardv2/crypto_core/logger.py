@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+import io
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -40,38 +41,63 @@ class SecureFormatter(logging.Formatter):
 _fmt = "%(asctime)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s"
 handler = RotatingFileHandler(LOG_PATH, maxBytes=5_000_000, backupCount=3)
 handler.setFormatter(SecureFormatter(_fmt))
-
-logger = logging.getLogger("crypto_core")
-# Always log INFO and above, but ensure ERROR/CRITICAL are never filtered
-logger.setLevel(logging.INFO)
+handler.setLevel(logging.DEBUG)          # grava tudo no arquivo
+logger  = logging.getLogger("crypto_core")
+logger.setLevel(logging.DEBUG)           # mantém DEBUG→INFO→…
 logger.addHandler(handler)
 logger.propagate = False
 
+# gravar warnings do módulo warnings no mesmo arquivo
+logging.captureWarnings(True)
+
 # opcional: imprimir no stderr em modo debug OU sempre para erros
-if os.getenv("CG_DEBUG") or True:  # Always show errors in console
-    sh = logging.StreamHandler(sys.stderr)
+if os.getenv("CG_DEBUG", "1") == "1":
+    utf8_stream = io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
+    sh = logging.StreamHandler(stream=utf8_stream)
     sh.setFormatter(SecureFormatter("%(levelname)s: %(funcName)s:%(lineno)d | %(message)s"))
     # Only show WARNING and above in console to avoid spam
     sh.setLevel(logging.WARNING)
     logger.addHandler(sh)
 
-def get_logger():
-    return logger
+# ─── capturar exceções não tratadas ────────────────────────────────────────
+def _ex_hook(exc_type, exc_value, exc_tb):
+    # Registra traceback completo
+    logger.exception("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+    # Chama hook padrão (imprime no stderr)
+    if _orig_ex_hook:
+        _orig_ex_hook(exc_type, exc_value, exc_tb)
 
-def warn_critical(message: str):
-    """Registra uma mensagem de aviso crítico"""
-    logger.critical(message)
+_orig_ex_hook = sys.excepthook
+sys.excepthook = _ex_hook
 
-def log_error(message: str, exc_info=None):
-    """Log error with optional exception info"""
-    if exc_info:
-        logger.error(f"{message}", exc_info=exc_info)
-    else:
-        logger.error(message)
+# Python ≥3.8 – exceções em threads
+if hasattr(logging, "excepthook"):
+    import threading
+    def _thread_ex_hook(args):
+        logger.exception("Uncaught thread exception", exc_info=(args.exc_type,
+                                                                args.exc_value,
+                                                                args.exc_traceback))
+        if _orig_thread_hook:
+            _orig_thread_hook(args)
+    _orig_thread_hook = threading.excepthook
+    threading.excepthook = _thread_ex_hook
 
-def log_exception(message: str, exception: Exception):
-    """Log exception with full traceback"""
-    logger.exception(f"{message}: {exception}")
+try:
+    from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+    def _qt_handler(mode, context, message):
+        if mode == QtMsgType.QtCriticalMsg:
+            logger.error("QtCritical: %s", message)
+        elif mode == QtMsgType.QtWarningMsg:
+            logger.warning("QtWarning: %s", message)
+        else:
+            logger.info("QtInfo: %s", message)
+    qInstallMessageHandler(_qt_handler)
+except ImportError:
+    pass  # PySide6 não disponível/necessário
 
+# Log initial startup message
+logger.info("=== CryptGuard iniciado ===")
 # Log initial startup message
 logger.info("=== CryptGuard iniciado ===")

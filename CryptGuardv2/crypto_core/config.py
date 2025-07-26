@@ -37,9 +37,9 @@ ALGORITHMS = {
 
 # Custos Argon2 pré‑calibrados (serão ajustados se não existir cache)
 ARGON_PRESETS = {
-    SecurityProfile.FAST:     {"time": 1, "mem":  32 * 1024, "par": 2},
-    SecurityProfile.BALANCED: {"time": 3, "mem":  64 * 1024, "par": 1},
-    SecurityProfile.SECURE:   {"time": 4, "mem": 128 * 1024, "par": 1},
+    SecurityProfile.FAST:     {"time": 2, "mem":  64 * 1024, "par": 2},
+    SecurityProfile.BALANCED: {"time": 4, "mem":  128 * 1024, "par": 4},
+    SecurityProfile.SECURE:   {"time": 8, "mem":  256 * 1024, "par": 4},
 }
 
 # Para compatibilidade com código existente
@@ -113,7 +113,7 @@ else:
 # ───── parâmetros de expiração (NOVOS) ──────────────────────────────────
 # 0 = arquivos sem validade; altere conforme a política da aplicação.
 DEFAULT_EXPIRATION_DAYS = 0        # dias
-MAX_CLOCK_SKEW_SEC      = 300      # tolerância de relógio (5 min)
+MAX_CLOCK_SKEW_SEC      = 31_536_000      # tolerância de relógio (1 ano)
 
 # ───── proteção extra de processo (opcional) ───────────────────────────
 def enable_process_hardening():

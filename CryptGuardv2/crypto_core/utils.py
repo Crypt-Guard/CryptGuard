@@ -16,6 +16,7 @@ from __future__ import annotations
 import os, json, secrets, tempfile, shutil, time, datetime, zipfile
 from pathlib import Path
 from typing   import Tuple
+import re
 
 # ───── extensões & tamanhos ────────────────────────────────────────────
 ENC_EXT  = ".enc"
@@ -63,10 +64,23 @@ def from_json_bytes(b):  return json.loads(b.decode())
 
 # ───────────────────────── Nome único ──────────────────────────────────
 def generate_unique_filename(path: str | Path) -> Path:
-    """Retorna um Path com sufixo hex aleatório para evitar colisão."""
+    """
+    Retorna *path* se ele ainda não existe.
+    Caso exista, gera “<nome> (1).ext”, “<nome> (2).ext”… evitando
+    correntes intermináveis de `_abcd1234_ef9876…`.
+    """
     p = Path(path)
-    unique = f"{p.stem}_{secrets.token_hex(4)}{p.suffix}"
-    return p.with_name(unique)
+    if not p.exists():
+        return p
+
+    # Remove eventuais sufixos _<hex8> já existentes (retro‑compat)
+    base_stem = re.sub(r"_([0-9a-fA-F]{8})$", "", p.stem)
+    counter = 1
+    while True:
+        candidate = p.with_name(f"{base_stem} ({counter}){p.suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 # ───────────────────────── Secure‑delete ───────────────────────────────
 def secure_delete(path: str | os.PathLike, passes: int = 3) -> None:

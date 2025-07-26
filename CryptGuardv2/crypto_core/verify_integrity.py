@@ -15,12 +15,14 @@ from .config         import MAGIC, ENC_EXT, META_EXT, SecurityProfile
 from .utils          import unpack_enc_zip, check_expiry, ExpiredFileError
 from .hkdf_utils     import derive_keys
 
-# Tag do algoritmo (4 bytes) na cabeça do arquivo .enc
+# Tag do algoritmo (4 bytes) na cabeça do arquivo .enc
 ALG_TAGS = {
-    b"ACTR": b"CGv2-keys",    # AES‑CTR
-    b"ACGM": b"CGv2-keys",    # AES‑GCM
-    b"CP20": b"PFA-keys",     # ChaCha20‑Poly1305
-    b"XC20": b"PFA-keys",     # XChaCha20‑Poly1305
+    b"ACTR": b"CGv2-keys",    # AES-CTR
+    b"AESG": b"PFA-keys",     # AES-GCM
+    b"CH20": b"PFA-keys",     # ChaCha20-Poly1305 single-shot
+    b"CHS3": b"PFA-keys",     # ChaCha20-Poly1305 streaming
+    b"XC20": b"PFA-keys",     # XChaCha20-Poly1305 single-shot
+    b"XCS3": b"PFA-keys",     # XChaCha20-Poly1305 streaming
 }
 
 def verify_integrity(
