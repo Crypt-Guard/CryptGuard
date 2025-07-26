@@ -32,8 +32,6 @@ from .crypto_base import BaseCipher
 from .rs_codec    import rs_encode_data, rs_decode_data
 from .config      import RS_PARITY_BYTES
 from crypto_core.logger import logger
-utf8 = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-logger.addHandler(logging.StreamHandler(utf8))
 
 TAG_LEN = 16   # bytes
 

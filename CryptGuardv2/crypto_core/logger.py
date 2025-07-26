@@ -50,16 +50,38 @@ logger.propagate = False
 # gravar warnings do módulo warnings no mesmo arquivo
 logging.captureWarnings(True)
 
-# opcional: imprimir no stderr em modo debug OU sempre para erros
-if os.getenv("CG_DEBUG", "1") == "1":
-    utf8_stream = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+def _safe_console_stream() -> io.TextIOBase:
+    """
+    Retorna um stream de texto UTF‑8 seguro para o console.
+    • Em runtime normal → sys.stderr (enc UTF‑8 wrapper).
+    • Em PyInstaller (stderr == None) → descarta para NUL sem quebrar.
+    """
+    target = sys.stderr
+
+    # Fallback quando rodando como executável PyInstaller
+    if target is None:
+        # cria um arquivo em NUL (Windows) ou /dev/null (POSIX)
+        nul = "NUL" if os.name == "nt" else "/dev/null"
+        target = open(nul, "w", buffering=1, encoding="utf‑8")
+
+    # Se ainda assim não tiver .buffer, já é TextIO – podemos usar direto
+    if not hasattr(target, "buffer"):
+        return target  # type: ignore[return-value]
+
+    # Caso normal: embrulhar buffer binário em TextIO UTF‑8
+    return io.TextIOWrapper(
+        target.buffer,
+        encoding="utf‑8",
+        errors="replace",
+        line_buffering=True,
     )
-    sh = logging.StreamHandler(stream=utf8_stream)
-    sh.setFormatter(SecureFormatter("%(levelname)s: %(funcName)s:%(lineno)d | %(message)s"))
-    # Only show WARNING and above in console to avoid spam
-    sh.setLevel(logging.WARNING)
-    logger.addHandler(sh)
+
+# ─── console handler ────────────────────────────────────────────────────────
+if os.getenv("CG_DEBUG", "1") == "1":
+    console_handler = logging.StreamHandler(stream=_safe_console_stream())
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(SecureFormatter("%(levelname)s: %(funcName)s:%(lineno)d | %(message)s"))
+    logger.addHandler(console_handler)
 
 # ─── capturar exceções não tratadas ────────────────────────────────────────
 def _ex_hook(exc_type, exc_value, exc_tb):
