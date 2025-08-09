@@ -16,33 +16,28 @@ def init_db():
     cursor = conn.cursor()
     
     # Cria a tabela tries se não existir
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS tries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_path TEXT NOT NULL,
+            file_path TEXT PRIMARY KEY,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            attempts INTEGER DEFAULT 1
+            attempts  INTEGER NOT NULL DEFAULT 0
         )
-    ''')
-    
+    """)
+
     conn.commit()
     conn.close()
 
 def record_failed_attempt(file_path: str):
-    """Registra uma tentativa falhada de descriptografia"""
     try:
-        conn = sqlite3.connect(get_db_path())
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO tries (file_path, attempts)
-            VALUES (?, COALESCE((SELECT attempts FROM tries WHERE file_path = ?) + 1, 1))
-        ''', (file_path, file_path))
-        
+        conn = sqlite3.connect(get_db_path()); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO tries(file_path, attempts) VALUES(?, 1)
+            ON CONFLICT(file_path) DO UPDATE SET attempts = attempts + 1
+        """, (file_path,))
         conn.commit()
-        conn.close()
-    except Exception:
-        pass  # Ignora erros de banco de dados
+    finally:
+        try: conn.close()
+        except: pass
 
 def check_password_attempts(file_path: str, max_attempts: int = 3) -> bool:
     """Verifica se o arquivo ainda pode ser descriptografado"""

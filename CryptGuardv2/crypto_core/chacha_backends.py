@@ -1,25 +1,12 @@
-"""chacha_backends.py – ChaCha20‑Poly1305 (12 B) e XChaCha20‑Poly1305 (24 B).
-
-Ambas as classes herdam **BaseCipher** do módulo *crypto_base* e reutilizam
-os mixins para suportar streaming (chunks de 8 MiB por padrão) ou single‑shot
-(sub‑chunks de 1 MiB), selecionado pelo parâmetro *streaming*.
-
-• **ChaChaCipher**   – nonce 12 B, usa `cryptography` ChaCha20Poly1305.
-• **XChaChaCipher**  – nonce 24 B, usa `PyCryptodome` ChaCha20_Poly1305.
-
-Ambas `supports_rs=True` e `use_global_hmac=True` para manter paridade de
-funcionalidades com a implementação original.
-chacha_backends.py – ChaCha20‑Poly1305 (12 B) e XChaCha20‑Poly1305 (24 B)
+"""chacha_backends.py – ChaCha20‑Poly1305 (12 B) e XChaCha20‑Poly1305 (24 B).
 
 Versão corrigida: remove keyword inválido `rs_bytes` nas chamadas de
 `rs_encode_data` para ser compatível com implementações existentes.
 """
 from __future__ import annotations
 
-import struct, secrets
+import struct
 from typing import Tuple
-import io, sys
-import logging
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.exceptions import InvalidTag  # Added for tag verification
@@ -44,14 +31,10 @@ class ChaChaCipher(BaseCipher):
 
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         cipher = ChaCha20Poly1305(enc_key)
         out = cipher.encrypt(nonce, plain, header)
-        if hasattr(cipher, "encrypt_and_digest"):
-            ct, tag = cipher.encrypt_and_digest(plain)
-        else:
-            ct, tag = out[:-16], out[-16:]
-        blob = ct + tag
+        blob = out
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         if parity:
             blob = rs_encode_data(blob, parity)
@@ -60,7 +43,7 @@ class ChaChaCipher(BaseCipher):
 
     @staticmethod
     def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         blob = cipher_blob
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         orig_blob = blob
@@ -97,14 +80,14 @@ class XChaChaCipher(BaseCipher):
 
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         if ChaCha20_Poly1305 is None:
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")
         cipher = ChaCha20_Poly1305.new(key=enc_key, nonce=nonce)
         cipher.update(header)  # aplica AAD corretamente
         ct = cipher.encrypt(plain)
         tag = cipher.digest()
-        blob = ct + tag                # tag sempre 16 B; usado na decodificação
+        blob = ct + tag                # tag sempre 16 B; usado na decodificação
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         if parity:
             blob = rs_encode_data(blob, parity)
@@ -113,7 +96,7 @@ class XChaChaCipher(BaseCipher):
 
     @staticmethod
     def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         if ChaCha20_Poly1305 is None:
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")
         blob = cipher_blob

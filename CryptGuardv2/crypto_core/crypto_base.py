@@ -39,7 +39,7 @@ from __future__ import annotations
 import os, struct, secrets, time, hmac, hashlib, queue, concurrent.futures
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, Optional, Tuple, Dict, Type
+from typing import Callable, Optional, Tuple, Type
 from io import BytesIO
 
 from .config          import (
@@ -48,16 +48,16 @@ from .config          import (
     SecurityProfile,
 )
 from .logger          import logger
-from .rate_limit      import check_allowed, register_failure, reset
+from .rate_limit      import check_allowed, reset
 from .hkdf_utils      import derive_keys as _hkdf
 from .kdf             import derive_key
-from .key_obfuscator  import TimedExposure, KeyObfuscator
+from .key_obfuscator  import TimedExposure
 from .metadata        import encrypt_meta_json, decrypt_meta_json
 from .utils           import (
     write_atomic_secure, pack_enc_zip, unpack_enc_zip,
-    generate_unique_filename, check_expiry, ExpiredFileError,
+    generate_unique_filename, check_expiry,
 )
-from .rs_codec        import rs_encode_data, rs_decode_data
+
 from .secure_bytes    import SecureBytes
 
 # ───────────────────────── classe base ────────────────────────────────────────

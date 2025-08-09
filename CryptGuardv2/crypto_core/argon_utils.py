@@ -1,21 +1,28 @@
 """
-Argon2 utilitário com calibração opcional (75 % da RAM disponível).
+Argon2 utilities and calibration.
 """
 from __future__ import annotations
-import json, math, psutil, secrets, os, time
+import json, psutil, os, time
 from pathlib import Path
 from argon2.low_level import hash_secret_raw, Type
-import argon2
 from .secure_bytes   import SecureBytes
 from .key_obfuscator import KeyObfuscator
-from .logger         import logger
+import logging
+import argon2
+
 from .security_warning import warn
+
+logger = logging.getLogger("crypto_core")
 
 CALIB_PATH = Path.home()/".my_encryptor"/"argon_calib.json"
 _KEY_LEN = 32
 _DEFAULT = dict(time_cost=3, memory_cost=128*1024, parallelism=4)
 
-def _available_ram() -> int: return psutil.virtual_memory().available
+def _available_ram() -> int:
+    try:
+        return int(psutil.virtual_memory().available)
+    except Exception:
+        return 512 * 1024 * 1024  # 512 MiB fallback
 
 def generate_key_from_password(
     pwd_sb: SecureBytes,
@@ -51,27 +58,29 @@ def generate_key_from_password(
     obf.obfuscate()
     return obf, p
 
-def calibrate_kdf(target_time=1.0):
-    """Calibra os parâmetros do KDF para o tempo alvo especificado e salva no arquivo"""
-    memory_cost = 65536  # Base ajustável
+def calibrate_kdf(target_time: float = 1.0) -> dict:
+    """
+    Mira ~target_time s ajustando time_cost; memory_cost em KiB.
+    Salva em CALIB_PATH e retorna dict {time_cost, memory_cost, parallelism}.
+    """
+    # use ~50–75% da RAM disponível, mas respeite mínimo seguro
+    mem_bytes = max(64 * 1024 * 1024, int(_available_ram() * 0.5))  # >=64MiB
+    memory_cost = mem_bytes // 1024  # KiB
     parallelism = os.cpu_count() or 4
-    time_cost = 1
-    
-    for tc in range(1, 20):  # Aumentei range para melhor precisão
-        start = time.time()
-        argon2.hash_password_raw(
-            password=b'test_password',
-            salt=b'test_salt_16bytes',
-            time_cost=tc,
-            memory_cost=memory_cost,
-            parallelism=parallelism,
-            hash_len=32,
-            type=argon2.Type.ID
+
+    tc = 1
+    while True:
+        start = time.perf_counter()
+        hash_secret_raw(
+            secret=b"bench", salt=b"\x00" * 16,
+            time_cost=tc, memory_cost=memory_cost, parallelism=parallelism,
+            hash_len=32, type=Type.ID
         )
-        elapsed = time.time() - start
-        if elapsed >= target_time:
+        elapsed = time.perf_counter() - start
+        if elapsed >= target_time or tc >= 20:
             break
-    
+        tc += 1
+
     params = {"time_cost": tc, "memory_cost": memory_cost, "parallelism": parallelism}
     CALIB_PATH.parent.mkdir(parents=True, exist_ok=True)
     CALIB_PATH.write_text(json.dumps(params))
@@ -79,7 +88,10 @@ def calibrate_kdf(target_time=1.0):
     return params
 
 def load_calibrated_params():
-    if CALIB_PATH.exists():
-        try: return json.loads(CALIB_PATH.read_text())
-        except Exception: pass
+    """Load calibrated parameters from file."""
+    try:
+        if CALIB_PATH.exists():
+            return json.loads(CALIB_PATH.read_text())
+    except Exception:
+        pass
     return None

@@ -16,6 +16,11 @@ def memset(ptr, value, size):
     except Exception:
         pass
 
+def _libc():
+    if platform.system() == "Darwin":
+        return ctypes.CDLL("libSystem.B.dylib")
+    return ctypes.CDLL("libc.so.6")
+
 def _mlock(buf):
     try:
         if platform.system() == "Windows":
@@ -24,10 +29,11 @@ def _mlock(buf):
                 ctypes.c_size_t(len(buf))
             )
         else:
-            libc = ctypes.CDLL("libc.so.6")
-            libc.mlock(ctypes.addressof(ctypes.c_char.from_buffer(buf)), len(buf))
+            libc = _libc()
+            libc.mlock(ctypes.addressof(ctypes.c_char.from_buffer(buf)), ctypes.c_size_t(len(buf)))
     except Exception:
-        pass  # opcional
+        pass
+
 
 def _munlock(buf):
     try:
@@ -37,8 +43,8 @@ def _munlock(buf):
                 ctypes.c_size_t(len(buf))
             )
         else:
-            libc = ctypes.CDLL("libc.so.6")
-            libc.munlock(ctypes.addressof(ctypes.c_char.from_buffer(buf)), len(buf))
+            libc = _libc()
+            libc.munlock(ctypes.addressof(ctypes.c_char.from_buffer(buf)), ctypes.c_size_t(len(buf)))
     except Exception:
         pass
 

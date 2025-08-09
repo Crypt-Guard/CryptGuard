@@ -3,21 +3,10 @@
 Cada classe herda de **BaseCipher** e apenas implementa `encode_chunk` /
 `decode_chunk`, delegando todo o restante (streaming, metadados, HMAC,
 rate‑limiting, etc.) ao núcleo comum.
-
-Uso:
-    from aes_backends import AesGcmCipher, AesCtrCipher
-    
-    # streaming (default True se arquivo > CHUNK_SIZE)
-    AesGcmCipher.encrypt_file("foo.bin", "pwd", profile=SecurityProfile.BALANCED,
-                              streaming=True)
-
-    # single‑shot CTR (não usa RS)
-    AesCtrCipher.encrypt_file("foo.bin", "pwd", profile=SecurityProfile.FAST,
-                              streaming=False)
 """
 from __future__ import annotations
 
-import struct, hmac, hashlib, secrets
+import struct
 from typing import Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -31,7 +20,7 @@ from .config           import RS_PARITY_BYTES
 from crypto_core.logger import logger
 
 class AesGcmCipher(BaseCipher):
-    """AES‑256‑GCM (nonce 12 B, tag 16 B, RS opcional)."""
+    """AES‑256‑GCM (nonce 12 B, tag 16 B, RS opcional)."""
     alg_tag       = b"AESG"
     hkdf_info     = b"PFA-keys"
     nonce_size    = 12
@@ -41,7 +30,7 @@ class AesGcmCipher(BaseCipher):
     # ------------------------------------------------------------------
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         blob = AESGCM(enc_key).encrypt(nonce, plain, header)
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         if parity:
@@ -52,7 +41,7 @@ class AesGcmCipher(BaseCipher):
     # ------------------------------------------------------------------
     @staticmethod
     def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         blob = cipher_blob
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         orig_blob = blob
@@ -101,7 +90,7 @@ class AesCtrCipher(BaseCipher):
     # ------------------------------------------------------------------
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:  # header added
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         enc = AesCtrCipher._aes_ctr(enc_key, nonce)
         cipher = enc.update(plain) + enc.finalize()
         payload = nonce + struct.pack(">I", len(cipher)) + cipher
@@ -110,7 +99,7 @@ class AesCtrCipher(BaseCipher):
     # ------------------------------------------------------------------
     @staticmethod
     def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes) -> Tuple[int, bytes]:  # header added
+                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         (clen,) = struct.unpack(">I", cipher_blob[:4])
         cipher  = cipher_blob[4:4+clen]
         dec = AesCtrCipher._aes_ctr(enc_key, nonce)

@@ -1,113 +1,80 @@
 """
-Logger com SecureFormatter – remove bytes sensíveis (hex + Base64).
+Logger com SecureFormatter – remove bytes sensíveis (hex / Base64) e centraliza configuração.
 """
+
+from __future__ import annotations
+
 import logging
-import os
 import re
 import sys
-import io
+from logging import Logger
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
-# Use Windows-compatible path
-LOG_PATH = Path(os.getenv("LOCALAPPDATA", Path.home())) / "CryptGuard" / "crypto.log"
+from .paths import LOG_PATH  # fonte única de verdade para o caminho do log
 
-# Ensure directory and file exist
-LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-LOG_PATH.touch(exist_ok=True)
-
-# ① Padrões de dados sensíveis
-_SENSITIVE_RE = re.compile(
-    r"""
-    (?:
-        (?<=key=)(?:0x)?[0-9A-Fa-f]{16,}      # hex após key=
-      | (?<=nonce=)(?:0x)?[0-9A-Fa-f]{16,}    # hex após nonce=
-      | (?<=key=)[A-Za-z0-9+/]{24,}={0,2}     # Base64 após key=
-      | (?<=nonce=)[A-Za-z0-9+/]{24,}={0,2}   # Base64 após nonce=
-      | (?<=password=)[^\s]{8,}               # passwords
-      | (?<=pwd=)[^\s]{8,}                    # pwd parameters
-    )
-    """,
-    re.VERBOSE,
-)
 
 class SecureFormatter(logging.Formatter):
-    def format(self, record):
+    """
+    Sanitiza mensagens para evitar vazamento de segredos (chaves, senhas, blobs).
+    - Mascara sequências hexadecimais longas (>= 32 chars).
+    - Mascara sequências base64 longas (>= 40 chars).
+    - Mascara padrões comuns 'password=...', 'secret=...', 'key=...'.
+    """
+
+    HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
+    B64_RE = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
+    KV_RE  = re.compile(r"(?i)(password|secret|key)\s*=\s*([^\s,;]+)")
+
+    def format(self, record: logging.LogRecord) -> str:
         msg = super().format(record)
-        # ② mascara segredos antes de gravar
-        return _SENSITIVE_RE.sub("<redacted>", msg)
+
+        # hex
+        msg = self.HEX_RE.sub(lambda m: f"<hex:{len(m.group(0))}B REDACTED>", msg)
+        # base64
+        msg = self.B64_RE.sub(lambda m: f"<b64:{len(m.group(0))}B REDACTED>", msg)
+        # key=value patterns
+        msg = self.KV_RE.sub(lambda m: f"{m.group(1)}=<REDACTED>", msg)
+        return msg
+
+
+def _build_handler() -> logging.Handler:
+    """
+    Tenta criar um RotatingFileHandler; se falhar, faz fallback para stderr.
+    """
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+
+    try:
+        # Garante diretório
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            LOG_PATH,
+            maxBytes=1_000_000,
+            backupCount=5,
+            encoding="utf-8",
+            delay=True,
+        )
+    except Exception:
+        handler = logging.StreamHandler(sys.stderr)
+
+    handler.setFormatter(SecureFormatter(fmt=fmt, datefmt=datefmt))
+    return handler
+
 
 # ③ configuração de logger
-_fmt = "%(asctime)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s"
-handler = RotatingFileHandler(LOG_PATH, maxBytes=5_000_000, backupCount=3)
-handler.setFormatter(SecureFormatter(_fmt))
-handler.setLevel(logging.DEBUG)          # grava tudo no arquivo
-logger  = logging.getLogger("crypto_core")
-logger.setLevel(logging.DEBUG)           # mantém DEBUG→INFO→…
-logger.addHandler(handler)
-logger.propagate = False
+logger: Logger = logging.getLogger("crypto_core")
+logger.setLevel(logging.DEBUG)  # controle global; ajuste no app conforme necessário
+# Evita handlers duplicados em reimport
+if not logger.handlers:
+    handler = _build_handler()
+    logger.addHandler(handler)
+logger.propagate = False  # não propagar para root (evita logs em dobro)
 
-# gravar warnings do módulo warnings no mesmo arquivo
-logging.captureWarnings(True)
 
-def _safe_console_stream() -> io.TextIOBase:
-    """
-    Retorna um stream de texto UTF‑8 seguro para o console.
-    • Em runtime normal → sys.stderr (enc UTF‑8 wrapper).
-    • Em PyInstaller (stderr == None) → descarta para NUL sem quebrar.
-    """
-    target = sys.stderr
-
-    # Fallback quando rodando como executável PyInstaller
-    if target is None:
-        # cria um arquivo em NUL (Windows) ou /dev/null (POSIX)
-        nul = "NUL" if os.name == "nt" else "/dev/null"
-        target = open(nul, "w", buffering=1, encoding="utf‑8")
-
-    # Se ainda assim não tiver .buffer, já é TextIO – podemos usar direto
-    if not hasattr(target, "buffer"):
-        return target  # type: ignore[return-value]
-
-    # Caso normal: embrulhar buffer binário em TextIO UTF‑8
-    return io.TextIOWrapper(
-        target.buffer,
-        encoding="utf‑8",
-        errors="replace",
-        line_buffering=True,
-    )
-
-# ─── console handler ────────────────────────────────────────────────────────
-if os.getenv("CG_DEBUG", "1") == "1":
-    console_handler = logging.StreamHandler(stream=_safe_console_stream())
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(SecureFormatter("%(levelname)s: %(funcName)s:%(lineno)d | %(message)s"))
-    logger.addHandler(console_handler)
-
-# ─── capturar exceções não tratadas ────────────────────────────────────────
-def _ex_hook(exc_type, exc_value, exc_tb):
-    # Registra traceback completo
-    logger.exception("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
-    # Chama hook padrão (imprime no stderr)
-    if _orig_ex_hook:
-        _orig_ex_hook(exc_type, exc_value, exc_tb)
-
-_orig_ex_hook = sys.excepthook
-sys.excepthook = _ex_hook
-
-# Python ≥3.8 – exceções em threads
-if hasattr(logging, "excepthook"):
-    import threading
-    def _thread_ex_hook(args):
-        logger.exception("Uncaught thread exception", exc_info=(args.exc_type,
-                                                                args.exc_value,
-                                                                args.exc_traceback))
-        if _orig_thread_hook:
-            _orig_thread_hook(args)
-    _orig_thread_hook = threading.excepthook
-    threading.excepthook = _thread_ex_hook
-
+# Integração opcional com Qt (se PySide6 estiver disponível)
 try:
     from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+
     def _qt_handler(mode, context, message):
         if mode == QtMsgType.QtCriticalMsg:
             logger.error("QtCritical: %s", message)
@@ -115,11 +82,14 @@ try:
             logger.warning("QtWarning: %s", message)
         else:
             logger.info("QtInfo: %s", message)
-    qInstallMessageHandler(_qt_handler)
-except ImportError:
-    pass  # PySide6 não disponível/necessário
 
-# Log initial startup message
+    qInstallMessageHandler(_qt_handler)
+except Exception:
+    # PySide6 não disponível/necessário
+    pass
+
+# Mensagem única de inicialização
 logger.info("=== CryptGuard iniciado ===")
-# Log initial startup message
-logger.info("=== CryptGuard iniciado ===")
+
+# Re-export para conveniência (outros módulos fazem `from .logger import LOG_PATH`)
+__all__ = ["logger", "LOG_PATH"]

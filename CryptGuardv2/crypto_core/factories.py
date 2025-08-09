@@ -19,6 +19,7 @@ A fábrica retorna simplesmente a *classe* adequada (subclasse de BaseCipher).
 Isso permite chamar diretamente `encrypt_file()` / `decrypt_file()` sem
 instanciação.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -119,3 +120,20 @@ def decrypt(path: str | Path, password: str, **kw) -> str:
         tmp_handle = None  # noqa: F841
 
 __all__ = ["get_cipher", "encrypt", "decrypt"]
+
+def get_cipher(alg: str):
+    """Get cipher backend by algorithm name."""
+    if alg in ("AES-256-GCM", "AESG"):
+        from . import aes_backends
+        return aes_backends.AesGcmCipher
+    elif alg in ("AES-256-CTR", "ACTR"):
+        from . import aes_backends
+        return aes_backends.AesCtrCipher
+    elif alg in ("ChaCha20-Poly1305", "CH20", "CHS3"):
+        from . import chacha_backends
+        return chacha_backends.ChaChaCipher
+    elif alg in ("XChaCha20-Poly1305", "XC20", "XCS3"):
+        from . import chacha_backends
+        return chacha_backends.XChaChaCipher
+    else:
+        raise ValueError(f"Unknown algorithm: {alg}")

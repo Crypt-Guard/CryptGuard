@@ -17,10 +17,7 @@ import os, json, secrets, tempfile, shutil, time, datetime, zipfile
 from pathlib import Path
 from typing   import Tuple
 import re
-
-# ───── extensões & tamanhos ────────────────────────────────────────────
-ENC_EXT  = ".enc"
-META_EXT = ".meta"
+from .config import ENC_EXT, META_EXT
 
 # Secure‑delete escreve blocos de 1 MiB
 SECURE_DELETE_CHUNK_SIZE = 1_048_576  # 1 MiB
@@ -130,13 +127,11 @@ def human_speed(done: int, elapsed: float) -> str:
 
 # ───────────────────────── Archive helper (ZIP genérico) ───────────────
 def archive_folder(folder_path: str | Path) -> Path:
-    """
-    Compacta *folder_path* em ZIP recursivo.
-    Retorna o **path** do ZIP criado.
-    """
     folder = Path(folder_path)
-    zip_path = folder.with_suffix('.zip')
-    shutil.make_archive(str(folder), 'zip', root_dir=folder)
+    if not folder.is_dir():
+        raise NotADirectoryError(folder)
+    zip_path = folder.with_suffix(".zip")
+    shutil.make_archive(str(folder), "zip", root_dir=folder)
     return zip_path
 
 # ───────────────────────── ZIP helpers *.enc + *.meta* ─────────────────

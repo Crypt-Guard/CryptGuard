@@ -1,10 +1,11 @@
 """
 Constantes e parâmetros (pode ser calibrado durante a execução).
 """
+from __future__ import annotations
 from enum import Enum, auto
-import os, time, json
+import os, json
 from pathlib import Path
-import argon2
+from .paths import LOG_PATH, BASE_DIR  # Import from paths
 from .argon_utils import calibrate_kdf
 from .process_protection import enable_process_hardening as _apply_full_hardening
 
@@ -68,20 +69,30 @@ SIGN_METADATA   = True
 
 # ───── extensões / mágica de header ─────────────────────────────────────
 MAGIC          = b"CGv2"       # nova versão do formato
-ENC_EXT        = ".enc"
-META_EXT       = ".meta"
+CG2_EXT        = ".cg2"        # NOVO: formato único CG2
+ENC_EXT        = ".enc"        # legado (para leitura)
+META_EXT       = ".meta"       # legado (para leitura)
 META_SALT_SIZE = 16
+READ_LEGACY_FORMATS = True     # compat com .enc+.meta
 
-# ───── caminhos de log e calibração ─────────────────────────────────────
-LOG_PATH = Path(os.path.expanduser("~")) / "AppData" / "Local" / "CryptGuard" / "crypto.log"
-LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-CALIB_PATH = Path.home() / ".cryptguard" / "argon_calib.json"
-CALIB_PATH.parent.mkdir(exist_ok=True)
+# ───── caminhos de app e calibração ─────────────────────────────────────
+APP_DIR   = Path.home() / ".cryptguardv2"
+LOG_PATH  = APP_DIR / "cryptguard.log"
+CALIB_PATH = APP_DIR / "argon_calib.json"
+APP_DIR.mkdir(exist_ok=True)
 
 # ───── calibração automática (primeira execução) ───────────────────────
 if not CALIB_PATH.exists():
     presets = calibrate_kdf()
+    # If calibrate_kdf returns a flat dict, wrap it for all profiles
+    if all(k in presets for k in ("time_cost", "memory_cost", "parallelism")):
+        # Use the same calibration for all profiles
+        mapped = {
+            "FAST":     {"time": presets["time_cost"], "mem": presets["memory_cost"], "par": presets["parallelism"]},
+            "BALANCED": {"time": presets["time_cost"], "mem": presets["memory_cost"], "par": presets["parallelism"]},
+            "SECURE":   {"time": presets["time_cost"], "mem": presets["memory_cost"], "par": presets["parallelism"]},
+        }
+        presets = mapped
     CALIB_PATH.write_text(json.dumps(presets, indent=2))
     ARGON_PRESETS.update({
         SecurityProfile.FAST:     presets["FAST"],
@@ -99,6 +110,14 @@ if not CALIB_PATH.exists():
 else:
     try:
         presets = json.loads(CALIB_PATH.read_text())
+        # If the loaded presets is a flat dict, wrap it for all profiles
+        if all(k in presets for k in ("time_cost", "memory_cost", "parallelism")):
+            mapped = {
+                "FAST":     {"time": presets["time_cost"], "mem": presets["memory_cost"], "par": presets["parallelism"]},
+                "BALANCED": {"time": presets["time_cost"], "mem": presets["memory_cost"], "par": presets["parallelism"]},
+                "SECURE":   {"time": presets["time_cost"], "mem": presets["memory_cost"], "par": presets["parallelism"]},
+            }
+            presets = mapped
         for prof, cfg in presets.items():
             ARGON_PRESETS[SecurityProfile[prof]] = cfg
             # Atualizar os parâmetros legados também
@@ -129,3 +148,13 @@ def enable_process_hardening():
     
     # Outras proteções podem ser adicionadas aqui
     pass
+    
+    # Outras proteções podem ser adicionadas aqui
+    pass
+
+# Re-export for compatibility
+__all__ = [
+    "SecurityProfile", "ARGON_PARAMS", "READ_LEGACY_FORMATS", 
+    "STREAMING_THRESHOLD", "CG2_EXT", "enable_process_hardening",
+    "LOG_PATH", "BASE_DIR"  # Add these to exports
+]

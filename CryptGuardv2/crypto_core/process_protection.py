@@ -8,7 +8,7 @@ Harden opcional do processo em Windows:
 • Tenta bloquear debugging (CheckRemoteDebuggerPresent)
 Chamado via flag --harden ao iniciar o CryptGuard.
 """
-import ctypes, os, platform
+import ctypes, platform
 from .security_warning import warn
 
 def _enable_dep():

@@ -1,70 +1,124 @@
 """
-Rate limiting module for CryptGuard v2
+Thread-safe rate limiting utilities for CryptGuard v2.
+
+Provides per-identifier failure counting with lockout windows.
 """
+
+from __future__ import annotations
+
+import threading
 import time
 from typing import Dict, Optional
 
-# Simple rate limiting state
+# Module defaults (can be overridden per call)
+_MAX_FAILURES_DEFAULT: int = 5
+_LOCKOUT_TIME_DEFAULT: float = 300.0  # seconds
+
+# Internal mutable state
 _failure_counts: Dict[str, int] = {}
 _last_attempt: Dict[str, float] = {}
 
-def check_allowed(identifier: str = "default", max_failures: int = 5, lockout_time: float = 300.0) -> bool:
+# Single process-wide lock for thread safety
+_lock = threading.Lock()
+
+
+def check_allowed(
+    identifier: str = "default",
+    max_failures: Optional[int] = None,
+    lockout_time: Optional[float] = None,
+) -> bool:
     """
-    Check if an operation is allowed based on failure count and time.
-    
-    Args:
-        identifier: Unique identifier for the operation
-        max_failures: Maximum number of failures before lockout
-        lockout_time: Time in seconds to wait after max failures
-    
-    Returns:
-        True if operation is allowed, False if rate limited
+    Return True if the operation identified by `identifier` is currently allowed.
+
+    A caller should call `register_failure(identifier)` after a failed attempt,
+    and `register_success(identifier)` (or `reset(identifier)`) after a success.
+
+    Lockout semantics:
+      - Before reaching `max_failures`, always allowed (True).
+      - Once failures >= max_failures, deny (False) until `lockout_time` seconds
+        have passed since the last failure. After that window, the state is reset
+        and the next call will be allowed again.
     """
-    current_time = time.time()
-    
-    # Check if we're in lockout period
-    if identifier in _last_attempt:
-        time_since_last = current_time - _last_attempt[identifier]
-        failures = _failure_counts.get(identifier, 0)
-        
-        if failures >= max_failures and time_since_last < lockout_time:
+    mf = _MAX_FAILURES_DEFAULT if max_failures is None else int(max_failures)
+    lt = _LOCKOUT_TIME_DEFAULT if lockout_time is None else float(lockout_time)
+
+    now = time.time()
+    with _lock:
+        fails = _failure_counts.get(identifier, 0)
+        last = _last_attempt.get(identifier, 0.0)
+
+        if fails < mf:
+            return True
+
+        # In lockout window?
+        remaining = (last + lt) - now
+        if remaining > 0:
             return False
-        
-        # Reset if lockout period has passed
-        if time_since_last >= lockout_time:
-            _failure_counts[identifier] = 0
-    
-    return True
+
+        # Lockout window expired -> reset state and allow again
+        _failure_counts.pop(identifier, None)
+        _last_attempt.pop(identifier, None)
+        return True
+
+
+def get_lockout_remaining(
+    identifier: str,
+    max_failures: Optional[int] = None,
+    lockout_time: Optional[float] = None,
+) -> float:
+    """
+    Return seconds remaining in the lockout window for `identifier`.
+    Returns 0 when not locked out.
+    """
+    mf = _MAX_FAILURES_DEFAULT if max_failures is None else int(max_failures)
+    lt = _LOCKOUT_TIME_DEFAULT if lockout_time is None else float(lockout_time)
+
+    now = time.time()
+    with _lock:
+        fails = _failure_counts.get(identifier, 0)
+        if fails < mf:
+            return 0.0
+        last = _last_attempt.get(identifier, 0.0)
+        remaining = (last + lt) - now
+        return max(0.0, remaining)
+
 
 def register_failure(identifier: str = "default") -> None:
     """
-    Register a failure for the given identifier.
-    
-    Args:
-        identifier: Unique identifier for the operation
+    Record a failed attempt for `identifier`.
     """
-    current_time = time.time()
-    _failure_counts[identifier] = _failure_counts.get(identifier, 0) + 1
-    _last_attempt[identifier] = current_time
+    now = time.time()
+    with _lock:
+        _failure_counts[identifier] = _failure_counts.get(identifier, 0) + 1
+        _last_attempt[identifier] = now
 
-def reset(identifier: str = "default") -> None:
+
+def register_success(identifier: str = "default") -> None:
     """
-    Reset the failure count for the given identifier.
-    
-    Args:
-        identifier: Unique identifier for the operation
+    Clear failure/lockout state for `identifier` (i.e., after a successful attempt).
     """
-    _failure_counts.pop(identifier, None)
-    _last_attempt.pop(identifier, None)
+    with _lock:
+        _failure_counts.pop(identifier, None)
+        _last_attempt.pop(identifier, None)
+
+
+# Backwards-compatible alias expected elsewhere in the codebase
+reset = register_success
+
 
 def get_failure_count(identifier: str = "default") -> int:
     """
-    Get the current failure count for an identifier.
-    
-    Args:
-        identifier: Unique identifier for the operation
-    
-    Returns:
-        Current failure count
+    Return current failure count for `identifier`.
     """
-    return _failure_counts.get(identifier, 0)
+    with _lock:
+        return _failure_counts.get(identifier, 0)
+
+
+__all__ = [
+    "check_allowed",
+    "register_failure",
+    "register_success",
+    "reset",
+    "get_failure_count",
+    "get_lockout_remaining",
+]
