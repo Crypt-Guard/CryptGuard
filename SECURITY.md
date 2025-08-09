@@ -79,7 +79,7 @@ Supported lines:
 
 | Version | Status     | Notes                           |
 |--------:|------------|---------------------------------|
-| 2.7.x   | Supported  | Current feature & security fixes |
+| 2.3.x   | Supported  | Current feature & security fixes |
 | < 2.7   | Not supported | Please upgrade to ≥ 2.7.0     |
 
 ---
