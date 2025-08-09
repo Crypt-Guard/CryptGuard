@@ -238,6 +238,3 @@ Do not export or re-export to sanctioned jurisdictions/users.
 * `PyNaCl` (ISC) — optional fallback for XChaCha20-Poly1305
 
 ```
-
-::contentReference[oaicite:0]{index=0}
-```
