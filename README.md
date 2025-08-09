@@ -223,7 +223,6 @@ When we distribute **binaries** (e.g., Windows `.exe`) via Releases, they are **
 
 **By downloading binaries, you agree to comply with applicable export/sanctions laws.**
 Do not export or re-export to sanctioned jurisdictions/users.
-*(This is not legal advice.)*
 
 ---
 
