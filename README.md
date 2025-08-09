@@ -204,7 +204,7 @@ For security issues, **do not** open a public issue — see **SECURITY.md**.
 ## 📜 License
 
 Licensed under **Apache License 2.0**.
-See [`LICENSE.txt`](./LICENSE.txt) for details.
+See [`LICENSE`](./LICENSE) for details.
 
 ---
 
