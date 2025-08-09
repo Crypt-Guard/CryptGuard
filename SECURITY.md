@@ -93,12 +93,6 @@ Supported lines:
   - Steps to reproduce, PoC inputs/outputs, and logs (if available)
   - Your OS, CryptGuard version (e.g., 2.7.0), and environment details
 
-**Response & disclosure timeline (goal)**  
-- Acknowledgement within **72 hours**  
-- Triage within **7 business days**  
-- Fix/mitigation target within **30–90 days**, depending on severity/complexity  
-We’re happy to coordinate a public disclosure once a fix is available.
-
 ---
 
 ## Legal & Export Compliance
