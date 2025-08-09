@@ -1,4 +1,3 @@
-````markdown
 # 🔐 CryptGuard v2 — Version 2.7.0 (August 2025)
 
 **CryptGuard v2** is a modern file-encryption app with a Qt (PySide6) GUI and a security-first format (**CG2**).  
@@ -236,5 +235,3 @@ Do not export or re-export to sanctioned jurisdictions/users.
 * `PySide6 / Qt` (LGPL-3.0; additional Qt terms may apply)
 * `zxcvbn-python` (MIT)
 * `PyNaCl` (ISC) — optional fallback for XChaCha20-Poly1305
-
-```
