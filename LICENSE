@@ -200,16 +200,19 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 
-   ADDITIONAL NOTES FOR CRYPTGUARD:
+[... conteúdo padrão da Apache License 2.0 inalterado ...]
 
-   This software uses the following third-party libraries, each under their
-   respective licenses:
+ADDITIONAL NOTES FOR CRYPTGUARD:
 
-   - cryptography (Apache-2.0)
-   - argon2-cffi (MIT)
-   - reedsolo (MIT)
-   - zxcvbn-python (MIT)
-   - flet (MIT)
+This software uses the following third-party libraries, each under their
+respective licenses:
 
-   For the complete text of these licenses, please refer to the respective
-   packages or visit their official repositories.
+- cryptography (Apache-2.0)
+- argon2-cffi (MIT)
+- reedsolo (MIT)
+- PySide6 / Qt (LGPL-3.0, additional Qt terms may apply)
+- zxcvbn-python (MIT)
+- PyNaCl (optional, ISC)
+
+For the complete text of these licenses, please refer to the respective
+packages or visit their official repositories.
