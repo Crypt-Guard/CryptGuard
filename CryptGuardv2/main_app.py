@@ -7,12 +7,13 @@ from pathlib import Path
 
 # ─── Standard library ────────────────────────────────────────────────────────
 import sys, time, os, locale, zipfile, tempfile, shutil
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import Optional, Dict, Callable
 
+# Remove duplicate import of Path and guard stderr.reconfigure as well
 if hasattr(sys.stdout, "reconfigure"):      # Windows → garantir UTF‑8
     sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 # ─── PySide6 / Qt ────────────────────────────────────────────────────────────
@@ -483,11 +484,16 @@ class MainWindow(QWidget):
 
     # ───────────────────────── Progress callbacks ───────────────────────
     def _progress(self, done: int, elapsed: float):
-        if self._total_bytes:
-            pct = min(int(done * 100 / self._total_bytes), 100)
+        # Switch from indeterminate to determinate on first byte processed
+        if self.prg.maximum() == 0:
+            self.prg.setMaximum(100)
+        total = getattr(self, "_total_bytes", 0)
+        if total:
+            pct = min(int(done * 100 / total), 100)
             self.prg.setValue(pct)
-            speed = human_speed(done, elapsed)
-            self.lbl_speed.setText(f"Speed: {speed}")
+        # Always update speed
+        speed = human_speed(done, elapsed)
+        self.lbl_speed.setText(f"Speed: {speed}")
 
     def _done(self, out_path: str):
         # 🔧 se vier vazio (ex.: cancel), só limpa UI
@@ -592,7 +598,15 @@ class MainWindow(QWidget):
                                     f"Output file:\n{Path(final_output).name}")
         
         if self.chk_del.isChecked():
-            secure_delete(self._original_path, passes=1)
+            try:
+                p = Path(self._original_path)
+                if p.is_dir():
+                    # Best-effort recursive delete for directories
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    secure_delete(self._original_path, passes=1)
+            except Exception as e:
+                self.status.showMessage(f"Delete failed: {e}", 8000)
         
         self.status.showMessage("✔️ Done.", 8000)
         try:
@@ -764,20 +778,12 @@ class MainWindow(QWidget):
         if do_encrypt:
             self._total_bytes = src_size
         else:
-            meta_file = Path(src + ".meta")
-            try:
-                from crypto_core.metadata import decrypt_meta_json
-                pwd_sb = SecureBytes(pwd.encode())
-                meta = decrypt_meta_json(meta_file, pwd_sb)
-                self._total_bytes = meta.get("size", src_size)
-                pwd_sb.clear()
-            except Exception:
-                self._total_bytes = src_size
-
+            self._total_bytes = src_size
         self._toggle(False)
         # Set progress bar to indeterminate mode for key derivation
         self.prg.setMaximum(0)
         self.prg.setValue(0)
+        self._progress_started = False  # mark not started for determinate transition
         self.status.showMessage("Deriving key (Argon2)…")
         
         # ─── preparar worker usando API unificada ─────────────────────────
@@ -893,28 +899,25 @@ class MainWindow(QWidget):
                     return
                 attempts += 1
                 try:
-                     vault_path = Config.default_path() 
-                     if vault_path.exists(): 
-                         # Se arquivo existe mas estiver vazio ou inválido, podemos recriar 
-                         if vault_path.stat().st_size == 0: 
-                             vault_path.unlink()  # remove arquivo vazio 
-                             exists = False 
-                         else: 
-                             exists = True 
-                     else: 
-                         exists = False 
-                     if not exists: 
-                         # Criar Vault novo 
-                         from vault import VaultManager, StorageBackend, SecureMemory 
-                         vm = VaultManager(StorageBackend(vault_path)) 
-                         vm.create(SecureMemory(pw)) 
-                         self.vm = vm 
-                         self.status.showMessage("Novo Vault criado com sucesso.", 8000) 
-                     else: 
-                         # Abrir Vault existente 
-                         self.vm = open_or_init_vault(pw) 
-                         self.status.showMessage("Vault aberto com sucesso.", 8000)
-                         break
+                    vault_path = Config.default_path()
+                    if vault_path.exists():
+                        if vault_path.stat().st_size == 0:
+                            vault_path.unlink()
+                            exists = False
+                        else:
+                            exists = True
+                    else:
+                        exists = False
+                    if not exists:
+                        from vault import VaultManager, StorageBackend, SecureMemory
+                        vm = VaultManager(StorageBackend(vault_path))
+                        vm.create(SecureMemory(pw))
+                        self.vm = vm
+                        self.status.showMessage("Novo Vault criado com sucesso.", 8000)
+                    else:
+                        self.vm = open_or_init_vault(pw)
+                        self.status.showMessage("Vault aberto com sucesso.", 8000)
+                        # do not break here; proceed to open dialog below
                 except CorruptVault:
                     if QMessageBox.question(
                         self, "Vault corrompido",
@@ -924,31 +927,30 @@ class MainWindow(QWidget):
                         QMessageBox.No
                     ) == QMessageBox.Yes:
                         from vault import VaultManager, StorageBackend, SecureMemory
-                        # Use global Config (already imported at top)
                         vm = VaultManager(StorageBackend(Config.default_path()))
                         vm.create(SecureMemory(pw))
                         self.vm = vm
                         self.status.showMessage("Novo Vault criado com sucesso.", 8000)
-                        break
+                        # do not break; proceed to dialog
                     else:
                         return
                 except WrongPassword:
-                    # Apenas informa e permite tentar novamente — sem recriar
                     QMessageBox.warning(self, "Vault", "Senha do Vault incorreta. Tente novamente.")
                     continue
                 finally:
                     pw = ""   # zera cópia em memória clara
 
-            # Fora do bloco if, ou em iteração subsequente, self.vm está pronto:
-            dlg = VaultDialog(self.vm, self)
-            dlg.file_selected.connect(
-                lambda p: (self.file_line.setText(p),
-                           self._detect_algo(p),
-                           self.status.showMessage("File selected from Vault."))
-            )
-            dlg.exec()
+            # Fora do bloco if, self.vm está pronto:
+            if self.vm is not None:
+                dlg = VaultDialog(self.vm, self)
+                dlg.file_selected.connect(
+                    lambda p: (self.file_line.setText(p),
+                               self._detect_algo(p),
+                               self.status.showMessage("File selected from Vault."))
+                )
+                dlg.exec()
             break
-        
+
     def _open_log(self):
         """Abre o arquivo de log no editor padrão, com flush e fallbacks."""
         try:

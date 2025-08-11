@@ -24,9 +24,8 @@ import gzip, io, pickle
 REQ = ("cryptography", "argon2", "psutil", "PySide6")
 missing = [pkg for pkg in REQ if not (pkg in sys.modules or __import__(pkg, fromlist=[""]))]
 if missing:
-    print("Dependências faltando:", ", ".join(missing))
-    print("→  pip install -U " + " ".join(missing))
-    sys.exit(1)
+    print("Aviso: dependências ausentes:", ", ".join(missing))
+    print("Algumas funções do Vault podem ficar indisponíveis.")
 
 import psutil                             # noqa: E402
 import argon2.low_level as _argon2        # noqa: E402
@@ -59,6 +58,19 @@ from PySide6.QtWidgets import (
     QDialog, QListWidget, QVBoxLayout, QListWidgetItem, QFileDialog,
     QMessageBox, QPushButton, QHBoxLayout, QLabel, QWidget
 )
+
+try:
+    # quando executado como módulo dentro do projeto
+    from crypto_core.paths import BASE_DIR  # type: ignore
+except Exception:
+    try:
+        # quando importado como pacote (CryptGuardv2.crypto_core...)
+        from CryptGuardv2.crypto_core.paths import BASE_DIR  # type: ignore
+    except Exception:
+        # fallback absoluto (não deve ocorrer, mas evita NameError)
+        import os
+        from pathlib import Path as _Path
+        BASE_DIR = (_Path.home() / 'AppData' / 'Local' / 'CryptGuard') if os.name == 'nt' else (_Path.home() / '.cryptguard')
 
 if platform.system() == "Windows":
     try:
@@ -100,7 +112,7 @@ def _harden_process_once() -> None:
     _harden_process_once._done = True
 
 # Aplica hardening assim que o módulo é importado
-_harden_process_once()
+# _harden_process_once()  # adiado para depois de SecurityWarning ser definido
 
 # ### B  --  Compressão/decompressão para grandes cofres
 CHUNK = 64 * 1024
@@ -138,14 +150,14 @@ class Config:
     ARGON_PARALLEL = min(8, multiprocessing.cpu_count() or 2)
     MAX_ATTEMPTS = 5
     REQUIRE_2FA = False
-    INI_PATH = Path.home() / ".cryptguard" / "vault.ini"  # único ponto‑fonte
+    INI_PATH = BASE_DIR / "vault.ini"  # único ponto‑fonte
     @classmethod
     def get_kdf_params(cls):
         """
         Consulta (ou cria) ~/.cryptguard/vault.ini e devolve sempre
         **os mesmos** parâmetros Argon2id entre execuções.
         """
-        legacy = Path.home() / ".cryptguard" / "config.ini"
+        legacy = BASE_DIR / "config.ini"
         if legacy.exists() and not cls.INI_PATH.exists():
             legacy.replace(cls.INI_PATH)          # move antigo → novo nome
 
@@ -181,7 +193,7 @@ class Config:
             appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
             p = Path(appdata) / "CryptGuard" / "vault3.dat"
         else:
-            p = Path.home() / ".cryptguard" / "vault3.dat"
+            p = BASE_DIR / "vault3.dat"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
@@ -210,7 +222,7 @@ KDF_PARAMS = Config.get_kdf_params()
 # ═════════════════════════ Logging seguro ═══════════════════════════════════
 
 def _setup_logger() -> logging.Logger:
-    path = Path.home() / ".cryptguard" / "vault.log"
+    path = BASE_DIR / "vault.log"
     path.parent.mkdir(exist_ok=True, parents=True)
     handler = RotatingFileHandler(path, maxBytes=5 * 2**20, backupCount=2, encoding="utf-8")  # <-- Usar diretamente
     fmt = logging.Formatter("%(asctime)s │ %(levelname)s │ %(message)s")
@@ -265,6 +277,8 @@ class ProcessProtection:
                 warnings.warn(SecurityWarning("Timing‑glitch – possível debugger", "debug", "high"))
 
 ProcessProtection.apply()
+# Agora que SecurityWarning está definido, aplicar hardening de processo
+_harden_process_once()
 
 # ═════════════════════════ SecureMemory helper ══════════════════════════════
 class SecureMemory:
@@ -470,14 +484,14 @@ class StorageBackend:
         except AttributeError:
             pass  # Alguns sistemas não possuem os.sync()
 
-    def _retry_op(self, func, max_tries=3, delay=1.0):
-        for attempt in range(5):
+    def _retry_op(self, func, max_tries=5, delay=2.0):
+        for attempt in range(max_tries):
             try:
                 return func()
             except (OSError, IOError) as e:
-                if attempt == 4:
-                    raise CorruptVault(f"Falha após 5 tentativas: {e} – possível conflito de sync") from e
-                time.sleep(2.0)
+                if attempt == max_tries - 1:
+                    raise CorruptVault(f"Falha após {max_tries} tentativas: {e} – possível conflito de sync") from e
+                time.sleep(delay)
 
     def save(self, data: bytes):
         def do_save():
@@ -665,21 +679,25 @@ class VaultManager:
             )
             if not isinstance(master_password, SecureMemory):
                 master_password = SecureMemory(master_password)
-                
+
             # Use the parameters from the header for key derivation
             self.kdf_params = {"time_cost": t, "memory_cost": m, "parallelism": p}
             enc_key, mac_key = derive_keys(master_password, salt, self.kdf_params)
-            
+
             # Verify HMAC before key masking
             expected_mac = hmac.new(mac_key, hdr_raw[:-32], hashlib.sha256).digest()
             if not hmac.compare_digest(expected_mac, hdr_raw[-32:]):
                 self.rl.fail(); raise WrongPassword("Senha incorreta")
-            
+
+            # Verifica magic/versão após HMAC válido
+            if magic != Config.MAGIC or ver != Config.VERSION:
+                self.rl.fail(); raise CorruptVault("Formato ou versão incompatível")
+
             # engine uses the raw key before masking
             self.enc = CryptoEngine(enc_key)
             # Only after engine is created, we set and mask keys
             self._set_keys(enc_key, mac_key)
-            
+
             # Warning but don't block access if parameters differ from current global ones
             if self.kdf_params != KDF_PARAMS:
                 warnings.warn(
@@ -688,8 +706,7 @@ class VaultManager:
                         "kdf", "medium"
                     )
                 )
-                
-            self.rl.success()
+
             try:
                 # ① XChaCha se disponível
                 plain = self.enc.dec(nonce, body)
@@ -711,6 +728,8 @@ class VaultManager:
                 # Decriptou com chave errada → lixo → falha de descompressão
                 self.rl.fail()
                 raise WrongPassword("Senha incorreta") from err
+
+            self.rl.success()
             log.info(f"Vault aberto: {len(self.db)} arquivos")
         except InvalidTag:
             self.rl.fail()
@@ -872,13 +891,12 @@ class VaultDialog(QDialog):
             label_text = label.text()
         else:
             label_text = str(label)
-        # Para qualquer arquivo criptografado (.enc) exporta silenciosamente
+        # Para qualquer arquivo criptografado (.cg2) exporta silenciosamente
         # p/ diretório temporário e devolve o caminho; não abre diálogos.
-        if label_text.lower().endswith('.enc'):
-            import tempfile, os
-            fd, tmp = tempfile.mkstemp(prefix="cg_", suffix=".enc")
-            os.close(fd)
-            out_path = self.vm.export_file(label_text, Path(tmp).parent)
+        if label_text.lower().endswith('.cg2'):
+            import tempfile
+            tmp_dir = Path(tempfile.gettempdir())
+            out_path = self.vm.export_file(label_text, tmp_dir)
             try:
                 os.chmod(out_path, 0o600)
             except Exception:
