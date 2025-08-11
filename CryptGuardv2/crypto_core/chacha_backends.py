@@ -9,7 +9,6 @@ import struct
 from typing import Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-from cryptography.exceptions import InvalidTag  # Added for tag verification
 try:
     from Crypto.Cipher import ChaCha20_Poly1305  # PyCryptodome
 except ImportError:
@@ -32,6 +31,9 @@ class ChaChaCipher(BaseCipher):
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
                      rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+        # Validate nonce length early to avoid backend ambiguity
+        if len(nonce) != ChaChaCipher.nonce_size:
+            raise ValueError(f"Invalid nonce length: expected {ChaChaCipher.nonce_size} bytes")
         cipher = ChaCha20Poly1305(enc_key)
         out = cipher.encrypt(nonce, plain, header)
         blob = out
@@ -53,14 +55,15 @@ class ChaChaCipher(BaseCipher):
             except Exception as e:
                 logger.warning("RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
                                idx, len(orig_blob), e, parity)
-        if parity and len(blob) <= parity + 16:
-            raise ValueError("Bloco contém paridade maior ou igual ao payload; abortando.")
         last_err = None
-        for attempt in ("no_strip", "strip_parity" if parity else None):
+        attempts = ("no_strip", "strip_parity") if parity else ("no_strip",)
+        for attempt in attempts:
             try:
-                if attempt == "strip_parity":
-                    blob = orig_blob[:-parity]
-                ct, tag = blob[:-16], blob[-16:]
+                core = orig_blob[:-parity] if attempt == "strip_parity" else blob
+                if len(core) < TAG_LEN:
+                    last_err = ValueError("Chunk too small for tag")
+                    continue
+                ct, tag = core[:-TAG_LEN], core[-TAG_LEN:]
                 cipher = ChaCha20Poly1305(enc_key)
                 plain = _dec(cipher, ct, tag, nonce, header)
                 return idx, plain
@@ -68,7 +71,7 @@ class ChaChaCipher(BaseCipher):
                 last_err = e
                 continue
         logger.error("Tag verification failed (idx=%d, len=%d) after %s attempts",
-                     idx, len(orig_blob), 2 if parity else 1)
+                     idx, len(orig_blob), len(attempts))
         raise last_err
 
 class XChaChaCipher(BaseCipher):
@@ -83,11 +86,14 @@ class XChaChaCipher(BaseCipher):
                      rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
         if ChaCha20_Poly1305 is None:
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")
+        # Validate nonce length early (XChaCha expects 24 bytes)
+        if len(nonce) != XChaChaCipher.nonce_size:
+            raise ValueError(f"Invalid nonce length: expected {XChaChaCipher.nonce_size} bytes")
         cipher = ChaCha20_Poly1305.new(key=enc_key, nonce=nonce)
         cipher.update(header)  # aplica AAD corretamente
         ct = cipher.encrypt(plain)
         tag = cipher.digest()
-        blob = ct + tag                # tag sempre 16 B; usado na decodificação
+        blob = ct + tag
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         if parity:
             blob = rs_encode_data(blob, parity)
@@ -101,28 +107,21 @@ class XChaChaCipher(BaseCipher):
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")
         blob = cipher_blob
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
-        orig_blob = blob
+        orig_blob = blob  # keep original buffer (with parity) for fallback
         if parity:
             try:
-                blob = rs_decode_data(blob)
-                orig_blob = blob
+                blob = rs_decode_data(blob)  # decoded payload (without parity)
             except Exception as e:
                 logger.warning("RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
                                idx, len(orig_blob), e, parity)
-        if parity and len(blob) <= parity + TAG_LEN:
-            raise ValueError("Bloco contém paridade maior ou igual ao payload; abortando.")
         last_err = None
-        for attempt in ("no_strip", "strip_parity" if parity else None):
+        attempts = ("no_strip", "strip_parity") if parity else ("no_strip",)
+        for attempt in attempts:
             try:
-                if attempt == "strip_parity":
-                    core = orig_blob[:-parity]
-                else:
-                    core = orig_blob
-
+                core = orig_blob[:-parity] if attempt == "strip_parity" else blob
                 if len(core) < TAG_LEN:
                     last_err = ValueError("Chunk too small for tag")
                     continue
-
                 ct, tag = core[:-TAG_LEN], core[-TAG_LEN:]
                 cipher = ChaCha20_Poly1305.new(key=enc_key, nonce=nonce)
                 plain = _dec(cipher, ct, tag, nonce, header)
@@ -131,7 +130,7 @@ class XChaChaCipher(BaseCipher):
                 last_err = e
                 continue
         logger.error("Tag verification failed (idx=%d, len=%d) after %s attempts",
-                     idx, len(orig_blob), 2 if parity else 1)
+                     idx, len(orig_blob), len(attempts))
         raise last_err
 
 def _dec(cipher, ct: bytes, tag: bytes, nonce: bytes, aad: bytes) -> bytes:

@@ -70,13 +70,10 @@ SIGN_METADATA   = True
 # ───── extensões / mágica de header ─────────────────────────────────────
 MAGIC          = b"CGv2"       # nova versão do formato
 CG2_EXT        = ".cg2"        # NOVO: formato único CG2
-ENC_EXT        = ".enc"        # legado (para leitura)
-META_EXT       = ".meta"       # legado (para leitura)
 META_SALT_SIZE = 16
-READ_LEGACY_FORMATS = True     # compat com .enc+.meta
 
 # ───── caminhos de app e calibração ─────────────────────────────────────
-APP_DIR   = Path.home() / ".cryptguardv2"
+APP_DIR = BASE_DIR
 LOG_PATH  = APP_DIR / "cryptguard.log"
 CALIB_PATH = APP_DIR / "argon_calib.json"
 APP_DIR.mkdir(exist_ok=True)
@@ -99,7 +96,7 @@ if not CALIB_PATH.exists():
         SecurityProfile.BALANCED: presets["BALANCED"],
         SecurityProfile.SECURE:   presets["SECURE"],
     })
-    # Atualizar os parâmetros legados também
+    # Atualizar os parâmetros CG2s também
     for profile in SecurityProfile:
         profile_name = profile.name
         ARGON_PARAMS[profile] = dict(
@@ -120,7 +117,7 @@ else:
             presets = mapped
         for prof, cfg in presets.items():
             ARGON_PRESETS[SecurityProfile[prof]] = cfg
-            # Atualizar os parâmetros legados também
+            # Atualizar os parâmetros CG2s também
             ARGON_PARAMS[SecurityProfile[prof]] = dict(
                 time_cost=cfg["time"],
                 memory_cost=cfg["mem"],
@@ -143,7 +140,7 @@ def enable_process_hardening():
     if hasattr(os, 'setpriority'):
         try:
             os.setpriority(os.PRIO_PROCESS, 0, 10)  # Baixa prioridade
-        except:
+        except Exception:
             pass
     
     # Outras proteções podem ser adicionadas aqui
@@ -158,3 +155,6 @@ __all__ = [
     "STREAMING_THRESHOLD", "CG2_EXT", "enable_process_hardening",
     "LOG_PATH", "BASE_DIR"  # Add these to exports
 ]
+
+# Unified encrypted file extension for CG2 containers
+ENC_EXT = ".cg2"

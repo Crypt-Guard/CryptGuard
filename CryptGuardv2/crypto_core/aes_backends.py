@@ -11,8 +11,6 @@ from typing import Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-from cryptography.exceptions import InvalidTag
 
 from .crypto_base      import BaseCipher
 from .rs_codec         import rs_encode_data, rs_decode_data
@@ -31,6 +29,9 @@ class AesGcmCipher(BaseCipher):
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
                      rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+        # validação explícita do nonce (AES-GCM requer 12 bytes)
+        if len(nonce) != AesGcmCipher.nonce_size:
+            raise ValueError(f"Invalid nonce length: expected {AesGcmCipher.nonce_size} bytes")
         blob = AESGCM(enc_key).encrypt(nonce, plain, header)
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         if parity:
@@ -42,6 +43,8 @@ class AesGcmCipher(BaseCipher):
     @staticmethod
     def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
                      rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+        if len(nonce) != AesGcmCipher.nonce_size:
+            raise ValueError(f"Invalid nonce length: expected {AesGcmCipher.nonce_size} bytes")
         blob = cipher_blob
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         orig_blob = blob
@@ -53,19 +56,14 @@ class AesGcmCipher(BaseCipher):
                     "RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
                     idx, len(orig_blob), e, parity
                 )
-        # Bloqueio de RS inválido
-        if parity and len(blob) <= parity + 16:
-            raise ValueError("Bloco contém paridade maior ou igual ao payload; abortando.")
         last_err = None
-        attempts = ["no_strip"]
-        if parity:
-            attempts.append("strip_parity")
+        attempts = ("no_strip", "strip_parity") if parity else ("no_strip",)
         for attempt in attempts:
             try:
                 b_use = orig_blob[:-parity] if attempt == "strip_parity" else blob
                 plain = AESGCM(enc_key).decrypt(nonce, b_use, header)
                 return idx, plain
-            except InvalidTag as e:
+            except Exception as e:
                 last_err = e
                 continue
         logger.error("Tag verification failed (idx=%d, len=%d) after %s attempts",
@@ -84,13 +82,14 @@ class AesCtrCipher(BaseCipher):
     # small helper
     @staticmethod
     def _aes_ctr(enc_key: bytes, iv: bytes):
-        return Cipher(algorithms.AES(enc_key), modes.CTR(iv),
-                      backend=default_backend()).encryptor()
+        return Cipher(algorithms.AES(enc_key), modes.CTR(iv)).encryptor()
 
     # ------------------------------------------------------------------
     @staticmethod
     def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
                      rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+        if len(nonce) != AesCtrCipher.nonce_size:
+            raise ValueError(f"Invalid nonce length: expected {AesCtrCipher.nonce_size} bytes")
         enc = AesCtrCipher._aes_ctr(enc_key, nonce)
         cipher = enc.update(plain) + enc.finalize()
         payload = nonce + struct.pack(">I", len(cipher)) + cipher
@@ -100,8 +99,10 @@ class AesCtrCipher(BaseCipher):
     @staticmethod
     def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
                      rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
-        (clen,) = struct.unpack(">I", cipher_blob[:4])
-        cipher  = cipher_blob[4:4+clen]
+        if len(nonce) != AesCtrCipher.nonce_size:
+            raise ValueError(f"Invalid nonce length: expected {AesCtrCipher.nonce_size} bytes")
+        # O framing externo já forneceu apenas o blob do chunk (sem length)
+        cipher = cipher_blob
         dec = AesCtrCipher._aes_ctr(enc_key, nonce)
         plain = dec.update(cipher) + dec.finalize()
         # HMAC obrigatório: verificação deve ser feita no fluxo principal

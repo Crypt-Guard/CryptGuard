@@ -59,7 +59,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
-from .fileformat import CG2Header, read_header, is_cg2_file
+from .fileformat import CG2Header, read_header
 from .kdf        import derive_key
 from .config     import CG2_EXT, ARGON_PARAMS, SecurityProfile, CHUNK_SIZE
 from .logger     import logger
@@ -75,8 +75,8 @@ NAME_MAGIC = b"NAM0"  # bloco opcional com a extensão original cifrada
 
 # ───────────────────────── helpers ──────────────────────────────────────────
 def _derive_chunk_nonce(base: bytes, idx: int) -> bytes:
-    """Reusa o prefixo e xora contador de 32 bits no final (big-endian)."""
-    ctr = int.from_bytes(base[-4:], "big") ^ idx
+    """Deriva nonce único por chunk adicionando idx ao sufixo de 32 bits (mod 2^32)."""
+    ctr = (int.from_bytes(base[-4:], "big") + idx) & 0xFFFFFFFF
     return base[:-4] + ctr.to_bytes(4, "big")
 
 
@@ -229,7 +229,6 @@ def encrypt_to_cg2(
         enc_key, mac_key = mk, None  # type: ignore
 
     total_real = 0  # bytes reais (sem padding)
-    total_written = 0  # para progresso (pós-processado)
     idx = 0
 
     with in_path.open("rb") as fin, out_path.open("wb") as fout:
@@ -254,7 +253,7 @@ def encrypt_to_cg2(
                     elif NACL_XCH_AVAILABLE:
                         ct = nacl_xch_encrypt(pt, aad, nonce, enc_key)
                     else:
-                        raise RuntimeError("XChaCha20 backend not available.")
+                        raise RuntimeError("Backend XChaCha20 indisponível.")
                 else:
                     ct = ChaCha20Poly1305(enc_key).encrypt(nonce, pt, aad)
 
@@ -262,7 +261,6 @@ def encrypt_to_cg2(
                 fout.write(ct)
 
                 idx += 1
-                total_written += len(pt)
                 if progress_cb:
                     progress_cb(total_real)
 
@@ -270,9 +268,10 @@ def encrypt_to_cg2(
             # Escreve extensão original cifrada (opcional)
             name_k = _name_key(mk)
             ext_text = in_path.suffix or ""
-            nb = _pack_name_blob(name_k, aad, ext_text)
-            fout.write(NAME_MAGIC)
-            fout.write(nb)
+            if ext_text:
+                nb = _pack_name_blob(name_k, aad, ext_text)
+                fout.write(NAME_MAGIC)
+                fout.write(nb)
 
             # Footer AEAD (detecção de truncamento + tamanho real)
             ft_key = _final_tag_key(mk)
@@ -308,17 +307,17 @@ def encrypt_to_cg2(
                 h.update(ct)
 
                 idx += 1
-                total_written += len(pt)
                 if progress_cb:
                     progress_cb(total_real)
 
             # ── Rodapé CTR ─────────────────────────────────────────────
-            # NAM0 autenticado pela HMAC global
+            # NAM0 autenticado pela HMAC global (somente se houver extensão)
             name_k = _name_key(mk)
             ext_text = in_path.suffix or ""
-            nb = _pack_name_blob(name_k, aad, ext_text)
-            fout.write(NAME_MAGIC);  h.update(NAME_MAGIC)
-            fout.write(nb);          h.update(nb)
+            if ext_text:
+                nb = _pack_name_blob(name_k, aad, ext_text)
+                fout.write(NAME_MAGIC);  h.update(NAME_MAGIC)
+                fout.write(nb);          h.update(nb)
 
             # tamanho real antes do TAG
             fout.write(SIZ_MAGIC)
@@ -380,174 +379,193 @@ def decrypt_from_cg2(
 
     with in_path.open("rb") as f:
         f.seek(off)
+        try:
+            if hdr.alg in AEAD_SET:
+                # Loop de chunks
+                while True:
+                    len_bytes = f.read(4)
+                    if not len_bytes:
+                        # Agora exige footer:
+                        raise ValueError("Footer ausente (arquivo possivelmente truncado)")
 
-        if hdr.alg in AEAD_SET:
-            # Loop de chunks
-            while True:
-                len_bytes = f.read(4)
-                if not len_bytes:
-                    # Agora exige footer:
-                    raise ValueError("Footer ausente (arquivo possivelmente truncado)")
+                    if len_bytes == NAME_MAGIC:
+                        # ler extensão cifrada; não altera contagem de chunks
+                        name_k = _name_key(mk)
+                        ext_from_name = _unpack_name_blob(name_k, aad, f) or None
+                        continue
 
-                if len_bytes == NAME_MAGIC:
-                    # ler extensão cifrada; não altera contagem de chunks
-                    name_k = _name_key(mk)
-                    ext_from_name = _unpack_name_blob(name_k, aad, f) or None
-                    continue
+                    if len_bytes == END_MAGIC:
+                        # Checar footer AEAD
+                        flen_b = f.read(4)
+                        if len(flen_b) != 4:
+                            raise ValueError("Footer truncado (len)")
+                        (flen,) = struct.unpack(">I", flen_b)
+                        blob = f.read(flen)
+                        if len(blob) != flen:
+                            raise ValueError("Footer truncado (blob)")
 
-                if len_bytes == END_MAGIC:
-                    # Checar footer AEAD
-                    flen_b = f.read(4)
-                    if len(flen_b) != 4:
-                        raise ValueError("Footer truncado (len)")
-                    (flen,) = struct.unpack(">I", flen_b)
-                    blob = f.read(flen)
-                    if len(blob) != flen:
-                        raise ValueError("Footer truncado (blob)")
+                        ft_key = _final_tag_key(mk)
+                        nonce = b"\x00" * 12
+                        payload = AESGCM(ft_key).decrypt(nonce, blob, aad)  # ValueError se inválido
+                        exp_chunks, exp_total = struct.unpack(">IQ", payload)
 
-                    ft_key = _final_tag_key(mk)
-                    nonce = b"\x00" * 12
-                    payload = AESGCM(ft_key).decrypt(nonce, blob, aad)  # ValueError se inválido
-                    exp_chunks, exp_total = struct.unpack(">IQ", payload)
+                        if exp_chunks != idx or (not verify_only and exp_total > total_written):
+                            raise ValueError("Footer inconsistente (contagem/tamanho)")
 
-                    if exp_chunks != idx or (not verify_only and exp_total > total_written):
-                        raise ValueError("Footer inconsistente (contagem/tamanho)")
+                        exp_total_from_footer = exp_total
+                        # rejeita bytes extras após o rodapé
+                        extra = f.read(1)
+                        if extra:
+                            raise ValueError("Dados extras após o rodapé (END0)")
+                        break  # fim normal
 
-                    exp_total_from_footer = exp_total
-                    break  # fim normal
+                    # Caso comum: veio o tamanho do próximo chunk
+                    (clen,) = struct.unpack(">I", len_bytes)
+                    ct = f.read(clen)
+                    if len(ct) != clen:
+                        raise ValueError("Payload truncado/corrompido (AEAD)")
 
-                # Caso comum: veio o tamanho do próximo chunk
-                (clen,) = struct.unpack(">I", len_bytes)
-                ct = f.read(clen)
-                if len(ct) != clen:
-                    raise ValueError("Payload truncado/corrompido (AEAD)")
-
-                nonce = _derive_chunk_nonce(hdr.nonce, idx)
-                if hdr.alg == "AES-256-GCM":
-                    pt = AESGCM(enc_key).decrypt(nonce, ct, aad)
-                elif hdr.alg == "XChaCha20-Poly1305":
-                    if XCH_CRYPTO_AVAILABLE:
-                        pt = XChaCha20Poly1305(enc_key).decrypt(nonce, ct, aad)
-                    elif NACL_XCH_AVAILABLE:
-                        pt = nacl_xch_decrypt(ct, aad, nonce, enc_key)
+                    nonce = _derive_chunk_nonce(hdr.nonce, idx)
+                    if hdr.alg == "AES-256-GCM":
+                        pt = AESGCM(enc_key).decrypt(nonce, ct, aad)
+                    elif hdr.alg == "XChaCha20-Poly1305":
+                        if XCH_CRYPTO_AVAILABLE:
+                            pt = XChaCha20Poly1305(enc_key).decrypt(nonce, ct, aad)
+                        elif NACL_XCH_AVAILABLE:
+                            pt = nacl_xch_decrypt(ct, aad, nonce, enc_key)
+                        else:
+                            raise RuntimeError("Backend XChaCha20 indisponível.")
                     else:
-                        raise RuntimeError("XChaCha20 backend not available.")
-                else:
-                    pt = ChaCha20Poly1305(enc_key).decrypt(nonce, ct, aad)
+                        pt = ChaCha20Poly1305(enc_key).decrypt(nonce, ct, aad)
 
-                if first_block:
-                    _ensure_open_with_ext_from(pt)
-                    first_block = False
-
-                total_written += len(pt)
-                if progress_cb:
-                    progress_cb(total_written)
-                if not verify_only:
-                    if out_f is None:
+                    if first_block:
                         _ensure_open_with_ext_from(pt)
-                    out_f.write(pt)
-                idx += 1
+                        first_block = False
 
-            # fecha arquivo e trunca se necessário
-            if not verify_only and out_f is not None and exp_total_from_footer is not None:
-                out_f.flush()
-                out_f.close()
-                if exp_total_from_footer < total_written:
-                    with out_path.open("rb+") as tf:
-                        tf.truncate(exp_total_from_footer)
-                out_f = None
+                    total_written += len(pt)
+                    if progress_cb:
+                        progress_cb(total_written)
+                    if not verify_only:
+                        if out_f is None:
+                            _ensure_open_with_ext_from(pt)
+                        out_f.write(pt)
+                    idx += 1
 
-        else:
-            # CTR + HMAC
-            h = py_hmac.new(mac_key, digestmod="sha256")
-            h.update(aad)
+                # fecha arquivo e trunca se necessário
+                if not verify_only and out_f is not None and exp_total_from_footer is not None:
+                    out_f.flush()
+                    out_f.close()
+                    if exp_total_from_footer < total_written:
+                        with out_path.open("rb+") as tf:
+                            tf.truncate(exp_total_from_footer)
+                    out_f = None
 
-            while True:
-                len_bytes = f.read(4)
-                if not len_bytes:
-                    raise ValueError("TAG ausente no fim do arquivo (CTR)")
+            else:
+                # CTR + HMAC
+                h = py_hmac.new(mac_key, digestmod="sha256")
+                h.update(aad)
 
-                if len_bytes == NAME_MAGIC:
-                    # NAM0 entra na HMAC exatamente como gravado
-                    h.update(NAME_MAGIC)
-                    name_k = _name_key(mk)
-                    pos = f.tell()
-                    nonce = f.read(12);  lb = f.read(4)
-                    if len(nonce) != 12 or len(lb) != 4:
-                        raise ValueError("NAM0 truncado (CTR)")
-                    (blen,) = struct.unpack(">I", lb)
-                    blob = f.read(blen)
-                    if len(blob) != blen:
-                        raise ValueError("NAM0 truncado (CTR)")
-                    # Reprocessa com helper (sem reler do disco):
-                    f.seek(pos)
-                    ext_from_name = _unpack_name_blob(name_k, aad, f) or None
-                    # Alimenta HMAC com bytes brutos
-                    h.update(nonce); h.update(lb); h.update(blob)
-                    continue
+                while True:
+                    len_bytes = f.read(4)
+                    if not len_bytes:
+                        raise ValueError("TAG ausente no fim do arquivo (CTR)")
 
-                if len_bytes == SIZ_MAGIC:
-                    # tamanho real (sem padding)
-                    sz_b = f.read(8)
-                    if len(sz_b) != 8:
-                        raise ValueError("SIZ0 truncado (CTR)")
-                    (exp_total_real,) = struct.unpack(">Q", sz_b)
-                    h.update(SIZ_MAGIC); h.update(sz_b)
-                    # Em seguida esperamos TAG0
-                    next_magic = f.read(4)
-                    if next_magic != TAG_MAGIC:
-                        raise ValueError("TAG0 ausente após SIZ0 (CTR)")
-                    tag = f.read(32)
-                    if len(tag) != 32:
-                        raise ValueError("TAG truncada (CTR)")
-                    if not py_hmac.compare_digest(h.digest(), tag):
-                        raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
-                    exp_total_from_footer = exp_total_real
-                    break
+                    if len_bytes == NAME_MAGIC:
+                        # NAM0 entra na HMAC exatamente como gravado
+                        h.update(NAME_MAGIC)
+                        name_k = _name_key(mk)
+                        pos = f.tell()
+                        nonce = f.read(12);  lb = f.read(4)
+                        if len(nonce) != 12 or len(lb) != 4:
+                            raise ValueError("NAM0 truncado (CTR)")
+                        (blen,) = struct.unpack(">I", lb)
+                        blob = f.read(blen)
+                        if len(blob) != blen:
+                            raise ValueError("NAM0 truncado (CTR)")
+                        # Reprocessa com helper (sem reler do disco):
+                        f.seek(pos)
+                        ext_from_name = _unpack_name_blob(name_k, aad, f) or None
+                        # Alimenta HMAC com bytes brutos
+                        h.update(nonce); h.update(lb); h.update(blob)
+                        continue
 
-                if len_bytes == TAG_MAGIC:
-                    tag = f.read(32)
-                    if len(tag) != 32:
-                        raise ValueError("TAG truncada (CTR)")
-                    if not py_hmac.compare_digest(h.digest(), tag):
-                        raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
-                    break
+                    if len_bytes == SIZ_MAGIC:
+                        # tamanho real (sem padding)
+                        sz_b = f.read(8)
+                        if len(sz_b) != 8:
+                            raise ValueError("SIZ0 truncado (CTR)")
+                        (exp_total_real,) = struct.unpack(">Q", sz_b)
+                        h.update(SIZ_MAGIC); h.update(sz_b)
+                        # Em seguida esperamos TAG0
+                        next_magic = f.read(4)
+                        if next_magic != TAG_MAGIC:
+                            raise ValueError("TAG0 ausente após SIZ0 (CTR)")
+                        tag = f.read(32)
+                        if len(tag) != 32:
+                            raise ValueError("TAG truncada (CTR)")
+                        if not py_hmac.compare_digest(h.digest(), tag):
+                            raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
+                        exp_total_from_footer = exp_total_real
+                        # rejeita bytes extras após o TAG
+                        extra = f.read(1)
+                        if extra:
+                            raise ValueError("Dados extras após o TAG0 (CTR)")
+                        break
 
-                # Chunk normal
-                (clen,) = struct.unpack(">I", len_bytes)
-                ct = f.read(clen)
-                if len(ct) != clen:
-                    raise ValueError("Payload truncado/corrompido (CTR)")
+                    if len_bytes == TAG_MAGIC:
+                        tag = f.read(32)
+                        if len(tag) != 32:
+                            raise ValueError("TAG truncada (CTR)")
+                        if not py_hmac.compare_digest(h.digest(), tag):
+                            raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
+                        # rejeita bytes extras após o TAG
+                        extra = f.read(1)
+                        if extra:
+                            raise ValueError("Dados extras após o TAG0 (CTR)")
+                        break
 
-                h.update(len_bytes)
-                h.update(ct)
+                    # Chunk normal
+                    (clen,) = struct.unpack(">I", len_bytes)
+                    ct = f.read(clen)
+                    if len(ct) != clen:
+                        raise ValueError("Payload truncado/corrompido (CTR)")
 
-                iv = _derive_chunk_nonce(hdr.nonce, idx)
-                cipher = Cipher(algorithms.AES(enc_key), modes.CTR(iv))
-                dec = cipher.decryptor()
-                pt = dec.update(ct) + dec.finalize()
+                    h.update(len_bytes)
+                    h.update(ct)
 
-                if first_block:
-                    _ensure_open_with_ext_from(pt)
-                    first_block = False
+                    iv = _derive_chunk_nonce(hdr.nonce, idx)
+                    cipher = Cipher(algorithms.AES(enc_key), modes.CTR(iv))
+                    dec = cipher.decryptor()
+                    pt = dec.update(ct) + dec.finalize()
 
-                total_written += len(pt)
-                if progress_cb:
-                    progress_cb(total_written)
-                if not verify_only:
-                    if out_f is None:
+                    if first_block:
                         _ensure_open_with_ext_from(pt)
-                    out_f.write(pt)
-                idx += 1
+                        first_block = False
 
-            # truncate pós-verificação (se soubermos o tamanho real)
-            if not verify_only and out_f is not None:
-                out_f.flush()
-                out_f.close()
-                if exp_total_from_footer is not None and exp_total_from_footer < total_written:
-                    with out_path.open("rb+") as tf:
-                        tf.truncate(exp_total_from_footer)
-                out_f = None
+                    total_written += len(pt)
+                    if progress_cb:
+                        progress_cb(total_written)
+                    if not verify_only:
+                        if out_f is None:
+                            _ensure_open_with_ext_from(pt)
+                        out_f.write(pt)
+                    idx += 1
+
+                # truncate pós-verificação (se soubermos o tamanho real)
+                if not verify_only and out_f is not None:
+                    out_f.flush()
+                    out_f.close()
+                    if exp_total_from_footer is not None and exp_total_from_footer < total_written:
+                        with out_path.open("rb+") as tf:
+                            tf.truncate(exp_total_from_footer)
+                    out_f = None
+        finally:
+            # garante fechamento do arquivo de saída em caso de erro
+            if not verify_only and out_f is not None and not out_f.closed:
+                try:
+                    out_f.close()
+                except Exception:
+                    pass
 
     # Renomeia a extensão final com base no NAM0, se houver (e se não for verify_only)
     if not verify_only and ext_from_name:

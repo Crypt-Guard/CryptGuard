@@ -60,6 +60,9 @@ from .utils           import (
 
 from .secure_bytes    import SecureBytes
 
+# Tamanho fixo do cabeçalho (salt 16 B + MAGIC 4 B + alg_tag 4 B)
+HEADER_LEN = 16 + 4 + 4
+
 # ───────────────────────── classe base ────────────────────────────────────────
 class BaseCipher(ABC):
     """Classe abstrata para back‑ends de criptografia."""
@@ -245,6 +248,7 @@ class StreamingMixin(_FlowMixin):
         futures = []
         processed = 0
         header = salt + MAGIC + self.cipher_cls.alg_tag
+        plain_sizes: list[int] = []
         with src.open("rb", buffering=chunk_size*4) as fin, \
              concurrent.futures.ThreadPoolExecutor() as ex:
             idx = 0
@@ -252,7 +256,9 @@ class StreamingMixin(_FlowMixin):
                 nonce = secrets.token_bytes(self.cipher_cls.nonce_size)
                 fut = ex.submit(self.cipher_cls.encode_chunk, idx, chunk, nonce,
                                  enc_key, rs_use, header)
-                futures.append(fut); idx += 1
+                futures.append(fut)
+                plain_sizes.append(len(chunk))
+                idx += 1
             total_chunks = idx
             errors = []
             for fut in concurrent.futures.as_completed(futures):
@@ -263,7 +269,7 @@ class StreamingMixin(_FlowMixin):
                     break
                 idx2, payload = fut.result()
                 pq.put((idx2, payload))
-                processed += len(chunk)
+                processed += plain_sizes[idx2]
                 if cb: cb(min(processed, size))
             if errors:
                 raise errors[0]
@@ -282,12 +288,17 @@ class StreamingMixin(_FlowMixin):
         processed = 0
         header = salt + MAGIC + self.cipher_cls.alg_tag
         with BytesIO(blob) as fin, concurrent.futures.ThreadPoolExecutor() as ex:
-            fin.seek(16+4+4)
+            fin.seek(HEADER_LEN)
             idx = 0
-            while (hdr := fin.read(self.cipher_cls.nonce_size + 4)):
+            expected_hdr = self.cipher_cls.nonce_size + 4
+            while (hdr := fin.read(expected_hdr)):
+                if len(hdr) != expected_hdr:
+                    raise ValueError("Truncated chunk header")
                 nonce = hdr[:self.cipher_cls.nonce_size]
                 (clen,) = struct.unpack(">I", hdr[self.cipher_cls.nonce_size:])
                 cipher_blob = fin.read(clen)
+                if len(cipher_blob) != clen:
+                    raise ValueError("Truncated chunk payload")
                 fut = ex.submit(self.cipher_cls.decode_chunk, idx, cipher_blob,
                                  nonce, enc_key, rs_use, header)
                 futures.append(fut); idx += 1
@@ -323,24 +334,31 @@ class SingleShotMixin(_FlowMixin):
         n_sub = max(1, (len(data) + SINGLE_SHOT_SUBCHUNK_SIZE - 1)//SINGLE_SHOT_SUBCHUNK_SIZE)
         body = bytearray()
         header = salt + MAGIC + self.cipher_cls.alg_tag
+        processed = 0
         for idx in range(n_sub):
             sub = data[idx*SINGLE_SHOT_SUBCHUNK_SIZE:(idx+1)*SINGLE_SHOT_SUBCHUNK_SIZE]
             nonce = secrets.token_bytes(self.cipher_cls.nonce_size)
             _, payload = self.cipher_cls.encode_chunk(idx, sub, nonce, enc_key, rs_use, header)
             body += payload
-            if cb: cb(min(len(sub)*(idx+1), size))
+            processed += len(sub)
+            if cb: cb(min(processed, size))
         return bytes(body)
 
     def decrypt_flow(self, blob: bytes, size: int, salt: bytes, enc_key: bytes,
                      rs_use: bool, cb: Optional[Callable], chunk_size: int) -> bytes:
-        pos = 16+4+4
+        pos = HEADER_LEN
         out = bytearray()
         idx = 0
-        header = blob[:16+4+4]
+        header = blob[:HEADER_LEN]
         while pos < len(blob):
+            expected_hdr = self.cipher_cls.nonce_size + 4
+            if pos + expected_hdr > len(blob):
+                raise ValueError("Truncated chunk header")
             nonce = blob[pos:pos+self.cipher_cls.nonce_size]
             pos += self.cipher_cls.nonce_size
             (clen,) = struct.unpack(">I", blob[pos:pos+4]); pos += 4
+            if pos + clen > len(blob):
+                raise ValueError("Truncated chunk payload")
             cipher_blob = blob[pos:pos+clen]; pos += clen
             _, plain = self.cipher_cls.decode_chunk(idx, cipher_blob, nonce,
                                                      enc_key, rs_use, header)

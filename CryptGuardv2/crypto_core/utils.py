@@ -8,7 +8,7 @@ Inclui:
 • secure‑delete (arquivo ou pasta recursiva)
 • verificação de expiração (campo "exp" nos metadados)
 • cálculo de velocidade humana (bytes/s → string)
-• empacote / desempacote ZIP contendo *.enc + *.enc.meta*
+• utilidades diversas (CG2-only)
 """
 
 from __future__ import annotations
@@ -17,8 +17,6 @@ import os, json, secrets, tempfile, shutil, time, datetime, zipfile
 from pathlib import Path
 from typing   import Tuple
 import re
-from .config import ENC_EXT, META_EXT
-
 # Secure‑delete escreve blocos de 1 MiB
 SECURE_DELETE_CHUNK_SIZE = 1_048_576  # 1 MiB
 
@@ -134,31 +132,56 @@ def archive_folder(folder_path: str | Path) -> Path:
     shutil.make_archive(str(folder), "zip", root_dir=folder)
     return zip_path
 
-# ───────────────────────── ZIP helpers *.enc + *.meta* ─────────────────
-def pack_enc_zip(enc_path: Path) -> Path:
-    """
-    Cria ``<arquivo>.zip`` contendo *arquivo.enc* + *arquivo.enc.meta*,
-    remove os originais e retorna o Path do ZIP.
-    """
-    meta_path = enc_path.with_suffix(enc_path.suffix + META_EXT)
-    zip_path  = enc_path.with_suffix('.zip')
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.write(enc_path,  arcname=enc_path.name)
-        if meta_path.exists():
-            zf.write(meta_path, arcname=meta_path.name)
-    enc_path.unlink(missing_ok=True)
-    meta_path.unlink(missing_ok=True)
-    return zip_path
+# (ZIP helpers de legado removidos – CG2-only)
 
-def unpack_enc_zip(zip_path: Path) -> Tuple[Path, tempfile.TemporaryDirectory]:
-    """
-    Extrai ZIP contendo *.enc* + *.meta* para diretório temporário
-    e retorna (<Path para .enc extraído>, <TemporaryDirectory>).
 
-    Mantenha o objeto `TemporaryDirectory` vivo até terminar o uso.
+def human_size(n: int) -> str:
+    units = ["B","KiB","MiB","GiB","TiB"]
+    s = float(n); i = 0
+    while s >= 1024 and i < len(units)-1:
+        s /= 1024; i += 1
+    return f"{s:.2f} {units[i]}"
+
+
+
+def detect_algo_from_header(path) -> str | None:
+    try:
+        from .fileformat import read_header
+        hdr, *_ = read_header(Path(path))
+        return getattr(hdr, "alg", None)
+    except Exception:
+        return None
+
+
+def pack_enc_zip(paths, dest_zip, password: str, algo: str = "AESG", **kw) -> str:
+    """Compacta `paths` em ZIP e cifra o ZIP com a API disponível.
+    Retorna caminho do arquivo cifrado.
     """
-    td = tempfile.TemporaryDirectory()
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(td.name)
-        enc_name = next(n for n in zf.namelist() if n.endswith(ENC_EXT))
-    return Path(td.name) / enc_name, td
+    from zipfile import ZipFile, ZIP_DEFLATED
+    from pathlib import Path
+    import tempfile
+    paths = [Path(p) for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
+    dest_zip = Path(dest_zip)
+    # cria zip temporário se o destino final for o .cg2
+    tmp_zip = dest_zip if dest_zip.suffix.lower() == ".zip" else Path(tempfile.gettempdir()) / ("cg2_pkg_" + paths[0].name + ".zip")
+    with ZipFile(tmp_zip, "w", ZIP_DEFLATED) as z:
+        for p in paths:
+            if p.is_dir():
+                for sub in p.rglob("*"):
+                    if sub.is_file():
+                        z.write(sub, arcname=sub.relative_to(p))
+            else:
+                z.write(p, arcname=p.name)
+    # cifra o zip
+    try:
+        from .factories import encrypt as _enc
+        out = _enc(str(tmp_zip), password, algo=algo, **kw)
+        return out
+    except Exception:
+        from .cg2_ops import encrypt_to_cg2
+        algo_map = {"AESG":"AES-256-GCM","ACTR":"AES-256-CTR","XC20":"XChaCha20-Poly1305","CH20":"ChaCha20-Poly1305"}
+        human = algo_map.get(algo, algo)
+        out = tmp_zip.with_suffix(".cg2")
+        pwd = password.encode() if isinstance(password, str) else password
+        encrypt_to_cg2(str(tmp_zip), str(out), pwd, alg=human, **kw)
+        return str(out)
