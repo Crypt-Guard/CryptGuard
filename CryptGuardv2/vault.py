@@ -1,3 +1,4 @@
+# nosec B413: # # import Crypto  # removido pela migração  # removed by migration legado — backends preferidos são cryptography/PyNaCl; mantido por compat.
 #!/usr/bin/env python3
 """vault.py – Vault 3.x adaptado para integração com CryptGuard v2.6.3
 
@@ -11,28 +12,51 @@
 """
 
 from __future__ import annotations
-import argparse, base64, ctypes, getpass, hmac, hashlib
-import multiprocessing, os, platform, secrets, stat, struct, sys, tempfile, threading, time, warnings
-from pathlib import Path
-from typing import Dict, Tuple, Union, Optional, List, Callable, TypeVar
-import logging
-from logging.handlers import RotatingFileHandler  # <-- Importar explicitamente
+
+import argparse
+import base64
+import ctypes
+import getpass
+import gzip
+import hashlib
+import hmac
+import io
 import json
-import gzip, io, pickle
+import logging
+import multiprocessing
+import os
+import pickle
+
+# nosec B301,B403 — dados autenticados por AEAD; ver _decrypt_and_verify()
+import platform
+import secrets
+import stat
+import struct
+import sys
+import tempfile
+import threading
+import time
+import warnings
+from collections.abc import Callable
+from logging.handlers import RotatingFileHandler  # <-- Importar explicitamente
+from pathlib import Path
+from typing import TypeVar
 
 # ─── Dependências mínimas ───────────────────────────────────────────────────
 REQ = ("cryptography", "argon2", "psutil", "PySide6")
 missing = [pkg for pkg in REQ if not (pkg in sys.modules or __import__(pkg, fromlist=[""]))]
 if missing:
-    print("Aviso: dependências ausentes:", ", ".join(missing))
-    print("Algumas funções do Vault podem ficar indisponíveis.")
+    print("Dependências faltando:", ", ".join(missing))
+    print("→  pip install -U " + " ".join(missing))
+    sys.exit(1)
 
-import psutil                             # noqa: E402
-import argon2.low_level as _argon2        # noqa: E402
+import argon2.low_level as _argon2  # noqa: E402
+import psutil  # noqa: E402
 from argon2.low_level import Type as _ArgonType  # noqa: E402
 from cryptography.hazmat.primitives import hashes  # noqa: E402
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: E402
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: E402
+
 try:
     from cryptography.hazmat.primitives.ciphers.aead import XChaCha20Poly1305
 except ImportError:
@@ -40,7 +64,7 @@ except ImportError:
 
 # PyCryptodome (fallback XChaCha)
 try:
-    from Crypto.Cipher import ChaCha20_Poly1305 as PyChaCha
+    from crypto_core.compat_chacha import ChaCha20_Poly1305 as PyChaCha
 except ImportError:
     PyChaCha = None
 
@@ -48,39 +72,38 @@ from cryptography.exceptions import InvalidTag  # <-- Add this import
 
 # libsodium (opcional – caminho rápido) --------------------------------------
 try:
-    import pysodium as sodium             # noqa: E402
+    import pysodium as sodium  # noqa: E402
 except Exception:
     sodium = None
 
 # Qt (GUI) -------------------------------------------------------------------
+import contextlib
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QListWidget, QVBoxLayout, QListWidgetItem, QFileDialog,
-    QMessageBox, QPushButton, QHBoxLayout, QLabel, QWidget
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
 )
-
-try:
-    # quando executado como módulo dentro do projeto
-    from crypto_core.paths import BASE_DIR  # type: ignore
-except Exception:
-    try:
-        # quando importado como pacote (CryptGuardv2.crypto_core...)
-        from CryptGuardv2.crypto_core.paths import BASE_DIR  # type: ignore
-    except Exception:
-        # fallback absoluto (não deve ocorrer, mas evita NameError)
-        import os
-        from pathlib import Path as _Path
-        BASE_DIR = (_Path.home() / 'AppData' / 'Local' / 'CryptGuard') if os.name == 'nt' else (_Path.home() / '.cryptguard')
 
 if platform.system() == "Windows":
     try:
-        import win32security, ntsecuritycon as nsec, win32api  # type: ignore # noqa: E402,E501
+        import ntsecuritycon as nsec
+        import win32api  # type: ignore # noqa: E402,E501
+        import win32security
     except ImportError:
         win32security = nsec = win32api = None  # type: ignore
 
 # ---------------------------------------------------------------------------+
 # Hardening de processo (anti-debug, sem core-dump, mlock)                   +
 # ---------------------------------------------------------------------------+
+
 
 def _harden_process_once() -> None:
     """Aplica hardening semelhante ao KeyGuard (executa só 1 vez)."""
@@ -91,19 +114,25 @@ def _harden_process_once() -> None:
     if hasattr(os, "setrlimit"):
         try:
             import resource
+
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         except Exception:
             pass
 
     # b) alerta se debugger está anexado
     if sys.gettrace() is not None:
-        warnings.warn(SecurityWarning("Debugger detectado — execução pode estar comprometida", "debug", "high"))
+        warnings.warn(
+            SecurityWarning(
+                "Debugger detectado — execução pode estar comprometida", "debug", "high"
+            ),
+            stacklevel=2,
+        )
 
     # c) trava páginas de memória (best-effort)
     try:
         if platform.system() == "Linux":
             libc = ctypes.CDLL("libc.so.6")
-            libc.mlockall(1)           # MCL_CURRENT
+            libc.mlockall(1)  # MCL_CURRENT
         elif platform.system() == "Windows" and hasattr(ctypes, "windll"):
             ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
     except Exception:
@@ -111,11 +140,13 @@ def _harden_process_once() -> None:
 
     _harden_process_once._done = True
 
+
 # Aplica hardening assim que o módulo é importado
 # _harden_process_once()  # adiado para depois de SecurityWarning ser definido
 
 # ### B  --  Compressão/decompressão para grandes cofres
 CHUNK = 64 * 1024
+
 
 def _compress(data: bytes) -> bytes:
     buf = io.BytesIO()
@@ -123,6 +154,7 @@ def _compress(data: bytes) -> bytes:
         for i in range(0, len(data), CHUNK):
             z.write(data[i : i + CHUNK])
     return buf.getvalue()
+
 
 def _decompress(data: bytes) -> bytes:
     out = io.BytesIO()
@@ -134,47 +166,59 @@ def _decompress(data: bytes) -> bytes:
             out.write(part)
     return out.getvalue()
 
+
 # ═════════════════════════ Configurações ════════════════════════════════════
 class Config:
-    MAGIC: bytes = b"VLT3"          # 4 bytes para identificação
+    MAGIC: bytes = b"VLT3"  # 4 bytes para identificação
     VERSION: int = 3
-    SALT_SIZE: int = 16             # Revertido para 16 bytes para compatibilidade com o formato do cabeçalho
-    NONCE_SIZE: int = 24          # header V3 grava sempre 24 B
+    SALT_SIZE: int = 16  # Revertido para 16 bytes para compatibilidade com o formato do cabeçalho
+    NONCE_SIZE: int = 24  # header V3 grava sempre 24 B
     KEY_SIZE: int = 32
     HMAC_SIZE: int = 32
     # Aumenta o limite do cofre para 128 MB (>= 100 MB como solicitado)
     MAX_VAULT_SIZE: int = 128 * 2**20  # 128 MB
     MIN_MASTER_PW_LEN: int = 12
-    ARGON_TIME = 6                  # parâmetros mínimos caso calibração falhe
-    ARGON_MEM = 2 ** 20             # 1 GiB em KiB
+    ARGON_TIME = 6  # parâmetros mínimos caso calibração falhe
+    ARGON_MEM = 2**20  # 1 GiB em KiB
     ARGON_PARALLEL = min(8, multiprocessing.cpu_count() or 2)
     MAX_ATTEMPTS = 5
     REQUIRE_2FA = False
-    INI_PATH = BASE_DIR / "vault.ini"  # único ponto‑fonte
+    INI_PATH = Path.home() / ".cryptguard" / "vault.ini"  # único ponto‑fonte
+
     @classmethod
     def get_kdf_params(cls):
         """
         Consulta (ou cria) ~/.cryptguard/vault.ini e devolve sempre
         **os mesmos** parâmetros Argon2id entre execuções.
         """
-        legacy = BASE_DIR / "config.ini"
+        legacy = Path.home() / ".cryptguard" / "config.ini"
         if legacy.exists() and not cls.INI_PATH.exists():
-            legacy.replace(cls.INI_PATH)          # move antigo → novo nome
+            legacy.replace(cls.INI_PATH)  # move antigo → novo nome
 
-        import configparser, psutil, secrets, time, argon2.low_level as low
+        import configparser
+        import secrets
+        import time
+
+        import argon2.low_level as low
+        import psutil
+
         if cls.INI_PATH.exists():
-            cp = configparser.ConfigParser(); cp.read(cls.INI_PATH)
+            cp = configparser.ConfigParser()
+            cp.read(cls.INI_PATH)
             return {k: cp.getint("kdf", k) for k in ("time_cost", "memory_cost", "parallelism")}
 
         # 1.ª vez – calibra
-        salt = secrets.token_bytes(16); pw = b"benchmark"
-        mem  = max(2**19, cls.ARGON_MEM); t = max(4, cls.ARGON_TIME)
-        par  = cls.ARGON_PARALLEL; vmax = psutil.virtual_memory().total * 0.75
+        salt = secrets.token_bytes(16)
+        pw = b"benchmark"
+        mem = max(2**19, cls.ARGON_MEM)
+        t = max(4, cls.ARGON_TIME)
+        par = cls.ARGON_PARALLEL
+        vmax = psutil.virtual_memory().total * 0.75
         target_ms = 1000  # Definir target_ms como em dynamic_kdf
         while True:
             t0 = time.perf_counter()
             low.hash_secret_raw(pw, salt, t, mem, par, 32, low.Type.ID)
-            if (time.perf_counter()-t0)*1000 >= target_ms or mem*2*1024 > vmax:
+            if (time.perf_counter() - t0) * 1000 >= target_ms or mem * 2 * 1024 > vmax:
                 break
             mem <<= 1
 
@@ -193,12 +237,12 @@ class Config:
             appdata = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
             p = Path(appdata) / "CryptGuard" / "vault3.dat"
         else:
-            p = BASE_DIR / "vault3.dat"
+            p = Path.home() / ".cryptguard" / "vault3.dat"
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
     @classmethod
-    def dynamic_kdf(cls, target_ms: int = 1000) -> Dict[str, int]:
+    def dynamic_kdf(cls, target_ms: int = 1000) -> dict[str, int]:
         """Calibra Argon2 para gastar ~target_ms ms em hardware local."""
         salt = secrets.token_bytes(16)
         pw = b"benchmark"
@@ -217,37 +261,45 @@ class Config:
             mem_cost <<= 1
         return dict(time_cost=time_cost, memory_cost=mem_cost, parallelism=parallel)
 
+
 KDF_PARAMS = Config.get_kdf_params()
 
 # ═════════════════════════ Logging seguro ═══════════════════════════════════
 
+
 def _setup_logger() -> logging.Logger:
-    path = BASE_DIR / "vault.log"
+    path = Path.home() / ".cryptguard" / "vault.log"
     path.parent.mkdir(exist_ok=True, parents=True)
-    handler = RotatingFileHandler(path, maxBytes=5 * 2**20, backupCount=2, encoding="utf-8")  # <-- Usar diretamente
+    handler = RotatingFileHandler(
+        path, maxBytes=5 * 2**20, backupCount=2, encoding="utf-8"
+    )  # <-- Usar diretamente
     fmt = logging.Formatter("%(asctime)s │ %(levelname)s │ %(message)s")
     handler.setFormatter(fmt)
     lg = logging.getLogger("vault")
     lg.setLevel(logging.INFO)
     lg.addHandler(handler)
-    try:
+    with contextlib.suppress(Exception):
         os.chmod(path, 0o600)
-    except Exception:
-        pass
     return lg
 
+
 log = _setup_logger()
+
 
 # ═════════════════════════ Classe de aviso ══════════════════════════════════
 class SecurityWarning(UserWarning):
     def __init__(self, msg: str, category: str, sev: str = "medium") -> None:
         super().__init__(msg)
         txt = f"[{sev.upper()}] {category}: {msg}"
-        getattr(log, {"critical": "critical", "high": "error", "medium": "warning"}.get(sev, "info"))(txt)
+        getattr(
+            log, {"critical": "critical", "high": "error", "medium": "warning"}.get(sev, "info")
+        )(txt)
+
 
 # ═════════════════════════ Process security (simpl.) ═══════════════════════=
 class ProcessProtection:
     """Mesmo esquema do KeyGuard – reduzido."""
+
     _applied = False
 
     @classmethod
@@ -258,6 +310,7 @@ class ProcessProtection:
         # Bloqueia core‑dumps em POSIX
         if hasattr(os, "setrlimit"):
             import resource
+
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         # DEP / ASLR extra em Windows
         if platform.system() == "Windows":
@@ -272,17 +325,23 @@ class ProcessProtection:
     @staticmethod
     def _watchdog():
         while True:
-            t0 = time.perf_counter(); time.sleep(0.1)
+            t0 = time.perf_counter()
+            time.sleep(0.1)
             if time.perf_counter() - t0 > 1.0:
-                warnings.warn(SecurityWarning("Timing‑glitch – possível debugger", "debug", "high"))
+                warnings.warn(
+                    SecurityWarning("Timing‑glitch – possível debugger", "debug", "high"),
+                    stacklevel=2,
+                )
+
 
 ProcessProtection.apply()
 # Agora que SecurityWarning está definido, aplicar hardening de processo
 _harden_process_once()
 
+
 # ═════════════════════════ SecureMemory helper ══════════════════════════════
 class SecureMemory:
-    def __init__(self, data: Union[str, bytes, bytearray, object]):
+    def __init__(self, data: str | bytes | bytearray | object):
         # Aceita objetos como SecureBytes, que têm .bytes()
         if not isinstance(data, (str, bytes, bytearray)):
             if hasattr(data, "bytes"):
@@ -301,9 +360,9 @@ class SecureMemory:
             if platform.system() == "Windows" and hasattr(ctypes, "windll"):
                 # ✅ pega o endereço e passa como void*
                 addr = ctypes.addressof(ctypes.c_char.from_buffer(self._buf))
-                ok = bool(ctypes.windll.kernel32.VirtualLock(
-                    ctypes.c_void_p(addr), ctypes.c_size_t(size)
-                ))
+                ok = bool(
+                    ctypes.windll.kernel32.VirtualLock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+                )
             else:
                 # Linux/BSD/macOS
                 libc = None
@@ -315,15 +374,18 @@ class SecureMemory:
                     except Exception:
                         libc = None
                 if libc is not None:
-                    ok = (libc.mlock(
-                        ctypes.addressof(ctypes.c_char.from_buffer(self._buf)),
-                        ctypes.c_size_t(size)
-                    ) == 0)
+                    ok = (
+                        libc.mlock(
+                            ctypes.addressof(ctypes.c_char.from_buffer(self._buf)),
+                            ctypes.c_size_t(size),
+                        )
+                        == 0
+                    )
         except Exception:
             ok = False
 
         if not ok:
-            warnings.warn("mlock/VirtualLock falhou – páginas não protegidas")
+            warnings.warn("mlock/VirtualLock falhou – páginas não protegidas", stacklevel=2)
 
     def bytes(self) -> bytes:  # raw
         return bytes(self._buf)
@@ -337,17 +399,26 @@ class SecureMemory:
     def __del__(self):
         self.clear()
 
+
 # ═════════════════════════ Derivação de chaves ══════════════════════════════
 
-def _argon2id(pw: bytes, salt: bytes, params: Optional[Dict[str, int]] = None) -> bytes:
+
+def _argon2id(pw: bytes, salt: bytes, params: dict[str, int] | None = None) -> bytes:
     p = params or KDF_PARAMS
-    return _argon2.hash_secret_raw(pw, salt, p["time_cost"], p["memory_cost"], p["parallelism"], 64, _ArgonType.ID)
+    return _argon2.hash_secret_raw(
+        pw, salt, p["time_cost"], p["memory_cost"], p["parallelism"], 64, _ArgonType.ID
+    )
 
 
-def derive_keys(password: SecureMemory, salt: bytes, params: Optional[Dict[str, int]] = None) -> Tuple[bytes, bytes]:
+def derive_keys(
+    password: SecureMemory, salt: bytes, params: dict[str, int] | None = None
+) -> tuple[bytes, bytes]:
     master = _argon2id(password.bytes(), salt, params)
-    outer = HKDF(algorithm=hashes.SHA256(), length=64, salt=None, info=b"Vault split v3").derive(master)
+    outer = HKDF(algorithm=hashes.SHA256(), length=64, salt=None, info=b"Vault split v3").derive(
+        master
+    )
     return outer[:32], outer[32:]  # enc_key, hmac_key
+
 
 # ═════════════════════════ Engine AEAD ═════════════════════════════════════
 class CryptoEngine:
@@ -358,6 +429,7 @@ class CryptoEngine:
       • cryptography.ChaCha20Poly1305  (12 B)  (modo IETF)
       • libsodium (12 B) – mantido, mas agora com padding correto
     """
+
     def __init__(self, enc_key: bytes, force_chacha: bool = False):
         self.key = bytearray(enc_key)
         if force_chacha:
@@ -376,12 +448,11 @@ class CryptoEngine:
             self._backend = "crypto_ietf"
             self._nonce_len = 12
 
-    def enc(self, plaintext: bytes, aad: bytes = b"") -> Tuple[bytes, bytes]:
+    def enc(self, plaintext: bytes, aad: bytes = b"") -> tuple[bytes, bytes]:
         if self._backend == "sodium":
-            npub_len = self._nonce_len             # 12
+            npub_len = self._nonce_len  # 12
             npub = sodium.randombytes(npub_len)
-            ct   = sodium.crypto_aead_chacha20poly1305_ietf_encrypt(
-                       plaintext, aad, npub, self.key)
+            ct = sodium.crypto_aead_chacha20poly1305_ietf_encrypt(plaintext, aad, npub, self.key)
             full_nonce = npub + secrets.token_bytes(24 - npub_len)  # padding
             return full_nonce, ct
 
@@ -392,8 +463,8 @@ class CryptoEngine:
         elif self._backend == "pycrypto_x":
             full_nonce = secrets.token_bytes(24)
             cipher = PyChaCha.new(key=bytes(self.key), nonce=full_nonce)
-            cipher.update(aad)
-            ct = cipher.encrypt(plaintext) + cipher.digest()
+            ct, tag = cipher.encrypt_and_digest(plaintext, aad)
+            ct = ct + tag
             return full_nonce, ct
         else:  # crypto_ietf
             full_nonce = secrets.token_bytes(24)
@@ -405,7 +476,8 @@ class CryptoEngine:
             npub_len = self._nonce_len
             try:
                 return sodium.crypto_aead_chacha20poly1305_ietf_decrypt(
-                           ciphertext, aad, nonce[:npub_len], self.key)
+                    ciphertext, aad, nonce[:npub_len], self.key
+                )
             except RuntimeError:
                 raise InvalidTag("Tag mismatch") from None
 
@@ -413,10 +485,9 @@ class CryptoEngine:
             return XChaCha20Poly1305(bytes(self.key)).decrypt(nonce, ciphertext, aad)
         elif self._backend == "pycrypto_x":
             cipher = PyChaCha.new(key=bytes(self.key), nonce=nonce)
-            cipher.update(aad)
             ct, tag = ciphertext[:-16], ciphertext[-16:]
             try:
-                return cipher.decrypt_and_verify(ct, tag)
+                return cipher.decrypt_and_verify(ct, tag, aad)
             except ValueError:  # PyCryptodome → tag inválida
                 raise InvalidTag("Tag mismatch") from None
         else:  # crypto_ietf
@@ -429,18 +500,26 @@ class CryptoEngine:
     def __del__(self):
         self.clear()
 
+
 # ═════════════════════════ Header helpers ══════════════════════════════════
 
-def _header_pack(salt: bytes, nonce: bytes, kdf: Dict[str, int], hmac_key: bytes) -> bytes:
+
+def _header_pack(salt: bytes, nonce: bytes, kdf: dict[str, int], hmac_key: bytes) -> bytes:
     hdr = struct.pack(
-        VaultManager.HEADER_FMT, Config.MAGIC, Config.VERSION, salt, nonce,
-        kdf["time_cost"], kdf["memory_cost"], kdf["parallelism"]
+        VaultManager.HEADER_FMT,
+        Config.MAGIC,
+        Config.VERSION,
+        salt,
+        nonce,
+        kdf["time_cost"],
+        kdf["memory_cost"],
+        kdf["parallelism"],
     )
     mac = hmac.new(hmac_key, hdr, hashlib.sha256).digest()
     return hdr + mac
 
 
-def _header_unpack(blob: bytes, hmac_key: bytes) -> Tuple[bytes, bytes, Dict[str,int]]:
+def _header_unpack(blob: bytes, hmac_key: bytes) -> tuple[bytes, bytes, dict[str, int]]:
     if len(blob) < VaultManager.HEADER_LEN:
         raise CorruptVault("Header too small")
     hdr, mac = blob[: VaultManager.HEADER_LEN - 32], blob[-32:]
@@ -450,6 +529,7 @@ def _header_unpack(blob: bytes, hmac_key: bytes) -> Tuple[bytes, bytes, Dict[str
     if magic != Config.MAGIC or ver != Config.VERSION:
         raise CorruptVault("Formato ou versão incompatível")
     return salt, nonce, {"time_cost": t, "memory_cost": m, "parallelism": p}
+
 
 # ═════════════════════════ Backend de storage (atomic/WAL) ═════════════════
 class StorageBackend:
@@ -463,8 +543,10 @@ class StorageBackend:
     def _atomic_write(self, data: bytes):
         fd, tmp = tempfile.mkstemp(dir=str(self.path.parent))
         with os.fdopen(fd, "wb") as fp:
-            fp.write(data); fp.flush(); os.fsync(fp.fileno())
-        
+            fp.write(data)
+            fp.flush()
+            os.fsync(fp.fileno())
+
         # Rotacionamento de backups: .bak2 <- .bak1 <- .bak <- arquivo atual
         if self.bak.exists():
             if self.bak1.exists():
@@ -472,11 +554,11 @@ class StorageBackend:
                     self.bak2.unlink()
                 self.bak1.rename(self.bak2)
             self.bak.rename(self.bak1)
-        
+
         # Se o arquivo existir, mova-o para .bak
         if self.path.exists():
             self.path.rename(self.bak)
-        
+
         # Substitui o arquivo pelo novo
         os.replace(tmp, self.path)
         try:
@@ -488,15 +570,19 @@ class StorageBackend:
         for attempt in range(max_tries):
             try:
                 return func()
-            except (OSError, IOError) as e:
+            except OSError as e:
                 if attempt == max_tries - 1:
-                    raise CorruptVault(f"Falha após {max_tries} tentativas: {e} – possível conflito de sync") from e
+                    raise CorruptVault(
+                        f"Falha após {max_tries} tentativas: {e} – possível conflito de sync"
+                    ) from e
                 time.sleep(delay)
 
     def save(self, data: bytes):
         def do_save():
             with open(self.wal, "wb") as w:
-                w.write(data); w.flush(); os.fsync(w.fileno())
+                w.write(data)
+                w.flush()
+                os.fsync(w.fileno())
             self._atomic_write(data)
             self.wal.unlink(missing_ok=True)
             _perm_restrict(self.path)
@@ -506,12 +592,16 @@ class StorageBackend:
                 _perm_restrict(self.bak1)
             if self.bak2.exists():
                 _perm_restrict(self.bak2)
+
         self._retry_op(do_save)
 
     def load(self) -> bytes:
         def do_load():
             if self.wal.exists():
-                warnings.warn(SecurityWarning("WAL encontrado – recovery automático", "file", "high"))
+                warnings.warn(
+                    SecurityWarning("WAL encontrado – recovery automático", "file", "high"),
+                    stacklevel=2,
+                )
                 data = self.wal.read_bytes()
                 self._atomic_write(data)
                 self.wal.unlink(missing_ok=True)
@@ -520,6 +610,7 @@ class StorageBackend:
             if self.path.exists() and len(data) == 0:
                 raise OSError("Arquivo zerado – possível corrupção")
             return data
+
         return self._retry_op(do_load)
 
 
@@ -529,12 +620,16 @@ def _perm_restrict(p: Path):
             p.chmod(stat.S_IRUSR | stat.S_IWUSR)
         elif win32security:
             sd = win32security.GetFileSecurity(str(p), win32security.DACL_SECURITY_INFORMATION)
-            dacl = win32security.ACL(); user, _, _ = win32security.LookupAccountName("", win32api.GetUserName())
-            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, nsec.FILE_GENERIC_READ | nsec.FILE_GENERIC_WRITE, user)
+            dacl = win32security.ACL()
+            user, _, _ = win32security.LookupAccountName("", win32api.GetUserName())
+            dacl.AddAccessAllowedAce(
+                win32security.ACL_REVISION, nsec.FILE_GENERIC_READ | nsec.FILE_GENERIC_WRITE, user
+            )
             sd.SetSecurityDescriptorDacl(1, dacl, 0)
             win32security.SetFileSecurity(str(p), win32security.DACL_SECURITY_INFORMATION, sd)
     except Exception:
         pass
+
 
 # ═════════════════════════ Rate limiter (bruteforce) ═══════════════════════
 class RateLimiter:
@@ -557,7 +652,9 @@ class RateLimiter:
         now = time.time()
         self.fail_ts = [t for t in self.fail_ts if now - t < self.window]
         if len(self.fail_ts) >= self.threshold:
-            raise RuntimeError(f"Rate‑limited – aguarde {int(self.window - (now - self.fail_ts[-self.threshold]))} s")
+            raise RuntimeError(
+                f"Rate‑limited – aguarde {int(self.window - (now - self.fail_ts[-self.threshold]))} s"
+            )
 
     def fail(self):
         now = time.time()
@@ -569,43 +666,49 @@ class RateLimiter:
         self.fail_ts = []
         self._persist()
 
+
 # ═════════════════════════ VaultManager (API pública) ═══════════════════════
 
 # Decorator para timed exposure de chaves
-T = TypeVar('T')
-def _exposed(func: Callable[..., T]) -> Callable[..., T]:
-    def wrapper(self: 'VaultManager', *args, **kwargs) -> T:
+T = TypeVar("T")
+
+
+def _exposed[T](func: Callable[..., T]) -> Callable[..., T]:
+    def wrapper(self: VaultManager, *args, **kwargs) -> T:
         with self._mask_lock:
-            if getattr(self, '_mask', None):
+            if getattr(self, "_mask", None):
                 for i in range(len(self.enc_key)):
                     self.enc_key[i] ^= self._mask[i]
                     self.hmac_key[i] ^= self._mask[i]
             try:
                 return func(self, *args, **kwargs)
             finally:
-                if getattr(self, '_mask', None):
+                if getattr(self, "_mask", None):
                     for i in range(len(self.enc_key)):
                         self.enc_key[i] ^= self._mask[i]
                         self.hmac_key[i] ^= self._mask[i]
                     self._arm_timer()
+
     return wrapper
+
 
 class VaultManager:
     """Gerencia um cofre V3 (arquivo single‑blob)."""
+
     # MAGIC (4s) | ver (B) | salt (32s) | nonce (24s) | time_cost (H) | memory_cost (I) | parallelism (B)
     HEADER_FMT = ">4sB16s24sH I B"  # MAGIC, ver, salt, nonce, time_cost, memory_cost, parallelism
-    HEADER_LEN = struct.calcsize(HEADER_FMT) + 32   # +HMAC-SHA256
+    HEADER_LEN = struct.calcsize(HEADER_FMT) + 32  # +HMAC-SHA256
     _KEY_TTL = 0.5  # chave em claro por no máximo 500 ms
 
     def __init__(self, storage: StorageBackend, backups: bool = True):
         self.store = storage
         self.rl = RateLimiter()
-        self.db: Dict[str, str] = {}       # label → base64(data)
-        self.enc: Optional[CryptoEngine] = None
+        self.db: dict[str, str] = {}  # label → base64(data)
+        self.enc: CryptoEngine | None = None
         self.enc_key: bytearray = bytearray()
         self.hmac_key: bytearray = bytearray()
-        self._mask: Optional[bytes] = None
-        self._timer: Optional[threading.Timer] = None
+        self._mask: bytes | None = None
+        self._timer: threading.Timer | None = None
         self._mask_lock = threading.RLock()
         self.backups = backups
         self.kdf_params = None  # Armazena os parâmetros KDF específicos deste vault
@@ -633,9 +736,11 @@ class VaultManager:
 
     def _arm_timer(self) -> None:
         """Configura temporizador para rotação automática da máscara."""
+
         def _tick():
             self._rotate_mask()
             self._arm_timer()
+
         if self._timer:
             self._timer.cancel()
         self._timer = threading.Timer(self._KEY_TTL, _tick)
@@ -649,15 +754,15 @@ class VaultManager:
             salt = secrets.token_bytes(Config.SALT_SIZE)
             self.kdf_params = KDF_PARAMS.copy()
             enc_key, mac_key = derive_keys(master, salt, self.kdf_params)
-            
+
             # 2️⃣ gera criptograma antes de ofuscar chaves
             engine = CryptoEngine(enc_key)
             nonce, ct = engine.enc(_compress(pickle.dumps({})))
-            
+
             # 3️⃣ assina cabeçalho com **chave limpa**
             hdr = _header_pack(salt, nonce, self.kdf_params, mac_key)
             self.store.save(hdr + ct)
-            
+
             # 4️⃣ só agora guarda engine e aplica máscara
             self.enc = engine
             self._set_keys(enc_key, mac_key)
@@ -665,18 +770,21 @@ class VaultManager:
         except Exception as e:
             log.error(f"Falha na criação do Vault: {e}")
             raise CorruptVault(f"Erro ao criar Vault: {e} – verifique permissões ou sync")
-    
-    def open(self, master_password: Union[str, bytes, 'SecureMemory'], totp_code: Optional[str] = None, totp_secret: Optional[str] = None):
+
+    def open(
+        self,
+        master_password: str | bytes | SecureMemory,
+        totp_code: str | None = None,
+        totp_secret: str | None = None,
+    ):
         try:
             self.rl.check()
             blob = self.store.load()
             if not blob or len(blob) == 0:
                 raise FileNotFoundError("Vault inexistente ou vazio. Use create().")
-            hdr_raw = blob[:VaultManager.HEADER_LEN]
-            body    = blob[VaultManager.HEADER_LEN:]
-            magic, ver, salt, nonce, t, m, p = struct.unpack(
-                VaultManager.HEADER_FMT, hdr_raw[:-32]
-            )
+            hdr_raw = blob[: VaultManager.HEADER_LEN]
+            body = blob[VaultManager.HEADER_LEN :]
+            magic, ver, salt, nonce, t, m, p = struct.unpack(VaultManager.HEADER_FMT, hdr_raw[:-32])
             if not isinstance(master_password, SecureMemory):
                 master_password = SecureMemory(master_password)
 
@@ -687,11 +795,13 @@ class VaultManager:
             # Verify HMAC before key masking
             expected_mac = hmac.new(mac_key, hdr_raw[:-32], hashlib.sha256).digest()
             if not hmac.compare_digest(expected_mac, hdr_raw[-32:]):
-                self.rl.fail(); raise WrongPassword("Senha incorreta")
+                self.rl.fail()
+                raise WrongPassword("Senha incorreta")
 
             # Verifica magic/versão após HMAC válido
             if magic != Config.MAGIC or ver != Config.VERSION:
-                self.rl.fail(); raise CorruptVault("Formato ou versão incompatível")
+                self.rl.fail()
+                raise CorruptVault("Formato ou versão incompatível")
 
             # engine uses the raw key before masking
             self.enc = CryptoEngine(enc_key)
@@ -703,8 +813,10 @@ class VaultManager:
                 warnings.warn(
                     SecurityWarning(
                         "Parâmetros Argon2id diferentes dos actuais – a abrir em modo retro-compat.",
-                        "kdf", "medium"
-                    )
+                        "kdf",
+                        "medium",
+                    ),
+                    stacklevel=2,
                 )
 
             try:
@@ -720,11 +832,9 @@ class VaultManager:
                     raise WrongPassword("Senha incorreta")
 
             try:
+                # nosec B301,B403 — pickle após AEAD+HMAC verificados
                 self.db = pickle.loads(_decompress(plain))
-            except (pickle.UnpicklingError,
-                    gzip.BadGzipFile,
-                    EOFError,
-                    OSError) as err:
+            except (pickle.UnpicklingError, gzip.BadGzipFile, EOFError, OSError) as err:
                 # Decriptou com chave errada → lixo → falha de descompressão
                 self.rl.fail()
                 raise WrongPassword("Senha incorreta") from err
@@ -738,27 +848,30 @@ class VaultManager:
             log.error(f"Falha ao abrir Vault: {e}")
             raise CorruptVault(f"Erro ao abrir Vault: {e} – possível corrupção por sync")
 
-    def list_files(self) -> List[str]:
+    def list_files(self) -> list[str]:
         return list(self.db.keys())
 
-    def add_file(self, file_path: str, label: Optional[str] = None):
+    def add_file(self, file_path: str, label: str | None = None):
         """Armazena **o binário do arquivo** (já criptografado pelo CryptGuard) dentro do cofre."""
         data = Path(file_path).read_bytes()
         label = label or Path(file_path).name
-        new_db = self.db.copy(); new_db[label] = base64.b64encode(data).decode()
+        new_db = self.db.copy()
+        new_db[label] = base64.b64encode(data).decode()
         size_est = len(json.dumps(new_db).encode())
         if size_est > Config.MAX_VAULT_SIZE:
             raise ValueError(
                 f"Tamanho excede o limite do cofre ({Config.MAX_VAULT_SIZE // (2**20)} MB)."
             )
-        self.db = new_db; self._save()
+        self.db = new_db
+        self._save()
 
     def export_file(self, label: str, dest_dir: str | Path) -> str:
         """Extrai o arquivo `label` para `dest_dir` e retorna o caminho salvo."""
         if label not in self.db:
             raise KeyError("Arquivo não encontrado no cofre")
         data = base64.b64decode(self.db[label])
-        dest_dir = Path(dest_dir); dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_dir = Path(dest_dir)
+        dest_dir.mkdir(parents=True, exist_ok=True)
         out = dest_dir / label
         # evita overwrite
         counter = 1
@@ -769,13 +882,14 @@ class VaultManager:
         return str(out)
 
     def delete(self, label: str):
-        self.db.pop(label, None); self._save()
+        self.db.pop(label, None)
+        self._save()
 
     @_exposed
     def change_password(self, old_master: SecureMemory, new_master: SecureMemory):
         """Troca de senha com verificação explícita da senha atual."""
         # 1) Ler header e extrair salt/parâmetros atuais
-        hdr_raw = self.store.load()[:VaultManager.HEADER_LEN]
+        hdr_raw = self.store.load()[: VaultManager.HEADER_LEN]
         if not hdr_raw:
             raise CorruptVault("Vault inexistente")
         _, _, old_salt, _, t, m, p = struct.unpack(self.HEADER_FMT, hdr_raw[:-32])
@@ -804,13 +918,13 @@ class VaultManager:
         self._save(new_salt)
 
     @_exposed
-    def _save(self, salt: Optional[bytes] = None):
+    def _save(self, salt: bytes | None = None):
         """
         Grava DB no disco reutilizando SEMPRE o mesmo salt do cabeçalho
         existente, garantindo que `hmac_key` continue válido.
         """
         # O decorator _exposed garante que as chaves estão temporariamente expostas
-        old_hdr = self.store.load()[:5 + Config.SALT_SIZE]  # MAGIC|VER|salt
+        old_hdr = self.store.load()[: 5 + Config.SALT_SIZE]  # MAGIC|VER|salt
         # Se um salt novo foi fornecido (troca de senha), HONRAR esse salt.
         if salt is None:
             salt = old_hdr[5:] if old_hdr else secrets.token_bytes(Config.SALT_SIZE)
@@ -824,9 +938,13 @@ class VaultManager:
         # próximo _save() durante a mesma sessão e corrompe o Vault.
         # A chave será zerada ao fechar a aplicação ou em rotate_keys().
 
+
 # ═════════════════════════ Helper de uso simples ═══════════════════════════
 
-def open_or_init_vault(master_password: str | bytes, path: Optional[Path | str] = None) -> VaultManager:
+
+def open_or_init_vault(
+    master_password: str | bytes, path: Path | str | None = None
+) -> VaultManager:
     """Abre o cofre (ou cria se não existir) e retorna um `VaultManager`."""
     path = Path(path) if path else Config.default_path()
     sb = StorageBackend(path)
@@ -835,20 +953,22 @@ def open_or_init_vault(master_password: str | bytes, path: Optional[Path | str] 
         vm.open(SecureMemory(master_password))
     except FileNotFoundError:
         vm.create(SecureMemory(master_password))
-    except WrongPassword as e:
+    except WrongPassword:
         # Senha incorreta (HMAC falhou) – propagamos para interface tratar
         raise
-    except CorruptVault as e:
+    except CorruptVault:
         # Arquivo corrompido ou vazio – também propagamos (UI decide recriar)
         raise
     return vm
 
+
 # ═════════════════════════ GUI: VaultDialog ════════════════════════════════
 class VaultDialog(QDialog):
     """Janela Qt para listar e extrair arquivos do cofre."""
+
     file_selected = Signal(str)  # caminho exportado
 
-    def __init__(self, vm: VaultManager, parent: Optional[QWidget] = None):
+    def __init__(self, vm: VaultManager, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Vault – Arquivos")
         self.resize(420, 380)
@@ -871,9 +991,12 @@ class VaultDialog(QDialog):
         v.addWidget(self.list, 1)
         # toolbar
         h = QHBoxLayout()
-        btn_del = QPushButton("Remove");  btn_del.clicked.connect(self._del)
-        btn_ext = QPushButton("Extrair para"); btn_ext.clicked.connect(self._extract)
-        btn_close = QPushButton("Fechar"); btn_close.clicked.connect(self.reject)
+        btn_del = QPushButton("Remove")
+        btn_del.clicked.connect(self._del)
+        btn_ext = QPushButton("Extrair para")
+        btn_ext.clicked.connect(self._extract)
+        btn_close = QPushButton("Fechar")
+        btn_close.clicked.connect(self.reject)
         h.addWidget(btn_del)
         h.addStretch()
         h.addWidget(btn_ext)
@@ -882,31 +1005,26 @@ class VaultDialog(QDialog):
         v.addLayout(h)
 
     def _populate(self):
-        self.list.clear(); self.list.addItems(self.vm.list_files())
+        self.list.clear()
+        self.list.addItems(self.vm.list_files())
 
     # ── slots --------------------------------------------------------------
     def _on_double(self, label):
         # Se vier um QListWidgetItem, pega o texto
-        if hasattr(label, "text"):
-            label_text = label.text()
-        else:
-            label_text = str(label)
+        label_text = label.text() if hasattr(label, "text") else str(label)
         # Para qualquer arquivo criptografado (.cg2) exporta silenciosamente
         # p/ diretório temporário e devolve o caminho; não abre diálogos.
-        if label_text.lower().endswith('.cg2'):
+        if label_text.lower().endswith(".cg2"):
             import tempfile
+
             tmp_dir = Path(tempfile.gettempdir())
             out_path = self.vm.export_file(label_text, tmp_dir)
-            try:
+            with contextlib.suppress(Exception):
                 os.chmod(out_path, 0o600)
-            except Exception:
-                pass
             self.file_selected.emit(out_path)
             self.accept()
         else:
-            dest_dir = QFileDialog.getExistingDirectory(
-                self, "Salvar em…", str(Path.home())
-            )
+            dest_dir = QFileDialog.getExistingDirectory(self, "Salvar em…", str(Path.home()))
             if not dest_dir:
                 return
             try:
@@ -920,8 +1038,23 @@ class VaultDialog(QDialog):
     def _extract(self):
         item = self.list.currentItem()
         if not item:
+            QMessageBox.information(self, "Vault", "Selecione um arquivo primeiro.")
             return
-        self._on_double(item)
+
+        label_text = item.text()
+
+        # Sempre pergunta o destino quando o usuário clica no botão "Extrair para"
+        dest_dir = QFileDialog.getExistingDirectory(self, "Escolher pasta de destino", str(Path.home()))
+        if not dest_dir:
+            return
+
+        try:
+            out = self.vm.export_file(label_text, dest_dir)
+            QMessageBox.information(self, "Exportado", f"Arquivo salvo em:\n{out}")
+            self.file_selected.emit(out)
+            self.accept()  # fecha o diálogo após extrair
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", str(e))
 
     # ② guarda a ordem no dict e grava disco
     def _save_order(self, *args):
@@ -941,29 +1074,39 @@ class VaultDialog(QDialog):
             return
         label = item.text()
         if QMessageBox.question(self, "Confirmar", f"Remover {label} do cofre?") == QMessageBox.Yes:
-            self.vm.delete(label); self._populate()
+            self.vm.delete(label)
+            self._populate()
+
 
 # ═════════════════════════ CLI (retro‑compat) ═══════════════════════════════
+
 
 def _cli():
     ap = argparse.ArgumentParser("vault.py CLI")
     ap.add_argument("file", type=Path)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init")
-    p_add = sub.add_parser("add");      p_add.add_argument("path")
+    p_add = sub.add_parser("add")
+    p_add.add_argument("path")
     sub.add_parser("list")
-    p_ext = sub.add_parser("extract");   p_ext.add_argument("label"); p_ext.add_argument("dest")
-    p_del = sub.add_parser("del");       p_del.add_argument("label")
+    p_ext = sub.add_parser("extract")
+    p_ext.add_argument("label")
+    p_ext.add_argument("dest")
+    p_del = sub.add_parser("del")
+    p_del.add_argument("label")
     sub.add_parser("passwd")
     args = ap.parse_args()
 
     vm = VaultManager(StorageBackend(args.file))
     pw = SecureMemory(getpass.getpass("Senha mestre: "))
     if args.cmd == "init":
-        vm.create(pw); print("Vault criado."); return
+        vm.create(pw)
+        print("Vault criado.")
+        return
     vm.open(pw)
     if args.cmd == "add":
-        vm.add_file(args.path); print("Adicionado.")
+        vm.add_file(args.path)
+        print("Adicionado.")
     elif args.cmd == "list":
         for label in vm.list_files():
             print(label)
@@ -978,8 +1121,12 @@ def _cli():
         vm.rotate_keys(new_pw)
         print("Senha alterada.")
 
+
 if __name__ == "__main__":
     _cli()
 
+
 class WrongPassword(ValueError): ...
+
+
 class CorruptVault(ValueError): ...
