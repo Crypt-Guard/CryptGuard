@@ -1,8 +1,9 @@
 """
 Path constants for CryptGuard - separate from config to avoid circular imports.
 """
-from pathlib import Path
+
 import os
+from pathlib import Path
 
 # Base directory for CryptGuard data
 if os.name == "nt":  # Windows

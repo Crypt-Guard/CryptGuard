@@ -1,187 +1,175 @@
-"""
-utils.py  –  utilidades gerais (v2025‑07)
-
-Inclui:
-• escrita atômica segura (chmod 600)
-• helpers JSON (bytes ↔ dict)
-• nome único randomizado
-• secure‑delete (arquivo ou pasta recursiva)
-• verificação de expiração (campo "exp" nos metadados)
-• cálculo de velocidade humana (bytes/s → string)
-• utilidades diversas (CG2-only)
-"""
-
 from __future__ import annotations
+import secrets
 
-import os, json, secrets, tempfile, shutil, time, datetime, zipfile
+import os
+import time
+import zipfile
+import tempfile
+import random
+from collections.abc import Iterable
 from pathlib import Path
-from typing   import Tuple
-import re
-# Secure‑delete escreve blocos de 1 MiB
-SECURE_DELETE_CHUNK_SIZE = 1_048_576  # 1 MiB
 
-# ───────────────────────── Expiração helpers ───────────────────────────
-class ExpiredFileError(Exception):
-    """Arquivo ultrapassou a data de validade."""
+try:
+    from .factories import decrypt, encrypt  # password: str
+except Exception:  # pragma: no cover
+    encrypt = decrypt = None  # type: ignore[assignment]
 
-def check_expiry(meta: dict, skew_seconds: int = 0) -> None:
-    """
-    Levanta `ExpiredFileError` se o campo ``"exp"`` (epoch UTC seg) estiver no passado.
+def pack_enc_zip(
+    inputs: Iterable[str | Path],
+    out_zip: str | Path,
+    password: str,
+    *,
+    algo: str = "AESG",
+) -> str:
+    out_zip_p = Path(out_zip)
+    out_zip_p.parent.mkdir(parents=True, exist_ok=True)
 
-    Se o campo não existir, simplesmente retorna.
-    `skew_seconds` define tolerância de relógio (default 0).
-    """
-    exp = meta.get("exp")
-    if exp is None:
-        return
-    if time.time() > exp + skew_seconds:
-        ts = datetime.datetime.utcfromtimestamp(exp).strftime("%Y‑%m‑%d %H:%M:%S")
-        raise ExpiredFileError(f"Arquivo expirado em {ts} UTC")
+    with zipfile.ZipFile(out_zip_p, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for item in inputs:
+            p = Path(item)
+            if p.is_dir():
+                for f in p.rglob("*"):
+                    if f.is_file():
+                        # armazena com caminho relativo à pasta-base
+                        z.write(f, f.relative_to(p).as_posix())
+            elif p.is_file():
+                z.write(p, p.name)
+            else:
+                raise FileNotFoundError(f"Entrada não encontrada: {p}")
 
-# ───────────────────────── Escrita atômica ─────────────────────────────
-def write_atomic_secure(dest: str | Path, data: bytes) -> None:
-    """Grava *data* em *dest* com permissão 600, de forma atômica."""
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=dest.parent)
+    cg2_path = out_zip_p.with_suffix(".cg2")
+    if encrypt is not None:
+        encrypt(str(out_zip_p), password, algo=algo, out_path=str(cg2_path))
+    else:
+        from .cg2_ops import encrypt_to_cg2
+        alg_map = {"AESG": "AES-256-GCM", "ACTR": "AES-256-CTR",
+                   "XC20": "XChaCha20-Poly1305", "CH20": "ChaCha20-Poly1305"}
+        pwd = password.encode("utf-8")
+        encrypt_to_cg2(str(out_zip_p), str(cg2_path), pwd, alg=alg_map.get(algo, algo))
+    return str(cg2_path)
+
+def _safe_extract(zf: zipfile.ZipFile, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for m in zf.infolist():
+        dest = out_dir / m.filename
+        dest_abs = dest.resolve()
+        if not str(dest_abs).startswith(str(out_dir.resolve())):
+            raise ValueError(f"Tentativa de Zip Slip: {m.filename!r}")
+        if m.is_dir():
+            dest_abs.mkdir(parents=True, exist_ok=True)
+            continue
+        dest_abs.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(m, "r") as src, open(dest_abs, "wb") as dst:
+            while True:
+                chunk = src.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst.write(chunk)
+
+def unpack_enc_zip(
+    cg2_path: str | Path,
+    out_dir: str | Path,
+    password: str,
+) -> str:
+    cg2_p = Path(cg2_path)
+    out_dir_p = Path(out_dir)
+    out_dir_p.mkdir(parents=True, exist_ok=True)
+    # grava zip temporário ao lado de out_dir (ex.: C:\...\saida.zip)
+    tmp_zip = out_dir_p.with_suffix(".zip")
+
+    if decrypt is not None:
+        decrypt(str(cg2_p), password, out_path=str(tmp_zip))
+    else:
+        from .cg2_ops import decrypt_from_cg2
+        pwd = password.encode("utf-8")
+        decrypt_from_cg2(str(cg2_p), str(tmp_zip), pwd)
+
+    with zipfile.ZipFile(tmp_zip, "r") as zf:
+        _safe_extract(zf, out_dir_p)
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data); f.flush(); os.fsync(f.fileno())
-        os.replace(tmp, dest)
-        dest.chmod(0o600)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+        tmp_zip.unlink(missing_ok=True)
+    except Exception:
+        pass  # nosec B110 (fallback silencioso/Windows locks)
+    return str(out_dir_p)
 
-# ───────────────────────── JSON helpers ────────────────────────────────
-def to_json_bytes(obj):  return json.dumps(obj, separators=(",", ":")).encode()
-def from_json_bytes(b):  return json.loads(b.decode())
+# ---------------- extra GUI helpers (v2.1.5d) ----------------
+def archive_folder(folder: str | Path) -> str:
+    """Create a temporary ZIP from a folder and return its path (string)."""
+    src = Path(folder)
+    if not src.is_dir():
+        raise ValueError(f"Not a directory: {src}")
+    tmp_dir = Path(tempfile.gettempdir())
+    # unique name based on time and random
+    base = f"cg2_{int(time.time())}_{secrets.randbelow(1_000_000)}"
+    out_zip = tmp_dir / f"{base}.zip"
+    with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for p in src.rglob("*"):
+            if p.is_dir():
+                continue
+            try:
+                z.write(p, arcname=p.relative_to(src))
+            except Exception:
+                # Best-effort: skip unreadable files
+                continue
+    return str(out_zip)
 
-# ───────────────────────── Nome único ──────────────────────────────────
-def generate_unique_filename(path: str | Path) -> Path:
+def secure_delete(path: str | Path, passes: int = 1, *, chunk_size: int = 1024 * 1024) -> None:
     """
-    Retorna *path* se ele ainda não existe.
-    Caso exista, gera “<nome> (1).ext”, “<nome> (2).ext”… evitando
-    correntes intermináveis de `_abcd1234_ef9876…`.
+    Best-effort secure delete of a file:
+      1) overwrite with random bytes (N passes),
+      2) flush/fsync,
+      3) truncate and unlink.
+    Directories: rmtree best-effort.
     """
     p = Path(path)
     if not p.exists():
-        return p
-
-    # Remove eventuais sufixos _<hex8> já existentes (retro‑compat)
-    base_stem = re.sub(r"_([0-9a-fA-F]{8})$", "", p.stem)
-    counter = 1
-    while True:
-        candidate = p.with_name(f"{base_stem} ({counter}){p.suffix}")
-        if not candidate.exists():
-            return candidate
-        counter += 1
-
-# ───────────────────────── Secure‑delete ───────────────────────────────
-def secure_delete(path: str | os.PathLike, passes: int = 3) -> None:
-    """
-    Sobrescreve e remove um *arquivo* ou cada arquivo em um *diretório* (recursivo).
-
-    • `passes` ≥ 1 define quantas vezes cada byte será sobregravado.
-    • Diretórios são percorridos com `.rglob('*')`.
-    """
-    p = Path(path)
+        return
     if p.is_dir():
-        for child in p.rglob('*'):
-            secure_delete(child, passes=passes)
+        # for directories, best-effort recursive delete
+        import shutil
+        shutil.rmtree(p, ignore_errors=True)
+        return
+
+    try:
+        size = p.stat().st_size
+    except Exception:
+        size = 0
+
+    try:
+        with open(p, "r+b", buffering=0) as f:
+            for _ in range(max(1, int(passes))):
+                f.seek(0)
+                remaining = size
+                while remaining > 0:
+                    n = min(chunk_size, remaining)
+                    f.write(os.urandom(n))
+                    remaining -= n
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass  # nosec B110 (fallback silencioso/Windows locks)
+            try:
+                f.seek(0)
+                f.truncate(0)
+            except Exception:
+                pass  # nosec B110 (fallback silencioso/Windows locks)
+    except Exception:
+        # If we couldn't open to overwrite (locked), try to rename as a fallback to break links.
         try:
-            p.rmdir()
-        except OSError:
-            pass
-        return
+            p.rename(p.with_suffix(p.suffix + ".to_delete"))
+            p = p.with_suffix(p.suffix + ".to_delete")
+        except Exception:
+            pass  # nosec B110 (fallback silencioso/Windows locks)
 
-    if not p.is_file():
-        return
-
-    length       = p.stat().st_size
-    full_chunks  = length // SECURE_DELETE_CHUNK_SIZE
-    remainder    = length % SECURE_DELETE_CHUNK_SIZE
-    with p.open("r+b", buffering=0) as f:
-        for _ in range(max(1, passes)):
-            f.seek(0)
-            # chunks cheios
-            for _ in range(full_chunks):
-                f.write(secrets.token_bytes(SECURE_DELETE_CHUNK_SIZE))
-            # resto
-            if remainder:
-                f.write(secrets.token_bytes(remainder))
-            f.flush(); os.fsync(f.fileno())
-    p.unlink(missing_ok=True)
-
-# ───────────────────────── Velocidade humana ───────────────────────────
-def human_speed(done: int, elapsed: float) -> str:
-    """
-    Converte *done* (bytes) / *elapsed* (s) → string “x MB/s”.
-    """
-    if elapsed == 0:
-        return "– MB/s"
-    mbps = done / 1_048_576 / elapsed
-    return f"{mbps:,.1f} MB/s"
-
-# ───────────────────────── Archive helper (ZIP genérico) ───────────────
-def archive_folder(folder_path: str | Path) -> Path:
-    folder = Path(folder_path)
-    if not folder.is_dir():
-        raise NotADirectoryError(folder)
-    zip_path = folder.with_suffix(".zip")
-    shutil.make_archive(str(folder), "zip", root_dir=folder)
-    return zip_path
-
-# (ZIP helpers de legado removidos – CG2-only)
-
-
-def human_size(n: int) -> str:
-    units = ["B","KiB","MiB","GiB","TiB"]
-    s = float(n); i = 0
-    while s >= 1024 and i < len(units)-1:
-        s /= 1024; i += 1
-    return f"{s:.2f} {units[i]}"
-
-
-
-def detect_algo_from_header(path) -> str | None:
+    # Final unlink
     try:
-        from .fileformat import read_header
-        hdr, *_ = read_header(Path(path))
-        return getattr(hdr, "alg", None)
+        p.unlink(missing_ok=True)
     except Exception:
-        return None
-
-
-def pack_enc_zip(paths, dest_zip, password: str, algo: str = "AESG", **kw) -> str:
-    """Compacta `paths` em ZIP e cifra o ZIP com a API disponível.
-    Retorna caminho do arquivo cifrado.
-    """
-    from zipfile import ZipFile, ZIP_DEFLATED
-    from pathlib import Path
-    import tempfile
-    paths = [Path(p) for p in (paths if isinstance(paths, (list, tuple)) else [paths])]
-    dest_zip = Path(dest_zip)
-    # cria zip temporário se o destino final for o .cg2
-    tmp_zip = dest_zip if dest_zip.suffix.lower() == ".zip" else Path(tempfile.gettempdir()) / ("cg2_pkg_" + paths[0].name + ".zip")
-    with ZipFile(tmp_zip, "w", ZIP_DEFLATED) as z:
-        for p in paths:
-            if p.is_dir():
-                for sub in p.rglob("*"):
-                    if sub.is_file():
-                        z.write(sub, arcname=sub.relative_to(p))
-            else:
-                z.write(p, arcname=p.name)
-    # cifra o zip
-    try:
-        from .factories import encrypt as _enc
-        out = _enc(str(tmp_zip), password, algo=algo, **kw)
-        return out
-    except Exception:
-        from .cg2_ops import encrypt_to_cg2
-        algo_map = {"AESG":"AES-256-GCM","ACTR":"AES-256-CTR","XC20":"XChaCha20-Poly1305","CH20":"ChaCha20-Poly1305"}
-        human = algo_map.get(algo, algo)
-        out = tmp_zip.with_suffix(".cg2")
-        pwd = password.encode() if isinstance(password, str) else password
-        encrypt_to_cg2(str(tmp_zip), str(out), pwd, alg=human, **kw)
-        return str(out)
+        # Create a .deleted marker if unlink failed
+        try:
+            marker = p.with_suffix(p.suffix + ".deleted")
+            marker.write_text("pending-delete", encoding="utf-8")
+        except Exception:
+            pass  # nosec B110 (fallback silencioso/Windows locks)
+# -------------------------------------------------------------

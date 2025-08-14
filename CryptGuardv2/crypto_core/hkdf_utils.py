@@ -6,11 +6,15 @@ hkdf_utils.py  –  única fonte de verdade para derivar
 • Recebe explicitamente o mesmo `salt` de 16 B já usado no Argon2  (↑ robustez)
 • `info` muda conforme o backend para manter compatibilidade (PFA‑keys/CGv2‑keys)
 """
+
 from __future__ import annotations
+
+from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.hashes    import SHA256
+
 from .secure_bytes import SecureBytes
+
 
 def derive_keys(master: SecureBytes, *, info: bytes, salt: bytes) -> tuple[bytes, bytes]:
     k = HKDF(algorithm=SHA256(), length=64, salt=salt, info=info).derive(master.to_bytes())
-    return k[:32], k[32:]          # enc_key, hmac_key
+    return k[:32], k[32:]  # enc_key, hmac_key

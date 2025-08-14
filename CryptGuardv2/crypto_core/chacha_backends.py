@@ -1,36 +1,41 @@
+# nosec B413: # # import Crypto  # removido pela migração  # removed by migration legado — backends preferidos são cryptography/PyNaCl; mantido por compat.
 """chacha_backends.py – ChaCha20‑Poly1305 (12 B) e XChaCha20‑Poly1305 (24 B).
 
 Versão corrigida: remove keyword inválido `rs_bytes` nas chamadas de
 `rs_encode_data` para ser compatível com implementações existentes.
 """
+
 from __future__ import annotations
 
 import struct
-from typing import Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
 try:
-    from Crypto.Cipher import ChaCha20_Poly1305  # PyCryptodome
+    from crypto_core.compat_chacha import ChaCha20_Poly1305  # PyCryptodome
 except ImportError:
     ChaCha20_Poly1305 = None  # type: ignore
 
-from .crypto_base import BaseCipher
-from .rs_codec    import rs_encode_data, rs_decode_data
-from .config      import RS_PARITY_BYTES
 from crypto_core.logger import logger
 
-TAG_LEN = 16   # bytes
+from .config import RS_PARITY_BYTES
+from .crypto_base import BaseCipher
+from .rs_codec import rs_decode_data, rs_encode_data
+
+TAG_LEN = 16  # bytes
+
 
 class ChaChaCipher(BaseCipher):
-    alg_tag       = b"CH20"
-    hkdf_info     = b"PFA-keys"
-    nonce_size    = 12
+    alg_tag = b"CH20"
+    hkdf_info = b"PFA-keys"
+    nonce_size = 12
     use_global_hmac = True
-    supports_rs   = True
+    supports_rs = True
 
     @staticmethod
-    def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+    def encode_chunk(
+        idx: int, plain: bytes, nonce: bytes, enc_key: bytes, rs_use: bool, header: bytes = b""
+    ) -> tuple[int, bytes]:
         # Validate nonce length early to avoid backend ambiguity
         if len(nonce) != ChaChaCipher.nonce_size:
             raise ValueError(f"Invalid nonce length: expected {ChaChaCipher.nonce_size} bytes")
@@ -44,8 +49,14 @@ class ChaChaCipher(BaseCipher):
         return idx, payload
 
     @staticmethod
-    def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+    def decode_chunk(
+        idx: int,
+        cipher_blob: bytes,
+        nonce: bytes,
+        enc_key: bytes,
+        rs_use: bool,
+        header: bytes = b"",
+    ) -> tuple[int, bytes]:
         blob = cipher_blob
         parity = RS_PARITY_BYTES if rs_use and len(blob) > RS_PARITY_BYTES else 0
         orig_blob = blob
@@ -53,8 +64,13 @@ class ChaChaCipher(BaseCipher):
             try:
                 blob = rs_decode_data(blob)
             except Exception as e:
-                logger.warning("RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
-                               idx, len(orig_blob), e, parity)
+                logger.warning(
+                    "RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
+                    idx,
+                    len(orig_blob),
+                    e,
+                    parity,
+                )
         last_err = None
         attempts = ("no_strip", "strip_parity") if parity else ("no_strip",)
         for attempt in attempts:
@@ -70,20 +86,26 @@ class ChaChaCipher(BaseCipher):
             except Exception as e:
                 last_err = e
                 continue
-        logger.error("Tag verification failed (idx=%d, len=%d) after %s attempts",
-                     idx, len(orig_blob), len(attempts))
+        logger.error(
+            "Tag verification failed (idx=%d, len=%d) after %s attempts",
+            idx,
+            len(orig_blob),
+            len(attempts),
+        )
         raise last_err
 
+
 class XChaChaCipher(BaseCipher):
-    alg_tag       = b"XC20"
-    hkdf_info     = b"PFA-keys"
-    nonce_size    = 24
+    alg_tag = b"XC20"
+    hkdf_info = b"PFA-keys"
+    nonce_size = 24
     use_global_hmac = True
-    supports_rs   = True
+    supports_rs = True
 
     @staticmethod
-    def encode_chunk(idx: int, plain: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+    def encode_chunk(
+        idx: int, plain: bytes, nonce: bytes, enc_key: bytes, rs_use: bool, header: bytes = b""
+    ) -> tuple[int, bytes]:
         if ChaCha20_Poly1305 is None:
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")
         # Validate nonce length early (XChaCha expects 24 bytes)
@@ -101,8 +123,14 @@ class XChaChaCipher(BaseCipher):
         return idx, payload
 
     @staticmethod
-    def decode_chunk(idx: int, cipher_blob: bytes, nonce: bytes, enc_key: bytes,
-                     rs_use: bool, header: bytes = b"") -> Tuple[int, bytes]:
+    def decode_chunk(
+        idx: int,
+        cipher_blob: bytes,
+        nonce: bytes,
+        enc_key: bytes,
+        rs_use: bool,
+        header: bytes = b"",
+    ) -> tuple[int, bytes]:
         if ChaCha20_Poly1305 is None:
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")
         blob = cipher_blob
@@ -112,8 +140,13 @@ class XChaChaCipher(BaseCipher):
             try:
                 blob = rs_decode_data(blob)  # decoded payload (without parity)
             except Exception as e:
-                logger.warning("RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
-                               idx, len(orig_blob), e, parity)
+                logger.warning(
+                    "RS decode failed (idx=%d, len=%d): %s – stripping %dB parity",
+                    idx,
+                    len(orig_blob),
+                    e,
+                    parity,
+                )
         last_err = None
         attempts = ("no_strip", "strip_parity") if parity else ("no_strip",)
         for attempt in attempts:
@@ -129,9 +162,14 @@ class XChaChaCipher(BaseCipher):
             except Exception as e:
                 last_err = e
                 continue
-        logger.error("Tag verification failed (idx=%d, len=%d) after %s attempts",
-                     idx, len(orig_blob), len(attempts))
+        logger.error(
+            "Tag verification failed (idx=%d, len=%d) after %s attempts",
+            idx,
+            len(orig_blob),
+            len(attempts),
+        )
         raise last_err
+
 
 def _dec(cipher, ct: bytes, tag: bytes, nonce: bytes, aad: bytes) -> bytes:
     """
@@ -139,12 +177,14 @@ def _dec(cipher, ct: bytes, tag: bytes, nonce: bytes, aad: bytes) -> bytes:
       • cryptography.ChaCha20Poly1305 (método decrypt, 3 args)
       • PyCryptodome ChaCha20_Poly1305 (método decrypt_and_verify, 2 args + update)
     """
-    if hasattr(cipher, "decrypt_and_verify"):             # PyCryptodome
+    if hasattr(cipher, "decrypt_and_verify"):  # PyCryptodome
         cipher.update(aad)
         return cipher.decrypt_and_verify(ct, tag)
-    else:                                                 # cryptography (ChaCha20Poly1305)
+    else:  # cryptography (ChaCha20Poly1305)
         return cipher.decrypt(nonce, ct + tag, aad)
 
+
 __all__ = [
-    "ChaChaCipher", "XChaChaCipher",
+    "ChaChaCipher",
+    "XChaChaCipher",
 ]

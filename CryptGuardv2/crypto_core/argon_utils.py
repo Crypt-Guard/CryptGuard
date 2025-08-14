@@ -1,34 +1,41 @@
 """
 Argon2 utilities and calibration.
 """
-from __future__ import annotations
-import json, psutil, os, time
-from pathlib import Path
-from argon2.low_level import hash_secret_raw, Type
-from .secure_bytes   import SecureBytes
-from .key_obfuscator import KeyObfuscator
-import logging
 
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+
+import psutil
+from argon2.low_level import Type, hash_secret_raw
+
+from .key_obfuscator import KeyObfuscator
+from .secure_bytes import SecureBytes
 from .security_warning import warn
 
 logger = logging.getLogger("crypto_core")
 
-from .paths import BASE_DIR
-CALIB_PATH = BASE_DIR / "argon_calib.json"
+CALIB_PATH = Path.home() / ".my_encryptor" / "argon_calib.json"
 _KEY_LEN = 32
-_DEFAULT = dict(time_cost=3, memory_cost=128*1024, parallelism=4)
+_DEFAULT = dict(time_cost=3, memory_cost=128 * 1024, parallelism=4)
 
 # Safety bounds
 _MIN_SALT_LEN = 16
-_MIN_MEM_KIB = 64 * 1024            # 64 MiB minimum
-_MAX_MEM_KIB = 1024 * 1024          # 1 GiB maximum (practical cap)
-_MAX_PARALLELISM = 8                # avoid excessive lanes
+_MIN_MEM_KIB = 64 * 1024  # 64 MiB minimum
+_MAX_MEM_KIB = 1024 * 1024  # 1 GiB maximum (practical cap)
+_MAX_PARALLELISM = 8  # avoid excessive lanes
+
 
 def _available_ram() -> int:
     try:
         return int(psutil.virtual_memory().available)
     except Exception:
         return 512 * 1024 * 1024  # 512 MiB fallback
+
 
 def _sanitize_params(p: dict) -> dict:
     """
@@ -51,13 +58,14 @@ def _sanitize_params(p: dict) -> dict:
 
     return {"time_cost": time_cost, "memory_cost": memory_cost, "parallelism": parallelism}
 
+
 def generate_key_from_password(
     pwd_sb: SecureBytes,
     salt: bytes,
     params: dict | None = None,
 ):
     """
-    Deriva chave de 32 B via Argon2id.  
+    Deriva chave de 32 B via Argon2id.
     Retorna **KeyObfuscator** (já mascarado) + dicionário de parâmetros usados.
 
     Nota: a limpeza (pwd_sb.clear()) é agora responsabilidade do chamador,
@@ -69,14 +77,15 @@ def generate_key_from_password(
         warn("Argon2 time_cost MUITO baixo (<2) – segurança reduzida", sev="MEDIUM")
 
     # Validate salt
-    if not isinstance(salt, (bytes, bytearray)) or len(salt) < _MIN_SALT_LEN:
+    if not isinstance(salt, bytes | bytearray) or len(salt) < _MIN_SALT_LEN:
         raise ValueError("salt must be at least 16 bytes")
 
-    need = p["memory_cost"]*1024
-    if need > _available_ram()//2:
+    need = p["memory_cost"] * 1024
+    if need > _available_ram() // 2:
         warn("Reduzindo memory_cost para caber em RAM", sev="LOW")
-        while need > _available_ram()//2 and p["memory_cost"]>8*1024:
-            p["memory_cost"]//=2; need=p["memory_cost"]*1024
+        while need > _available_ram() // 2 and p["memory_cost"] > 8 * 1024:
+            p["memory_cost"] //= 2
+            need = p["memory_cost"] * 1024
         # Re-adjust lanes if memory reduced too much
         if p["memory_cost"] < 8 * p["parallelism"]:
             p["parallelism"] = max(1, p["memory_cost"] // 8) or 1
@@ -97,6 +106,7 @@ def generate_key_from_password(
     obf.obfuscate()
     return obf, p
 
+
 def calibrate_kdf(target_time: float = 1.0) -> dict:
     """
     Mira ~target_time s ajustando time_cost; memory_cost em KiB.
@@ -115,9 +125,13 @@ def calibrate_kdf(target_time: float = 1.0) -> dict:
         start = time.perf_counter()
         try:
             hash_secret_raw(
-                secret=b"bench", salt=b"\x00" * 16,
-                time_cost=tc, memory_cost=memory_cost, parallelism=parallelism,
-                hash_len=32, type=Type.ID
+                secret=b"bench",
+                salt=b"\x00" * 16,
+                time_cost=tc,
+                memory_cost=memory_cost,
+                parallelism=parallelism,
+                hash_len=32,
+                type=Type.ID,
             )
         except (MemoryError, ValueError):
             # Reduce memory if the chosen setting does not fit
@@ -133,11 +147,14 @@ def calibrate_kdf(target_time: float = 1.0) -> dict:
             break
         tc += 1
 
-    params = _sanitize_params({"time_cost": tc, "memory_cost": memory_cost, "parallelism": parallelism})
+    params = _sanitize_params(
+        {"time_cost": tc, "memory_cost": memory_cost, "parallelism": parallelism}
+    )
     CALIB_PATH.parent.mkdir(parents=True, exist_ok=True)
     CALIB_PATH.write_text(json.dumps(params))
     logger.info("Argon2 calibrado e salvo: %s", params)
     return params
+
 
 def load_calibrated_params():
     """Load calibrated parameters from file."""

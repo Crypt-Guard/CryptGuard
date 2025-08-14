@@ -1,12 +1,13 @@
 """
 Verifica a integridade de arquivos .cg2 via AEAD/footer (sem descriptografar payload).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 
+from .cg2_ops import decrypt_from_cg2
 from .fileformat import is_cg2_file
-from .cg2_ops    import decrypt_from_cg2
 
 
 def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=None) -> bool:
@@ -24,10 +25,7 @@ def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=N
         ValueError: se o arquivo não for CG2.
     """
     p = Path(enc_path)
-    if isinstance(password, str):
-        pwd = password.encode()
-    else:
-        pwd = password
+    pwd = password.encode() if isinstance(password, str) else password
 
     if not is_cg2_file(p):
         raise ValueError("Not a CG2 file")

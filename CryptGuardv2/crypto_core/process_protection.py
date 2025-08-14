@@ -5,15 +5,20 @@ Harden opcional do processo em Windows:
 
 • Ativa DEP permanente
 • Desabilita criação de core-dumps
-• Tenta bloquear debugging (CheckRemoteDebuggerPresent)
-Chamado via flag --harden ao iniciar o CryptGuard.
+• Tenta detectar debugger (CheckRemoteDebuggerPresent)
 """
-import ctypes, platform
+
+from __future__ import annotations
+
+import ctypes
+import platform
+
 from .security_warning import warn
+
 
 def _enable_dep():
     try:
-        k32 = ctypes.windll.kernel32
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         # 0x1 = PROCESS_DEP_ENABLE  (docs: SetProcessDEPPolicy)
         k32.SetProcessDEPPolicy(1)
     except Exception as e:
@@ -23,21 +28,19 @@ def _disable_core_dumps():
     try:
         # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
         SEM_FLAGS = 0x0001 | 0x0002 | 0x8000
-        ctypes.windll.kernel32.SetErrorMode(SEM_FLAGS)
+        ctypes.windll.kernel32.SetErrorMode(SEM_FLAGS)  # type: ignore[attr-defined]
     except Exception:
-        pass
+        pass  # nosec B110 — best-effort, sem impacto de segurança
 
 def _check_debugger():
     try:
         dbg_present = ctypes.c_int(0)
-        ctypes.windll.kernel32.CheckRemoteDebuggerPresent(
-            ctypes.windll.kernel32.GetCurrentProcess(),
-            ctypes.byref(dbg_present)
-        )
+        k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        k32.CheckRemoteDebuggerPresent(k32.GetCurrentProcess(), ctypes.byref(dbg_present))
         if dbg_present.value:
             warn("Debugger detectado! Hardening pode não ser efetivo.", sev="HIGH")
     except Exception:
-        pass
+        pass  # nosec B110 — best-effort, sem impacto de segurança
 
 def enable_process_hardening():
     if platform.system() != "Windows":
@@ -46,10 +49,3 @@ def enable_process_hardening():
     _enable_dep()
     _disable_core_dumps()
     _check_debugger()
-    # lock todas as páginas atuais e futuras (melhor esforço; pode falhar se privilégio baixo)
-    try:
-        # 0x0001 | 0x0002 = MCL_CURRENT | MCL_FUTURE análogo em Windows? indisponível.
-        # em Windows é VirtualLock por página; não tentamos aqui.
-        pass
-    except Exception:
-        pass

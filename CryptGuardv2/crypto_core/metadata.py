@@ -21,27 +21,30 @@ A partir desta versão o JSON aceita:
 Se **exp** estiver presente e for menor que *time.time()*,
 o arquivo deve ser considerado expirado.
 """
+
 from __future__ import annotations
 
-import secrets, json, time
+import json
+import secrets
+import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
+from .config import META_SALT_SIZE
+from .kdf import derive_meta_key  # Argon2id → chave
 from .secure_bytes import SecureBytes
-from .kdf          import derive_meta_key          # Argon2id → chave
-from .utils        import write_atomic_secure
-from .config       import META_SALT_SIZE
+from .utils import write_atomic_secure
 
 
 # ─────────────────────────── JSON helpers ──────────────────────────────
-def _pack(obj: Dict[str, Any]) -> bytes:
+def _pack(obj: dict[str, Any]) -> bytes:
     """dict → bytes (JSON minificado)"""
     return json.dumps(obj, separators=(",", ":")).encode()
 
 
-def _unpack(b: bytes) -> Dict[str, Any]:
+def _unpack(b: bytes) -> dict[str, Any]:
     """bytes → dict"""
     return json.loads(b.decode())
 
@@ -49,9 +52,9 @@ def _unpack(b: bytes) -> Dict[str, Any]:
 # ─────────────────────────── API pública ───────────────────────────────
 def encrypt_meta_json(
     meta_path: Path,
-    meta: Dict[str, Any],
+    meta: dict[str, Any],
     pwd_sb: SecureBytes,
-    expires_at: Optional[int] = None,
+    expires_at: int | None = None,
 ) -> None:
     """
     Cria/atualiza *meta_path* com JSON criptografado.
@@ -62,18 +65,18 @@ def encrypt_meta_json(
         meta = dict(meta)
         meta["exp"] = int(expires_at)
 
-    salt  = secrets.token_bytes(META_SALT_SIZE)
-    key   = derive_meta_key(pwd_sb, salt)           # → SecureBytes
+    salt = secrets.token_bytes(META_SALT_SIZE)
+    key = derive_meta_key(pwd_sb, salt)  # → SecureBytes
     nonce = secrets.token_bytes(12)
 
     cipher = ChaCha20Poly1305(key.to_bytes())
-    blob   = salt + nonce + cipher.encrypt(nonce, _pack(meta), None)
+    blob = salt + nonce + cipher.encrypt(nonce, _pack(meta), None)
 
     write_atomic_secure(meta_path, blob)
     key.clear()
 
 
-def decrypt_meta_json(meta_path: Path, pwd_sb: SecureBytes) -> Dict[str, Any]:
+def decrypt_meta_json(meta_path: Path, pwd_sb: SecureBytes) -> dict[str, Any]:
     """
     Lê, decifra e devolve o JSON.
 
@@ -81,18 +84,18 @@ def decrypt_meta_json(meta_path: Path, pwd_sb: SecureBytes) -> Dict[str, Any]:
     mas disponibiliza o helper ``is_expired(meta)`` abaixo.
     """
     blob = Path(meta_path).read_bytes()
-    salt   = blob[:META_SALT_SIZE]
-    nonce  = blob[META_SALT_SIZE : META_SALT_SIZE + 12]
-    ct     = blob[META_SALT_SIZE + 12 :]
+    salt = blob[:META_SALT_SIZE]
+    nonce = blob[META_SALT_SIZE : META_SALT_SIZE + 12]
+    ct = blob[META_SALT_SIZE + 12 :]
 
-    key  = derive_meta_key(pwd_sb, salt)
+    key = derive_meta_key(pwd_sb, salt)
     data = ChaCha20Poly1305(key.to_bytes()).decrypt(nonce, ct, None)
     key.clear()
     return _unpack(data)
 
 
 # ─────────────────────────── Auxiliares extra ──────────────────────────
-def build_meta(base: Dict[str, Any], expires_at: Optional[int] = None) -> Dict[str, Any]:
+def build_meta(base: dict[str, Any], expires_at: int | None = None) -> dict[str, Any]:
     """
     Conveniência: devolve *base* + ``exp`` (se definido).
     """
@@ -102,7 +105,7 @@ def build_meta(base: Dict[str, Any], expires_at: Optional[int] = None) -> Dict[s
     return base
 
 
-def is_expired(meta: Dict[str, Any], skew_seconds: int = 0) -> bool:
+def is_expired(meta: dict[str, Any], skew_seconds: int = 0) -> bool:
     """
     ``True`` se *meta* contém ``exp`` e ele já ficou para trás.
 

@@ -24,23 +24,24 @@ Padding:
 Progresso:
   - progress_cb(bytes_done) é chamado com bytes de plaintext processados (sem padding).
 """
+
 from __future__ import annotations
 
+import hmac as py_hmac
 import os
 import struct
 import time
-import hmac as py_hmac
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import (
     AESGCM,
     ChaCha20Poly1305,
 )
+
 # XChaCha – cryptography (se disponível)
 try:
-    from cryptography.hazmat.primitives.ciphers.aead import XChaCha20Poly1305
-    XCH_CRYPTO_AVAILABLE = True
+        XCH_CRYPTO_AVAILABLE = True
 except Exception:
     XChaCha20Poly1305 = None  # type: ignore
     XCH_CRYPTO_AVAILABLE = False
@@ -48,35 +49,40 @@ except Exception:
 # Fallback PyNaCl (libsodium) para XChaCha
 try:
     from nacl.bindings import (
-        crypto_aead_xchacha20poly1305_ietf_encrypt as nacl_xch_encrypt,
         crypto_aead_xchacha20poly1305_ietf_decrypt as nacl_xch_decrypt,
     )
+    from nacl.bindings import (
+        crypto_aead_xchacha20poly1305_ietf_encrypt as nacl_xch_encrypt,
+    )
+
     NACL_XCH_AVAILABLE = True
 except Exception:
     NACL_XCH_AVAILABLE = False
 
+import contextlib
+
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
 
+from .config import ARGON_PARAMS, CG2_EXT, CHUNK_SIZE, SecurityProfile
 from .fileformat import CG2Header, read_header
-from .kdf        import derive_key
-from .config     import CG2_EXT, ARGON_PARAMS, SecurityProfile, CHUNK_SIZE
-from .logger     import logger
-
+from .kdf import derive_key
+from .logger import logger
 
 AEAD_SET = {"AES-256-GCM", "XChaCha20-Poly1305", "ChaCha20-Poly1305"}
 
 # ───────────────────────── constants / footers ──────────────────────────────
-END_MAGIC  = b"END0"  # AEAD footer (final tag com chunks/total_pt)
-TAG_MAGIC  = b"TAG0"  # CTR HMAC tag
-SIZ_MAGIC  = b"SIZ0"  # CTR total_pt (opcional, antes do TAG0)
+END_MAGIC = b"END0"  # AEAD footer (final tag com chunks/total_pt)
+TAG_MAGIC = b"TAG0"  # CTR HMAC tag
+SIZ_MAGIC = b"SIZ0"  # CTR total_pt (opcional, antes do TAG0)
 NAME_MAGIC = b"NAM0"  # bloco opcional com a extensão original cifrada
+
 
 # ───────────────────────── helpers ──────────────────────────────────────────
 def _derive_chunk_nonce(base: bytes, idx: int) -> bytes:
-    """Deriva nonce único por chunk adicionando idx ao sufixo de 32 bits (mod 2^32)."""
-    ctr = (int.from_bytes(base[-4:], "big") + idx) & 0xFFFFFFFF
+    """Reusa o prefixo e xora contador de 32 bits no final (big-endian)."""
+    ctr = int.from_bytes(base[-4:], "big") ^ idx
     return base[:-4] + ctr.to_bytes(4, "big")
 
 
@@ -88,7 +94,9 @@ def _split_enc_mac_keys(mk: bytes) -> tuple[bytes, bytes]:
 
 def _final_tag_key(mk: bytes) -> bytes:
     """Deriva chave para o footer AEAD (detecção de truncamento)."""
-    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"cg2-final-tag-v1").derive(mk)
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"cg2-final-tag-v1").derive(
+        mk
+    )
 
 
 def _aead_final_tag(k: bytes, aad: bytes, chunk_count: int, total_pt: int) -> bytes:
@@ -150,25 +158,40 @@ def _guess_extension(first_bytes: bytes) -> str | None:
     b4 = b[:4] if len(b) >= 4 else b
 
     # imagens
-    if b.startswith(b"\x89PNG\r\n\x1a\n"): return ".png"
-    if b.startswith(b"\xff\xd8\xff"):      return ".jpg"
-    if b.startswith(b"GIF87a") or b.startswith(b"GIF89a"): return ".gif"
-    if len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP": return ".webp"
-    if b.startswith(b"BM"): return ".bmp"
+    if b.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if b.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if b.startswith(b"GIF87a") or b.startswith(b"GIF89a"):
+        return ".gif"
+    if len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return ".webp"
+    if b.startswith(b"BM"):
+        return ".bmp"
 
     # docs/arquivos
-    if b4 == b"%PDF": return ".pdf"
-    if b4 in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"): return ".zip"  # docx/xlsx também são zip
-    if b.startswith(b"7z\xbc\xaf\x27\x1c"): return ".7z"
-    if b4 == b"Rar!": return ".rar"
-    if b4 == b"\x1f\x8b\x08": return ".gz"
-    if len(b) >= 265 and b[257:262] == b"ustar": return ".tar"
+    if b4 == b"%PDF":
+        return ".pdf"
+    if b4 in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
+        return ".zip"  # docx/xlsx também são zip
+    if b.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return ".7z"
+    if b4 == b"Rar!":
+        return ".rar"
+    if b4 == b"\x1f\x8b\x08":
+        return ".gz"
+    if len(b) >= 265 and b[257:262] == b"ustar":
+        return ".tar"
 
     # audio/vídeo
-    if b4 == b"ID3" or (len(b) > 1 and b[0] == 0xFF and (b[1] & 0xE0) == 0xE0): return ".mp3"
-    if len(b) >= 12 and b4 == b"\x00\x00\x00\x18" and b[4:8] == b"ftyp": return ".mp4"
-    if b4 == b"OggS": return ".ogg"
-    if b4 == b"fLaC": return ".flac"
+    if b4 == b"ID3" or (len(b) > 1 and b[0] == 0xFF and (b[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if len(b) >= 12 and b4 == b"\x00\x00\x00\x18" and b[4:8] == b"ftyp":
+        return ".mp4"
+    if b4 == b"OggS":
+        return ".ogg"
+    if b4 == b"fLaC":
+        return ".flac"
 
     # texto
     if b:
@@ -188,7 +211,7 @@ def encrypt_to_cg2(
     profile: SecurityProfile = SecurityProfile.BALANCED,
     exp_ts: int | None = None,
     *,
-    progress_cb: Optional[Callable[[int], None]] = None,
+    progress_cb: Callable[[int], None] | None = None,
     pad_block: int = 0,
 ) -> Path:
     """
@@ -196,7 +219,7 @@ def encrypt_to_cg2(
     pad_block: se >0, aplica padding por chunk (zeros) até múltiplo de pad_block.
                O tamanho REAL (sem padding) é salvo no footer e restaurado no decrypt.
     """
-    in_path  = Path(in_path)
+    in_path = Path(in_path)
     out_path = Path(out_path)
     if out_path.suffix.lower() != CG2_EXT:
         out_path = out_path.with_suffix(CG2_EXT)
@@ -225,6 +248,8 @@ def encrypt_to_cg2(
     # Chaves
     if alg == "AES-256-CTR":
         enc_key, mac_key = _split_enc_mac_keys(mk)
+        if not isinstance(mac_key, (bytes, bytearray)):
+            raise TypeError("mac_key must be bytes-like")
     else:
         enc_key, mac_key = mk, None  # type: ignore
 
@@ -248,12 +273,17 @@ def encrypt_to_cg2(
                 if alg == "AES-256-GCM":
                     ct = AESGCM(enc_key).encrypt(nonce, pt, aad)
                 elif alg == "XChaCha20-Poly1305":
-                    if XCH_CRYPTO_AVAILABLE:
-                        ct = XChaCha20Poly1305(enc_key).encrypt(nonce, pt, aad)
-                    elif NACL_XCH_AVAILABLE:
+                    if NACL_XCH_AVAILABLE:
                         ct = nacl_xch_encrypt(pt, aad, nonce, enc_key)
                     else:
-                        raise RuntimeError("Backend XChaCha20 indisponível.")
+                        try:
+                            from .compat_chacha import ChaCha20_Poly1305
+                            ctx = ChaCha20_Poly1305.new(key=enc_key, nonce=nonce)
+                            ct_core, tag = ctx.encrypt_and_digest(pt, aad)
+                            ct = ct_core + tag
+                        except Exception:
+                            raise RuntimeError("Backend XChaCha20 indisponível.")
+
                 else:
                     ct = ChaCha20Poly1305(enc_key).encrypt(nonce, pt, aad)
 
@@ -316,8 +346,10 @@ def encrypt_to_cg2(
             ext_text = in_path.suffix or ""
             if ext_text:
                 nb = _pack_name_blob(name_k, aad, ext_text)
-                fout.write(NAME_MAGIC);  h.update(NAME_MAGIC)
-                fout.write(nb);          h.update(nb)
+                fout.write(NAME_MAGIC)
+                h.update(NAME_MAGIC)
+                fout.write(nb)
+                h.update(nb)
 
             # tamanho real antes do TAG
             fout.write(SIZ_MAGIC)
@@ -329,7 +361,14 @@ def encrypt_to_cg2(
             fout.write(TAG_MAGIC)
             fout.write(h.digest())
 
-    logger.info("Encrypted CG2 %s → %s (%s, chunks=%d, real=%d)", in_path.name, out_path.name, alg, idx, total_real)
+    logger.info(
+        "Encrypted CG2 %s → %s (%s, chunks=%d, real=%d)",
+        in_path.name,
+        out_path.name,
+        alg,
+        idx,
+        total_real,
+    )
     return out_path
 
 
@@ -339,7 +378,7 @@ def decrypt_from_cg2(
     password: bytes,
     verify_only: bool = False,
     *,
-    progress_cb: Optional[Callable[[int], None]] = None,
+    progress_cb: Callable[[int], None] | None = None,
 ) -> Path | bool:
     """
     Descriptografa/verifica CG2 (streaming). Em AEAD, exige footer END0.
@@ -363,8 +402,8 @@ def decrypt_from_cg2(
     idx = 0
     first_block = True
     out_f = None
-    exp_total_from_footer: Optional[int] = None  # tamanho real (sem padding) vindo do rodapé
-    ext_from_name: Optional[str] = None         # extensão original (NAM0), se existir
+    exp_total_from_footer: int | None = None  # tamanho real (sem padding) vindo do rodapé
+    ext_from_name: str | None = None  # extensão original (NAM0), se existir
 
     def _ensure_open_with_ext_from(pt: bytes):
         nonlocal out_f, out_path
@@ -430,7 +469,7 @@ def decrypt_from_cg2(
                         pt = AESGCM(enc_key).decrypt(nonce, ct, aad)
                     elif hdr.alg == "XChaCha20-Poly1305":
                         if XCH_CRYPTO_AVAILABLE:
-                            pt = XChaCha20Poly1305(enc_key).decrypt(nonce, ct, aad)
+                            pt = (nacl_xch_decrypt(ct, aad, nonce, enc_key) if NACL_XCH_AVAILABLE else __xch_dec_compat(ct, aad, nonce, enc_key))
                         elif NACL_XCH_AVAILABLE:
                             pt = nacl_xch_decrypt(ct, aad, nonce, enc_key)
                         else:
@@ -475,7 +514,8 @@ def decrypt_from_cg2(
                         h.update(NAME_MAGIC)
                         name_k = _name_key(mk)
                         pos = f.tell()
-                        nonce = f.read(12);  lb = f.read(4)
+                        nonce = f.read(12)
+                        lb = f.read(4)
                         if len(nonce) != 12 or len(lb) != 4:
                             raise ValueError("NAM0 truncado (CTR)")
                         (blen,) = struct.unpack(">I", lb)
@@ -486,7 +526,9 @@ def decrypt_from_cg2(
                         f.seek(pos)
                         ext_from_name = _unpack_name_blob(name_k, aad, f) or None
                         # Alimenta HMAC com bytes brutos
-                        h.update(nonce); h.update(lb); h.update(blob)
+                        h.update(nonce)
+                        h.update(lb)
+                        h.update(blob)
                         continue
 
                     if len_bytes == SIZ_MAGIC:
@@ -495,7 +537,8 @@ def decrypt_from_cg2(
                         if len(sz_b) != 8:
                             raise ValueError("SIZ0 truncado (CTR)")
                         (exp_total_real,) = struct.unpack(">Q", sz_b)
-                        h.update(SIZ_MAGIC); h.update(sz_b)
+                        h.update(SIZ_MAGIC)
+                        h.update(sz_b)
                         # Em seguida esperamos TAG0
                         next_magic = f.read(4)
                         if next_magic != TAG_MAGIC:
@@ -504,7 +547,9 @@ def decrypt_from_cg2(
                         if len(tag) != 32:
                             raise ValueError("TAG truncada (CTR)")
                         if not py_hmac.compare_digest(h.digest(), tag):
-                            raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
+                            raise ValueError(
+                                "HMAC inválido (arquivo corrompido ou senha incorreta)"
+                            )
                         exp_total_from_footer = exp_total_real
                         # rejeita bytes extras após o TAG
                         extra = f.read(1)
@@ -517,7 +562,9 @@ def decrypt_from_cg2(
                         if len(tag) != 32:
                             raise ValueError("TAG truncada (CTR)")
                         if not py_hmac.compare_digest(h.digest(), tag):
-                            raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
+                            raise ValueError(
+                                "HMAC inválido (arquivo corrompido ou senha incorreta)"
+                            )
                         # rejeita bytes extras após o TAG
                         extra = f.read(1)
                         if extra:
@@ -562,10 +609,8 @@ def decrypt_from_cg2(
         finally:
             # garante fechamento do arquivo de saída em caso de erro
             if not verify_only and out_f is not None and not out_f.closed:
-                try:
+                with contextlib.suppress(Exception):
                     out_f.close()
-                except Exception:
-                    pass
 
     # Renomeia a extensão final com base no NAM0, se houver (e se não for verify_only)
     if not verify_only and ext_from_name:
@@ -579,8 +624,25 @@ def decrypt_from_cg2(
             except Exception:
                 # se não der para renomear, mantém como está
                 pass
-
-    if verify_only:
-        return True
+            if verify_only:
+                return True
     logger.info("Decrypted CG2 %s → %s (%s, chunks=%d)", in_path.name, out_path.name, hdr.alg, idx)
     return out_path
+
+# Garante criação do arquivo quando o plaintext tem 0 bytes
+    if not verify_only and not out_path.exists():
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.touch()
+
+# --- compat fallback (PyCryptodome wrapper) ---
+def __xch_enc_compat(pt: bytes, aad: bytes, nonce: bytes, key: bytes) -> bytes:
+    from .compat_chacha import ChaCha20_Poly1305
+    ctx = ChaCha20_Poly1305.new(key=key, nonce=nonce)
+    ct, tag = ctx.encrypt_and_digest(pt, aad)
+    return ct + tag
+
+def __xch_dec_compat(ct: bytes, aad: bytes, nonce: bytes, key: bytes) -> bytes:
+    from .compat_chacha import ChaCha20_Poly1305
+    ctx = ChaCha20_Poly1305.new(key=key, nonce=nonce)
+    core, tag = ct[:-16], ct[-16:]
+    return ctx.decrypt_and_verify(core, tag, aad)

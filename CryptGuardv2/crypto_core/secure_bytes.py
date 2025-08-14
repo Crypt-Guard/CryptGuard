@@ -1,127 +1,98 @@
-"""
-SecureBytes com wipe multi-pass e mlock/VirtualLock.
-"""
-import mmap, secrets, ctypes, platform   # atualização de imports
-from ctypes.util import find_library     # add robust libc discovery
+# crypto_core/secure_bytes.py
+from __future__ import annotations
 
-_PASSES = [0xFF, 0x00, 0x55, 0xAA]  # padrão DoD + random extra
+import ctypes
+from typing import Union
 
-# cache libc handle
-_LIBC = None
+BytesLike = Union[bytes, bytearray, memoryview]
 
-def _libc():
-    """Resolve libc cross-platform with caching and fallbacks."""
-    global _LIBC
-    if _LIBC:
-        return _LIBC
+
+def _secure_memzero(buf: bytearray) -> None:
+    """
+    Zera o conteúdo de um bytearray de forma mais confiável possível:
+    - Tenta usar a API do Windows (RtlSecureZeroMemory) se disponível;
+    - Caso contrário, cai para ctypes.memset;
+    - Em último caso, zera por loop.
+    """
+    if not buf:
+        return
+    n = len(buf)
     try:
-        if platform.system() == "Darwin":
-            name = "libSystem.B.dylib"
-        else:
-            name = find_library("c") or "libc.so.6"
-        _LIBC = ctypes.CDLL(name)
+        # Endereço do buffer subjacente
+        addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
+        # Windows: RtlSecureZeroMemory (se existir)
+        try:
+            _rtl = ctypes.windll.kernel32.RtlSecureZeroMemory  # type: ignore[attr-defined]
+            _rtl.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+            _rtl.restype = ctypes.c_void_p
+            _rtl(addr, n)
+            return
+        except Exception:
+            pass  # nosec B110 (fallback intencional; caminho alternativo abaixo)
+        # Fallback genérico
+        ctypes.memset(addr, 0, n)
     except Exception:
-        # last resort: try default process
-        _LIBC = ctypes.CDLL(None)
-    return _LIBC
+        # Último recurso
+        for i in range(n):
+            buf[i] = 0
 
-def _addr(buf) -> int:
-    """Get base address of the mmap buffer."""
-    return ctypes.addressof(ctypes.c_char.from_buffer(buf))
-
-def memset(ptr, value, size):
-    """Cross-platform memset implementation with proper prototypes"""
-    try:
-        if platform.system() == "Windows":
-            fn = ctypes.windll.msvcrt.memset
-        else:
-            fn = _libc().memset
-        # set signatures
-        fn.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t]
-        fn.restype  = ctypes.c_void_p
-        fn(ctypes.c_void_p(ptr), ctypes.c_int(value), ctypes.c_size_t(size))
-    except Exception:
-        pass
-
-def _mlock(buf):
-    try:
-        if platform.system() == "Windows":
-            k32 = ctypes.windll.kernel32
-            k32.VirtualLock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            k32.VirtualLock.restype  = ctypes.c_int
-            k32.VirtualLock(ctypes.c_void_p(_addr(buf)), ctypes.c_size_t(len(buf)))
-        else:
-            libc = _libc()
-            libc.mlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            libc.mlock.restype  = ctypes.c_int
-            libc.mlock(ctypes.c_void_p(_addr(buf)), ctypes.c_size_t(len(buf)))
-    except Exception:
-        pass
-
-def _munlock(buf):
-    try:
-        if platform.system() == "Windows":
-            k32 = ctypes.windll.kernel32
-            k32.VirtualUnlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            k32.VirtualUnlock.restype  = ctypes.c_int
-            k32.VirtualUnlock(ctypes.c_void_p(_addr(buf)), ctypes.c_size_t(len(buf)))
-        else:
-            libc = _libc()
-            libc.munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-            libc.munlock.restype  = ctypes.c_int
-            libc.munlock(ctypes.c_void_p(_addr(buf)), ctypes.c_size_t(len(buf)))
-    except Exception:
-        pass
 
 class SecureBytes:
-    __slots__ = ("_buf", "_size", "_closed")  # adiciona flag de estado
+    """
+    Contêiner simples para bytes sensíveis.
 
-    def __init__(self, data: bytes | bytearray):
-        if len(data) == 0:
-            raise ValueError("SecureBytes cannot be empty")
-        self._size   = len(data)
-        self._buf    = mmap.mmap(-1, self._size)
-        self._closed = False                     # inicializa flag
-        _mlock(self._buf)
-        self._buf.write(data)
-        # reduzir vida útil do plaintext de origem quando possível
-        if isinstance(data, bytearray):
-            for i in range(len(data)):
-                data[i] = 0
+    - Armazena o conteúdo em um `bytearray` interno.
+    - `to_bytes()` devolve uma CÓPIA (bytes) — após `clear()`, levanta `ValueError`.
+    - `clear()` zera o buffer em memória e invalida leituras futuras.
+    - `cleared` indica se o conteúdo já foi limpo.
+
+    Observações:
+    - Não faz mlock/VirtualLock: fora do escopo do projeto em Python puro.
+    - Foco aqui é semântica correta + limpeza explícita e previsível.
+    """
+
+    __slots__ = ("_buf", "_closed")
+
+    def __init__(self, data: BytesLike):
+        if isinstance(data, memoryview):
+            data = data.tobytes()
+        elif isinstance(data, bytearray):
+            # Fazemos uma cópia para evitar aliasing com referências externas.
+            data = bytes(data)
+        elif not isinstance(data, bytes):
+            raise TypeError("SecureBytes espera bytes/bytearray/memoryview")
+        self._buf = bytearray(data)
+        self._closed = False
 
     def to_bytes(self) -> bytes:
+        """
+        Retorna uma cópia dos bytes originais.
+
+        Após `clear()`, levanta `ValueError` para evitar uso acidental de
+        dados que já deveriam estar fora de memória.
+        """
         if self._closed:
             raise ValueError("SecureBytes already cleared")
-        self._buf.seek(0)
-        return self._buf.read(self._size)
+        return bytes(self._buf)
 
-    def clear(self):
-        if self._closed:                          # idempotência
-            return
-        try:
-            ptr = _addr(self._buf)
-            for patt in _PASSES + [secrets.randbits(8)]:
-                memset(ptr, patt, self._size)
-                try:
-                    self._buf.flush()
-                except Exception:
-                    pass
-            _munlock(self._buf)
-            self._buf.close()
-        finally:
-            self._closed = True                  # marca como já limpo
-            # prevent accidental reuse
-            self._buf = None
-            self._size = 0
+    def clear(self) -> None:
+        """
+        Zeroiza o buffer interno e invalida leituras futuras.
+        Idempotente: múltiplas chamadas não causam erro.
+        """
+        if not self._closed:
+            _secure_memzero(self._buf)
+            self._buf.clear()
+            self._closed = True
 
-    def __enter__(self):
-        if self._closed:
-            raise ValueError("SecureBytes already cleared")
-        return self
+    @property
+    def cleared(self) -> bool:
+        """Compat: indica se os bytes já foram limpos/descartados."""
+        return self._closed
 
-    def __exit__(self, exc_type, exc, tb):
-        self.clear()
+    def __len__(self) -> int:
+        return 0 if self._closed else len(self._buf)
 
-    def __del__(self):
-        try: self.clear()
-        except Exception: pass
+    def __repr__(self) -> str:
+        state = "cleared" if self._closed else f"{len(self)} bytes"
+        return f"<SecureBytes {state}>"

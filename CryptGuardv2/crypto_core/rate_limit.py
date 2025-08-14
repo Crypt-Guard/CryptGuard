@@ -8,15 +8,14 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Dict, Optional
 
 # Module defaults (can be overridden per call)
 _MAX_FAILURES_DEFAULT: int = 5
 _LOCKOUT_TIME_DEFAULT: float = 300.0  # seconds
 
 # Internal mutable state
-_failure_counts: Dict[str, int] = {}
-_last_attempt: Dict[str, float] = {}
+_failure_counts: dict[str, int] = {}
+_last_attempt: dict[str, float] = {}
 
 # Single process-wide lock for thread safety
 _lock = threading.Lock()
@@ -24,8 +23,8 @@ _lock = threading.Lock()
 
 def check_allowed(
     identifier: str = "default",
-    max_failures: Optional[int] = None,
-    lockout_time: Optional[float] = None,
+    max_failures: int | None = None,
+    lockout_time: float | None = None,
 ) -> bool:
     """
     Return True if the operation identified by `identifier` is currently allowed.
@@ -63,8 +62,8 @@ def check_allowed(
 
 def get_lockout_remaining(
     identifier: str,
-    max_failures: Optional[int] = None,
-    lockout_time: Optional[float] = None,
+    max_failures: int | None = None,
+    lockout_time: float | None = None,
 ) -> float:
     """
     Return seconds remaining in the lockout window for `identifier`.

@@ -23,7 +23,7 @@ class SecureFormatter(logging.Formatter):
 
     HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
     B64_RE = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
-    KV_RE  = re.compile(r"(?i)(password|secret|key)\s*=\s*([^\s,;]+)")
+    KV_RE = re.compile(r"(?i)(password|secret|key)\s*=\s*([^\s,;]+)")
 
     def format(self, record: logging.LogRecord) -> str:
         msg = super().format(record)
@@ -73,7 +73,7 @@ logger.propagate = False  # não propagar para root (evita logs em dobro)
 
 # Integração opcional com Qt (se PySide6 estiver disponível)
 try:
-    from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 
     def _qt_handler(mode, context, message):
         if mode == QtMsgType.QtCriticalMsg:

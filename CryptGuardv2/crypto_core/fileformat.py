@@ -4,7 +4,7 @@ import json
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Tuple
+from typing import Literal
 
 # ───────────────────────── constantes ───────────────────────────────────────
 MAGIC = b"CG2\0"
@@ -31,11 +31,12 @@ class CG2Header:
       MAGIC | VERSION | ALG | KDF_LEN | KDF_JSON | NONCE_LEN | NONCE | EXP_TS
     Todos os campos do header são usados como AAD.
     """
+
     version: int
     alg: str
-    kdf: dict            # {"name":"argon2id","salt":hex,"time_cost":..,"memory_cost":..,"parallelism":..}
+    kdf: dict  # {"name":"argon2id","salt":hex,"time_cost":..,"memory_cost":..,"parallelism":..}
     nonce: bytes
-    exp_ts: int | None   # epoch seconds (None = sem expiração)
+    exp_ts: int | None  # epoch seconds (None = sem expiração)
 
     def pack(self) -> bytes:
         # Validate algorithm
@@ -45,7 +46,7 @@ class CG2Header:
             raise ValueError(f"Unknown algorithm '{self.alg}'") from e
 
         # Validate nonce
-        if not isinstance(self.nonce, (bytes, bytearray)):
+        if not isinstance(self.nonce, bytes | bytearray):
             raise TypeError("nonce must be bytes")
         nonce_bytes = bytes(self.nonce)
         if len(nonce_bytes) > 0xFFFF:
@@ -64,24 +65,29 @@ class CG2Header:
         except Exception as e:
             raise ValueError(f"Invalid KDF parameters: {e}") from e
 
-        return b"".join([
-            MAGIC,
-            struct.pack(">B", VERSION if self.version != VERSION else self.version),
-            struct.pack(">B", alg_code),
-            struct.pack(">I", len(kdf_blob)), kdf_blob,
-            struct.pack(">H", len(nonce_bytes)), nonce_bytes,
-            struct.pack(">Q", exp),
-            # v3 tinha: 1B len + bytes da extensão. v4 não grava mais nada aqui.
-        ])
+        return b"".join(
+            [
+                MAGIC,
+                struct.pack(">B", VERSION if self.version != VERSION else self.version),
+                struct.pack(">B", alg_code),
+                struct.pack(">I", len(kdf_blob)),
+                kdf_blob,
+                struct.pack(">H", len(nonce_bytes)),
+                nonce_bytes,
+                struct.pack(">Q", exp),
+                # v3 tinha: 1B len + bytes da extensão. v4 não grava mais nada aqui.
+            ]
+        )
 
     @staticmethod
-    def unpack(buf: bytes) -> Tuple["CG2Header", int, str]:
+    def unpack(buf: bytes) -> tuple[CG2Header, int, str]:
         """
         Desempacota o header a partir de 'buf' (que DEVE começar em MAGIC) e retorna:
           (header, offset_payload, orig_ext_legacy)
 
         Levanta ValueError("Truncated header (...)") quando não há bytes suficientes.
         """
+
         def need(n: int, what: str) -> None:
             if len(buf) < n:
                 raise ValueError(f"Truncated header ({what})")
@@ -93,22 +99,26 @@ class CG2Header:
 
         # versão
         need(off + 1, "version")
-        ver = struct.unpack_from(">B", buf, off)[0]; off += 1
+        ver = struct.unpack_from(">B", buf, off)[0]
+        off += 1
         if ver not in (3, 4):
             raise ValueError(f"Unsupported CG2 version {ver}")
 
         # algoritmo
         need(off + 1, "algorithm")
-        alg_code = struct.unpack_from(">B", buf, off)[0]; off += 1
+        alg_code = struct.unpack_from(">B", buf, off)[0]
+        off += 1
         alg = REV_ALG_MAP.get(alg_code)
         if not alg:
             raise ValueError("Unknown algorithm code")
 
         # kdf json
         need(off + 4, "kdf length")
-        kdf_len = struct.unpack_from(">I", buf, off)[0]; off += 4
+        kdf_len = struct.unpack_from(">I", buf, off)[0]
+        off += 4
         need(off + kdf_len, "kdf json")
-        kdf_blob = buf[off:off + kdf_len]; off += kdf_len
+        kdf_blob = buf[off : off + kdf_len]
+        off += kdf_len
         try:
             kdf = json.loads(kdf_blob)
         except Exception as e:
@@ -116,22 +126,27 @@ class CG2Header:
 
         # nonce
         need(off + 2, "nonce length")
-        nonce_len = struct.unpack_from(">H", buf, off)[0]; off += 2
+        nonce_len = struct.unpack_from(">H", buf, off)[0]
+        off += 2
         need(off + nonce_len, "nonce")
-        nonce = buf[off:off + nonce_len]; off += nonce_len
+        nonce = buf[off : off + nonce_len]
+        off += nonce_len
 
         # expiração
         need(off + 8, "expiration")
-        exp_ts = struct.unpack_from(">Q", buf, off)[0]; off += 8
+        exp_ts = struct.unpack_from(">Q", buf, off)[0]
+        off += 8
         exp_ts = None if exp_ts == 0 else int(exp_ts)
 
         # extensão legada (v3)
         orig_ext = ""
         if ver == 3:
             need(off + 1, "legacy ext length")
-            ext_len = struct.unpack_from(">B", buf, off)[0]; off += 1
+            ext_len = struct.unpack_from(">B", buf, off)[0]
+            off += 1
             need(off + ext_len, "legacy ext")
-            orig_ext = buf[off:off + ext_len].decode("utf-8", "ignore"); off += ext_len
+            orig_ext = buf[off : off + ext_len].decode("utf-8", "ignore")
+            off += ext_len
 
         header = CG2Header(
             version=ver,
@@ -153,7 +168,7 @@ def is_cg2_file(path: str | Path) -> bool:
         return False
 
 
-def read_header(path: str | Path) -> Tuple[CG2Header, bytes, int, str]:
+def read_header(path: str | Path) -> tuple[CG2Header, bytes, int, str]:
     """
     Lê o header de um arquivo .cg2 e retorna:
       (header, header_bytes_brutos, offset_payload, ext_legacy)
@@ -181,6 +196,7 @@ def read_header(path: str | Path) -> Tuple[CG2Header, bytes, int, str]:
                         raise ValueError("Header too large")
                     continue
                 raise
+
 
 __all__ = [
     "MAGIC",
