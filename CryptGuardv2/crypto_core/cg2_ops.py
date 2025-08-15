@@ -206,7 +206,7 @@ class AESGCMProcessor(ChunkProcessor):
             raise ValueError(f"Invalid nonce length: expected 12 bytes")
             
         ct = AESGCM(ctx.enc_key).encrypt(nonce, chunk, ctx.header_aad)
-        return nonce + struct.pack(">I", len(ct)) + ct
+        return struct.pack(">I", len(ct)) + ct
     
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
         if len(nonce) != 12:
@@ -225,8 +225,8 @@ class ChaCha20Processor(ChunkProcessor):
             raise ValueError(f"Invalid nonce length: expected 12 bytes")
             
         ct = ChaCha20Poly1305(ctx.enc_key).encrypt(nonce, chunk, ctx.header_aad)
-        return nonce + struct.pack(">I", len(ct)) + ct
-    
+        return struct.pack(">I", len(ct)) + ct
+
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
         return ChaCha20Poly1305(ctx.enc_key).decrypt(nonce, cipher_blob, ctx.header_aad)
 
@@ -253,9 +253,9 @@ class XChaCha20Processor(ChunkProcessor):
                 ct = ct_core + tag
             except Exception:
                 raise RuntimeError("Backend XChaCha20 indisponível.")
-                
-        return nonce + struct.pack(">I", len(ct)) + ct
-    
+
+        return struct.pack(">I", len(ct)) + ct
+
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
         if XCH_CRYPTO_AVAILABLE and XChaCha20Poly1305:
             return XChaCha20Poly1305(ctx.enc_key).decrypt(nonce, cipher_blob, ctx.header_aad)
@@ -292,7 +292,7 @@ class AESCTRProcessor(ChunkProcessor):
         ct = enc.update(chunk) + enc.finalize()
         
         lb = struct.pack(">I", len(ct))
-        payload = iv + lb + ct
+        payload = lb + ct
         
         # Atualiza HMAC
         if self.hmac_state:
@@ -851,11 +851,9 @@ class CG2Decryptor:
         
         if verify_only:
             return True
-            
-        # Trunca se necessário (padding)
+
         if not verify_only and out_f is not None and exp_total_from_footer is not None:
-            out_f.flush()
-            out_f.close()
+            # out_f pode já estar fechado no finally acima; só reabra pelo caminho abaixo.
             if exp_total_from_footer < total_written:
                 with out_path.open("rb+") as tf:
                     tf.truncate(exp_total_from_footer)
@@ -965,4 +963,4 @@ def decrypt_from_cg2(
         offset=off,
         verify_only=verify_only,
         progress_cb=progress_cb
-      )
+    )
