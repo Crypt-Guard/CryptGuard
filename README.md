@@ -177,3 +177,27 @@ See [`SECURITY.md`](./SECURITY.md).
 * **2.7.0**
 
   * Multi-algorithm (AES-GCM / ChaCha20-Poly1305 / AES-CTR+HMAC), authenticated header/footer (`END0/NAM0`), initial Vault, padding up to **1 MiB**, etc.
+
+---
+
+## 🌍 Export Compliance (US EAR) — **Binary Releases**
+
+This repository contains **publicly available encryption source code** implementing standardized algorithms (AES-GCM, ChaCha20-Poly1305, XChaCha20, etc.).
+Under the U.S. Export Administration Regulations (EAR), publicly available encryption **source code** is generally **not subject** to the EAR once published (see 15 CFR 742.15(b)).
+
+When we distribute **binaries** (e.g., Windows `.exe`) via Releases, they are **classified under ECCN 5D002** and are made available under **License Exception ENC**.
+
+**By downloading binaries, you agree to comply with applicable export/sanctions laws.**
+Do not export or re-export to sanctioned jurisdictions/users.
+
+---
+
+## 🙏 Acknowledgements / Third-party
+
+* `cryptography` (Apache-2.0)
+* `argon2-cffi` (MIT)
+* `reedsolo` (MIT)
+* `PySide6 / Qt` (LGPL-3.0; additional Qt terms may apply)
+* `zxcvbn-python` (MIT)
+* `PyNaCl` (ISC) — optional fallback for XChaCha20-Poly1305
+
