@@ -1,177 +1,365 @@
-# crypto_core/key_obfuscator.py
+# key_obfuscator.py
+"""Key obfuscation using XOR masking with automatic rotation."""
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import secrets
-from typing import Optional
+import threading
+import time
+import warnings
+from typing import Optional, Final
 
-from .secure_bytes import SecureBytes
+from .secure_bytes import SecureBytes, secure_memzero
 
-
-def _secure_memzero(buf: bytearray) -> None:
-    """Idêntico ao de secure_bytes: tenta Windows API, senão memset, senão loop."""
-    if not buf:
-        return
-    n = len(buf)
-    try:
-        addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
-        try:
-            _rtl = ctypes.windll.kernel32.RtlSecureZeroMemory  # type: ignore[attr-defined]
-            _rtl.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
-            _rtl.restype = ctypes.c_void_p
-            _rtl(addr, n)
-            return
-        except Exception:
-            pass  # nosec B110 (fallback intencional; caminho alternativo abaixo)
-        ctypes.memset(addr, 0, n)
-    except Exception:
-        for i in range(n):
-            buf[i] = 0
+# Constants
+DEFAULT_ROTATION_INTERVAL: Final[float] = 60.0  # seconds
+MIN_KEY_SIZE: Final[int] = 16  # minimum key size in bytes
+MAX_KEY_SIZE: Final[int] = 65536  # maximum key size (64KB)
 
 
 class KeyObfuscator:
     """
-    Obfuscador leve para reduzir o tempo de chave em claro na RAM.
-
-    Modelo: XOR com máscara aleatória (one-time mask):
-      - `masked = plain ^ mask`
-      - Para recuperar: `plain = masked ^ mask`
-      - `obfuscate()` remasca SEM materializar plaintext:
-            masked' = masked ^ mask ^ new_mask
-            mask    = new_mask
-
-    Uso típico:
-        sb = SecureBytes(key_bytes)
-        obf = KeyObfuscator(sb)         # sb é zerado internamente
-        with obf.expose() as exp:       # exp é SecureBytes em claro, limpo ao sair
-            use(exp.to_bytes())
-
-        # ou:
-        k = obf.deobfuscate()           # SecureBytes (lembre-se de k.clear() depois)
-
-    Segurança/coerência:
-      - Rejeita chave vazia.
-      - `clear()` zera e invalida definitivamente.
-      - `expose()` é NÃO-REENTRANTE por padrão (bloqueia exposições simultâneas).
+    Obfuscate sensitive keys using XOR masking with periodic rotation.
+    
+    This provides a basic level of protection against casual memory inspection
+    but is NOT cryptographically secure. It's designed to:
+    - Prevent keys from appearing as plain strings in memory dumps
+    - Make static analysis more difficult
+    - Reduce the window of exposure for plaintext keys
+    
+    Threat model:
+    - PROTECTS against: casual memory dumps, string searches, basic debugging
+    - DOES NOT protect against: dedicated attackers, kernel access, cold boot attacks
+    
+    Features:
+    - XOR masking with random mask
+    - Automatic mask rotation (configurable interval)
+    - Thread-safe operations
+    - Controlled exposure through context managers
+    
+    Usage:
+        # Create obfuscator from SecureBytes
+        key_bytes = SecureBytes(b"my_secret_key_32_bytes_long_here")
+        obf = KeyObfuscator(key_bytes)
+        
+        # Use with controlled exposure
+        with obf.expose() as exposed_key:
+            # exposed_key is a SecureBytes containing the plaintext
+            use_key(exposed_key.view())
+        # Key is automatically re-obfuscated after use
+        
+        # Manual deobfuscation (remember to clear!)
+        plaintext = obf.deobfuscate()
+        try:
+            use_key(plaintext.view())
+        finally:
+            plaintext.clear()
     """
-
-    __slots__ = ("_masked", "_mask", "_cleared", "_exposed")
-
-    def __init__(self, key_sb: SecureBytes):
-        plain = key_sb.to_bytes()  # ValueError se já estiver limpo
-        if not plain:
+    
+    __slots__ = (
+        "_masked", "_mask", "_cleared", "_lock",
+        "_rotation_timer", "_rotation_interval",
+        "_last_rotation", "_auto_rotate", "__weakref__"
+    )
+    
+    def __init__(
+        self,
+        key_sb: SecureBytes,
+        *,
+        auto_rotate: bool = True,
+        rotation_interval: float = DEFAULT_ROTATION_INTERVAL
+    ) -> None:
+        """
+        Initialize key obfuscator with a SecureBytes key.
+        
+        Args:
+            key_sb: SecureBytes containing the key to obfuscate.
+                   Will be cleared after extraction.
+            auto_rotate: Whether to automatically rotate the mask periodically
+            rotation_interval: Seconds between automatic rotations
+            
+        Raises:
+            ValueError: If key is empty or less than MIN_KEY_SIZE bytes
+            RuntimeError: If key_sb is already cleared
+        """
+        # Extract key bytes using callback pattern
+        plain: Optional[bytearray] = None
+        
+        def extract_key(b: bytes) -> None:
+            nonlocal plain
+            plain = bytearray(b)
+        
+        try:
+            key_sb.with_bytes(extract_key)
+        except ValueError as e:
+            if "already cleared" in str(e):
+                raise RuntimeError("Cannot create obfuscator from cleared SecureBytes") from e
+            raise
+        
+        if plain is None or len(plain) == 0:
+            if plain is not None:
+                secure_memzero(plain)
             key_sb.clear()
-            raise ValueError("Empty key is not allowed")
-
-        # Gera máscara e aplica XOR sem criar cópias redundantes
-        self._mask = bytearray(secrets.token_bytes(len(plain)))
-        self._masked = bytearray(a ^ b for a, b in zip(plain, self._mask, strict=False))
+            raise ValueError("Key cannot be empty")
+        
+        if len(plain) < MIN_KEY_SIZE:
+            secure_memzero(plain)
+            key_sb.clear()
+            raise ValueError(f"Key must be at least {MIN_KEY_SIZE} bytes, got {len(plain)}")
+        
+        if len(plain) > MAX_KEY_SIZE:
+            secure_memzero(plain)
+            key_sb.clear()
+            raise ValueError(f"Key must be at most {MAX_KEY_SIZE} bytes, got {len(plain)}")
+        
+        # Initialize state
+        self._lock = threading.RLock()
         self._cleared = False
-        self._exposed = False  # controle simples de não-reentrância
-
-        # Zera o SecureBytes de origem o quanto antes
+        self._auto_rotate = auto_rotate
+        self._rotation_interval = max(1.0, rotation_interval)  # Minimum 1 second
+        self._last_rotation = time.monotonic()
+        self._rotation_timer: Optional[threading.Timer] = None
+        
+        # Generate initial mask and apply XOR
+        key_len = len(plain)
+        self._mask = bytearray(secrets.token_bytes(key_len))
+        self._masked = bytearray(key_len)
+        
+        for i in range(key_len):
+            self._masked[i] = plain[i] ^ self._mask[i]
+        
+        # Clear the source
+        secure_memzero(plain)
         key_sb.clear()
-        del plain
-
-    # -------------------- propriedades/estado
+        
+        # Start auto-rotation if enabled
+        if self._auto_rotate:
+            self._start_rotation_timer()
+    
+    def _start_rotation_timer(self) -> None:
+        """Start the automatic rotation timer."""
+        with self._lock:
+            if self._cleared or self._rotation_timer is not None:
+                return
+            
+            self._rotation_timer = threading.Timer(
+                self._rotation_interval,
+                self._rotate_and_reschedule
+            )
+            self._rotation_timer.daemon = True
+            self._rotation_timer.start()
+    
+    def _stop_rotation_timer(self) -> None:
+        """Stop the automatic rotation timer."""
+        with self._lock:
+            if self._rotation_timer is not None:
+                self._rotation_timer.cancel()
+                self._rotation_timer = None
+    
+    def _rotate_and_reschedule(self) -> None:
+        """Timer callback to rotate mask and reschedule."""
+        with self._lock:
+            if not self._cleared:
+                self.obfuscate()
+                # Reset timer for next rotation
+                self._rotation_timer = None
+                if self._auto_rotate:
+                    self._start_rotation_timer()
+    
     @property
     def cleared(self) -> bool:
-        return self._cleared or (not self._mask) or (not self._masked)
-
-    # -------------------- operações principais
+        """Check if the obfuscator has been cleared."""
+        with self._lock:
+            return self._cleared
+    
+    @property
+    def time_since_rotation(self) -> float:
+        """Get seconds since last mask rotation."""
+        with self._lock:
+            return time.monotonic() - self._last_rotation
+    
     def deobfuscate(self) -> SecureBytes:
         """
-        Reconstrói o plaintext (em um novo SecureBytes).
-        Lança se já tiver sido `clear()` ou se o estado estiver inválido.
+        Reconstruct the original key into a new SecureBytes.
+        
+        Returns:
+            New SecureBytes containing the plaintext key.
+            Caller is responsible for clearing it after use.
+            
+        Raises:
+            RuntimeError: If already cleared
         """
-        if self.cleared:
-            raise RuntimeError("Key material has been cleared or is invalid")
-        # XOR sem criar listas intermediárias grandes
-        n = len(self._masked)
-        out = bytearray(n)
-        mv_m = memoryview(self._masked)
-        mv_k = memoryview(self._mask)
-        for i in range(n):
-            out[i] = mv_m[i] ^ mv_k[i]
-        return SecureBytes(out)
-
+        with self._lock:
+            if self._cleared:
+                raise RuntimeError("KeyObfuscator has been cleared")
+            
+            # XOR to recover plaintext
+            key_len = len(self._masked)
+            plaintext = bytearray(key_len)
+            
+            for i in range(key_len):
+                plaintext[i] = self._masked[i] ^ self._mask[i]
+            
+            # Create SecureBytes and clear temporary
+            result = SecureBytes(plaintext)
+            secure_memzero(plaintext)
+            
+            return result
+    
     def obfuscate(self) -> None:
         """
-        Remasca SEM materializar o plaintext.
-        Útil para reduzir ainda mais a janela de exposição ao longo do tempo.
+        Re-obfuscate with a new random mask without exposing plaintext.
+        
+        This performs: masked' = (masked ^ old_mask) ^ new_mask
+        Which equals: plaintext ^ new_mask
         """
-        if self.cleared:
-            return
-        n = len(self._mask)
-        new_mask = bytearray(secrets.token_bytes(n))
-        # masked' = masked ^ mask ^ new_mask
-        mv_masked = memoryview(self._masked)
-        mv_old = memoryview(self._mask)
-        for i in range(n):
-            mv_masked[i] = mv_masked[i] ^ mv_old[i] ^ new_mask[i]
-        _secure_memzero(self._mask)
-        self._mask = new_mask
-
+        with self._lock:
+            if self._cleared:
+                return
+            
+            key_len = len(self._mask)
+            new_mask = bytearray(secrets.token_bytes(key_len))
+            
+            # Update masked data: XOR out old mask, XOR in new mask
+            for i in range(key_len):
+                # This computes: (plaintext ^ old_mask) ^ old_mask ^ new_mask
+                # Which simplifies to: plaintext ^ new_mask
+                self._masked[i] = self._masked[i] ^ self._mask[i] ^ new_mask[i]
+            
+            # Replace old mask with new mask
+            secure_memzero(self._mask)
+            self._mask = new_mask
+            self._last_rotation = time.monotonic()
+    
     def clear(self) -> None:
-        """Zera os buffers e invalida definitivamente (idempotente)."""
-        if self._cleared:
-            return
-        _secure_memzero(self._masked)
-        _secure_memzero(self._mask)
-        self._masked.clear()
-        self._mask.clear()
-        self._cleared = True
-        # Libera lock de exposição, se houver (defensivo)
-        self._exposed = False
-
-    # -------------------- exposição controlada
-    def expose(self) -> "TimedExposure":
         """
-        Context manager de exposição temporária:
-            with obf.expose() as sb:
-                # usa sb.to_bytes()
-        Garante limpeza ao sair do `with`.
+        Permanently clear all key material.
+        
+        This method is idempotent - multiple calls are safe.
+        Stops any active rotation timer.
+        """
+        with self._lock:
+            if self._cleared:
+                return
+            
+            # Stop rotation timer
+            self._stop_rotation_timer()
+            
+            # Zero all buffers
+            secure_memzero(self._masked)
+            secure_memzero(self._mask)
+            
+            # Clear buffers
+            self._masked.clear()
+            self._mask.clear()
+            
+            # Mark as cleared
+            self._cleared = True
+    
+    def expose(self) -> TimedExposure:
+        """
+        Get a context manager for controlled key exposure.
+        
+        Returns:
+            TimedExposure context manager that provides temporary access
+            to the plaintext key and ensures cleanup.
+            
+        Example:
+            with obf.expose() as key:
+                # key is a SecureBytes containing plaintext
+                use_key(key.view())
+            # key is automatically cleared and mask is rotated
         """
         return TimedExposure(self)
-
-    def __del__(self):
-        with contextlib.suppress(Exception):
+    
+    def __del__(self) -> None:
+        """Ensure cleanup on destruction."""
+        try:
             self.clear()
-
+        except Exception:
+            pass  # Best effort in destructor
+    
     def __repr__(self) -> str:
-        state = "cleared" if self.cleared else f"{len(self._masked)} bytes (obfuscated)"
-        return f"<KeyObfuscator {state}>"
+        """Safe representation that doesn't leak key size."""
+        return "<KeyObfuscator ***>"
+    
+    def __str__(self) -> str:
+        """Safe string representation."""
+        return "<KeyObfuscator ***>"
 
 
 class TimedExposure(contextlib.AbstractContextManager):
     """
-    Exposição temporária do plaintext (como SecureBytes), com limpeza garantida.
-    Não-reentrante: bloqueia exposições simultâneas da MESMA instância de KeyObfuscator.
+    Context manager for controlled exposure of obfuscated keys.
+    
+    Ensures that:
+    - Key is only exposed within the context
+    - Key is cleared after use
+    - Mask is rotated after exposure
+    - Thread-safe against concurrent access
     """
-
-    __slots__ = ("_obf", "_plain")
-
-    def __init__(self, obf: KeyObfuscator):
-        self._obf = obf
-        self._plain: Optional[SecureBytes] = None
-
+    
+    __slots__ = ("_obfuscator", "_plaintext", "_lock", "_active")
+    
+    def __init__(self, obfuscator: KeyObfuscator) -> None:
+        """
+        Initialize exposure context.
+        
+        Args:
+            obfuscator: KeyObfuscator instance to expose
+        """
+        self._obfuscator = obfuscator
+        self._plaintext: Optional[SecureBytes] = None
+        self._lock = threading.Lock()
+        self._active = False
+    
     def __enter__(self) -> SecureBytes:
-        if self._plain is not None:
-            raise RuntimeError("Re-entrant exposure is not allowed")
-        if self._obf.cleared:
-            raise RuntimeError("Cannot expose a cleared KeyObfuscator")
-        if self._obf._exposed:
-            # bloqueio de exposições simultâneas da MESMA instância
-            raise RuntimeError("This KeyObfuscator is already exposed")
-        self._obf._exposed = True
-        self._plain = self._obf.deobfuscate()
-        return self._plain
+        """
+        Enter context and deobfuscate key.
+        
+        Returns:
+            SecureBytes containing plaintext key
+            
+        Raises:
+            RuntimeError: If already in use or obfuscator is cleared
+        """
+        with self._lock:
+            if self._active:
+                raise RuntimeError("TimedExposure is already active")
+            if self._obfuscator.cleared:
+                raise RuntimeError("Cannot expose a cleared KeyObfuscator")
+            
+            self._active = True
+            self._plaintext = self._obfuscator.deobfuscate()
+            return self._plaintext
+    
+    def __exit__(
+        self,
+        exc_type: Optional[type],
+        exc_val: Optional[Exception],
+        exc_tb: Optional[object]
+    ) -> None:
+        """
+        Exit context, clear plaintext and rotate mask.
+        
+        Args:
+            exc_type: Exception type if raised
+            exc_val: Exception value if raised
+            exc_tb: Exception traceback if raised
+        """
+        with self._lock:
+            try:
+                # Clear the exposed plaintext
+                if self._plaintext is not None:
+                    self._plaintext.clear()
+                    self._plaintext = None
+            finally:
+                # Always rotate mask after exposure
+                if not self._obfuscator.cleared:
+                    self._obfuscator.obfuscate()
+                
+                self._active = False
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        try:
-            if self._plain is not None:
-                self._plain.clear()
-                self._plain = None
-        finally:
-            self._obf._exposed = False
+
+# Export public API
+__all__ = ["KeyObfuscator", "TimedExposure"]

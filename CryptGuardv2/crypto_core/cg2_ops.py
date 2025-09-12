@@ -1,14 +1,14 @@
-"""
-cg2_ops_v2.py - Versão refatorada com 100% de compatibilidade
+﻿"""
+cg2_ops_v2.py - VersÃ£o refatorada com 100% de compatibilidade
 
-CG2 operations – streaming com header autenticado (AAD), 4 algoritmos e proteção
-contra truncamento + padding de tamanho + extensão original cifrada no rodapé.
+CG2 operations â€“ streaming com header autenticado (AAD), 4 algoritmos e proteÃ§Ã£o
+contra truncamento + padding de tamanho + extensÃ£o original cifrada no rodapÃ©.
 
 Algoritmos:
   1) AES-256-GCM                 (nonce 12)
-  2) XChaCha20-Poly1305          (nonce 24)  – via cryptography OU PyNaCl (fallback)
+  2) XChaCha20-Poly1305          (nonce 24)  â€“ via cryptography OU PyNaCl (fallback)
   3) ChaCha20-Poly1305 (IETF)    (nonce 12)
-  4) AES-256-CTR + HMAC-SHA256   (IV 16)  → rodapé: [NAM0]* [SIZ0|8B] TAG0|32B
+  4) AES-256-CTR + HMAC-SHA256   (IV 16)  â†’ rodapÃ©: [NAM0]* [SIZ0|8B] TAG0|32B
 
 Refatorado em classes especializadas mantendo total compatibilidade.
 """
@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.ciphers.aead import (
     ChaCha20Poly1305,
 )
 
-# XChaCha – cryptography (se disponível)
+# XChaCha â€“ cryptography (se disponÃ­vel)
 try:
     from cryptography.hazmat.primitives.ciphers.aead import XChaCha20Poly1305
     XCH_CRYPTO_AVAILABLE = True
@@ -59,28 +59,29 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .config import ARGON_PARAMS, CG2_EXT, CHUNK_SIZE, SecurityProfile
 from .fileformat import CG2Header, read_header
-from .kdf import derive_key
+from .kdf import derive_key, derive_key_sb
 from .logger import logger
+from .secure_bytes import SecureBytes
 
 AEAD_SET = {"AES-256-GCM", "XChaCha20-Poly1305", "ChaCha20-Poly1305"}
 
-# ───────────────────────── constants / footers ──────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ constants / footers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 END_MAGIC = b"END0"  # AEAD footer (final tag com chunks/total_pt)
 TAG_MAGIC = b"TAG0"  # CTR HMAC tag
 SIZ_MAGIC = b"SIZ0"  # CTR total_pt (opcional, antes do TAG0)
-NAME_MAGIC = b"NAM0"  # bloco opcional com a extensão original cifrada
+NAME_MAGIC = b"NAM0"  # bloco opcional com a extensÃ£o original cifrada
 
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #                              DATA CLASSES
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 @dataclass
 class CG2Context:
-    """Contexto compartilhado para operações CG2."""
+    """Contexto compartilhado para operaÃ§Ãµes CG2."""
     algorithm: str
-    master_key: bytes
-    enc_key: bytes
-    mac_key: Optional[bytes]
+    master_key: SecureBytes
+    enc_key: SecureBytes
+    mac_key: Optional[SecureBytes]
     base_nonce: bytes
     header_aad: bytes
     salt: bytes
@@ -97,30 +98,38 @@ class ChunkMetadata:
     padded_size: int
     nonce: bytes
 
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #                            HELPER FUNCTIONS
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def _derive_chunk_nonce(base: bytes, idx: int) -> bytes:
-    """Reusa o prefixo e xora contador de 32 bits no final (big-endian)."""
+    """Reusa o prefixo e xora contador de 32 bits no final (big-endian).
+
+    Nota: compatibilidade de leitura (v1–v4). Limite teórico ~2^32 chunks.
+    Não usar para escrita nova: v5 usa SecretStream (libsodium).
+    """
     ctr = int.from_bytes(base[-4:], "big") ^ idx
     return base[:-4] + ctr.to_bytes(4, "big")
 
 def _split_enc_mac_keys(mk: bytes) -> tuple[bytes, bytes]:
-    """Para AES-CTR (+HMAC): deriva (enc_key, mac_key) via HKDF-SHA256."""
-    okm = HKDF(algorithm=hashes.SHA256(), length=64, salt=None, info=b"cg2-ctr-hkdf-v1").derive(mk)
-    return okm[:32], okm[32:]
+    """Para AES-CTR (+HMAC): deriva (enc_key, mac_key) via HKDF-SHA256.
+
+    Usa utilitário canônico de hkdf_utils para manter consistência.
+    """
+    from .hkdf_utils import derive_keys as _hkdf_derive
+    enc, mac = _hkdf_derive(mk, info=b"cg2-ctr-hkdf-v1", salt=None)
+    return enc, mac
 
 def _final_tag_key(mk: bytes) -> bytes:
-    """Deriva chave para o footer AEAD (detecção de truncamento)."""
+    """Deriva chave para o footer AEAD (detecÃ§Ã£o de truncamento)."""
     return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"cg2-final-tag-v1").derive(mk)
 
 def _name_key(mk: bytes) -> bytes:
-    """Chave para cifrar o bloco NAM0 (extensão original)."""
+    """Chave para cifrar o bloco NAM0 (extensÃ£o original)."""
     return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"cg2-name-v1").derive(mk)
 
 def _pad(pt: bytes, block: int) -> bytes:
-    """Padding com zeros até múltiplo de `block` (0 = sem padding)."""
+    """Padding com zeros atÃ© mÃºltiplo de `block` (0 = sem padding)."""
     if block <= 0:
         return pt
     pad = (-len(pt)) % block
@@ -129,7 +138,7 @@ def _pad(pt: bytes, block: int) -> bytes:
     return pt + (b"\x00" * pad)
 
 def _guess_extension(first_bytes: bytes) -> str | None:
-    """Detecção simples por magic bytes; retorna '.ext' ou None."""
+    """DetecÃ§Ã£o simples por magic bytes; retorna '.ext' ou None."""
     b = first_bytes
     b4 = b[:4] if len(b) >= 4 else b
 
@@ -149,7 +158,7 @@ def _guess_extension(first_bytes: bytes) -> str | None:
     if b4 == b"%PDF":
         return ".pdf"
     if b4 in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
-        return ".zip"  # docx/xlsx também são zip
+        return ".zip"  # docx/xlsx tambÃ©m sÃ£o zip
     if b.startswith(b"7z\xbc\xaf\x27\x1c"):
         return ".7z"
     if b4 == b"Rar!":
@@ -159,7 +168,7 @@ def _guess_extension(first_bytes: bytes) -> str | None:
     if len(b) >= 265 and b[257:262] == b"ustar":
         return ".tar"
 
-    # audio/vídeo
+    # audio/vÃ­deo
     if b4 == b"ID3" or (len(b) > 1 and b[0] == 0xFF and (b[1] & 0xE0) == 0xE0):
         return ".mp3"
     if len(b) >= 12 and b4 == b"\x00\x00\x00\x18" and b[4:8] == b"ftyp":
@@ -177,9 +186,9 @@ def _guess_extension(first_bytes: bytes) -> str | None:
 
     return None
 
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #                           CHUNK PROCESSORS
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class ChunkProcessor(ABC):
     """Base abstrata para processamento de chunks."""
@@ -205,13 +214,13 @@ class AESGCMProcessor(ChunkProcessor):
         if len(nonce) != 12:
             raise ValueError(f"Invalid nonce length: expected 12 bytes")
             
-        ct = AESGCM(ctx.enc_key).encrypt(nonce, chunk, ctx.header_aad)
+        ct = AESGCM(bytes(ctx.enc_key.view())).encrypt(nonce, chunk, ctx.header_aad)
         return struct.pack(">I", len(ct)) + ct
     
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
         if len(nonce) != 12:
             raise ValueError(f"Invalid nonce length: expected 12 bytes")
-        return AESGCM(ctx.enc_key).decrypt(nonce, cipher_blob, ctx.header_aad)
+        return AESGCM(bytes(ctx.enc_key.view())).decrypt(nonce, cipher_blob, ctx.header_aad)
 
 class ChaCha20Processor(ChunkProcessor):
     """Processador para ChaCha20-Poly1305 (IETF)."""
@@ -224,11 +233,11 @@ class ChaCha20Processor(ChunkProcessor):
         if len(nonce) != 12:
             raise ValueError(f"Invalid nonce length: expected 12 bytes")
             
-        ct = ChaCha20Poly1305(ctx.enc_key).encrypt(nonce, chunk, ctx.header_aad)
+        ct = ChaCha20Poly1305(bytes(ctx.enc_key.view())).encrypt(nonce, chunk, ctx.header_aad)
         return struct.pack(">I", len(ct)) + ct
 
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
-        return ChaCha20Poly1305(ctx.enc_key).decrypt(nonce, cipher_blob, ctx.header_aad)
+        return ChaCha20Poly1305(bytes(ctx.enc_key.view())).decrypt(nonce, cipher_blob, ctx.header_aad)
 
 class XChaCha20Processor(ChunkProcessor):
     """Processador para XChaCha20-Poly1305 com fallbacks."""
@@ -242,33 +251,35 @@ class XChaCha20Processor(ChunkProcessor):
             raise ValueError(f"Invalid nonce length: expected 24 bytes")
         
         if XCH_CRYPTO_AVAILABLE and XChaCha20Poly1305:
-            ct = XChaCha20Poly1305(ctx.enc_key).encrypt(nonce, chunk, ctx.header_aad)
+            ct = XChaCha20Poly1305(bytes(ctx.enc_key.view())).encrypt(nonce, chunk, ctx.header_aad)
         elif NACL_XCH_AVAILABLE:
-            ct = nacl_xch_encrypt(chunk, ctx.header_aad, nonce, ctx.enc_key)
+            # PyNaCl bindings require 'bytes' type for key (not memoryview)
+            ct = nacl_xch_encrypt(chunk, ctx.header_aad, nonce, bytes(ctx.enc_key.view()))
         else:
             try:
                 from .compat_chacha import ChaCha20_Poly1305
-                cipher = ChaCha20_Poly1305.new(key=ctx.enc_key, nonce=nonce)
+                cipher = ChaCha20_Poly1305.new(key=bytes(ctx.enc_key.view()), nonce=nonce)
                 ct_core, tag = cipher.encrypt_and_digest(chunk, ctx.header_aad)
                 ct = ct_core + tag
             except Exception:
-                raise RuntimeError("Backend XChaCha20 indisponível.")
+                raise RuntimeError("Backend XChaCha20 indisponÃ­vel.")
 
         return struct.pack(">I", len(ct)) + ct
 
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
         if XCH_CRYPTO_AVAILABLE and XChaCha20Poly1305:
-            return XChaCha20Poly1305(ctx.enc_key).decrypt(nonce, cipher_blob, ctx.header_aad)
+            return XChaCha20Poly1305(bytes(ctx.enc_key.view())).decrypt(nonce, cipher_blob, ctx.header_aad)
         elif NACL_XCH_AVAILABLE:
-            return nacl_xch_decrypt(cipher_blob, ctx.header_aad, nonce, ctx.enc_key)
+            # PyNaCl bindings require 'bytes' type for key (not memoryview)
+            return nacl_xch_decrypt(cipher_blob, ctx.header_aad, nonce, bytes(ctx.enc_key.view()))
         else:
             try:
                 from .compat_chacha import ChaCha20_Poly1305
-                cipher = ChaCha20_Poly1305.new(key=ctx.enc_key, nonce=nonce)
+                cipher = ChaCha20_Poly1305.new(key=bytes(ctx.enc_key.view()), nonce=nonce)
                 core, tag = cipher_blob[:-16], cipher_blob[-16:]
                 return cipher.decrypt_and_verify(core, tag, ctx.header_aad)
             except Exception:
-                raise RuntimeError("Backend XChaCha20 indisponível.")
+                raise RuntimeError("Backend XChaCha20 indisponÃ­vel.")
 
 class AESCTRProcessor(ChunkProcessor):
     """Processador para AES-256-CTR + HMAC."""
@@ -279,7 +290,7 @@ class AESCTRProcessor(ChunkProcessor):
     def init_hmac(self, ctx: CG2Context):
         """Inicializa HMAC com o header."""
         if ctx.mac_key:
-            self.hmac_state = py_hmac.new(ctx.mac_key, digestmod="sha256")
+            self.hmac_state = py_hmac.new(bytes(ctx.mac_key.view()), digestmod="sha256")
             self.hmac_state.update(ctx.header_aad)
     
     def encrypt_chunk(self, chunk: bytes, index: int, ctx: CG2Context) -> bytes:
@@ -287,7 +298,7 @@ class AESCTRProcessor(ChunkProcessor):
             chunk = _pad(chunk, ctx.pad_block_size)
             
         iv = _derive_chunk_nonce(ctx.base_nonce, index)
-        cipher = Cipher(algorithms.AES(ctx.enc_key), modes.CTR(iv))
+        cipher = Cipher(algorithms.AES(bytes(ctx.enc_key.view())), modes.CTR(iv))
         enc = cipher.encryptor()
         ct = enc.update(chunk) + enc.finalize()
         
@@ -303,33 +314,33 @@ class AESCTRProcessor(ChunkProcessor):
     
     def decrypt_chunk(self, cipher_blob: bytes, nonce: bytes, index: int, ctx: CG2Context) -> bytes:
         iv = nonce
-        cipher = Cipher(algorithms.AES(ctx.enc_key), modes.CTR(iv))
+        cipher = Cipher(algorithms.AES(bytes(ctx.enc_key.view())), modes.CTR(iv))
         dec = cipher.decryptor()
         plain = dec.update(cipher_blob) + dec.finalize()
         return plain
     
     def get_hmac_digest(self) -> bytes:
-        """Obtém o digest HMAC final."""
+        """ObtÃ©m o digest HMAC final."""
         if self.hmac_state:
             return self.hmac_state.digest()
         return b""
 
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #                           FOOTER HANDLERS
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class FooterHandler(ABC):
-    """Base abstrata para manipulação de rodapés."""
+    """Base abstrata para manipulaÃ§Ã£o de rodapÃ©s."""
     
     @abstractmethod
     def write_footer(self, fout: BinaryIO, ctx: CG2Context, 
                     chunk_count: int, total_size: int) -> None:
-        """Escreve rodapé no arquivo."""
+        """Escreve rodapÃ© no arquivo."""
         pass
     
     @abstractmethod
     def read_footer(self, fin: BinaryIO, ctx: CG2Context) -> Tuple[int, int, Optional[str]]:
-        """Lê e valida rodapé. Retorna (chunk_count, total_size, extension)."""
+        """LÃª e valida rodapÃ©. Retorna (chunk_count, total_size, extension)."""
         pass
 
 class AEADFooterHandler(FooterHandler):
@@ -337,14 +348,14 @@ class AEADFooterHandler(FooterHandler):
     
     def write_footer(self, fout: BinaryIO, ctx: CG2Context, 
                     chunk_count: int, total_size: int) -> None:
-        # Escreve extensão cifrada (NAM0) se houver
+        # Escreve extensÃ£o cifrada (NAM0) se houver
         if ctx.original_extension:
             name_blob = self._pack_name_blob(ctx)
             fout.write(NAME_MAGIC)
             fout.write(name_blob)
         
-        # Footer AEAD (detecção de truncamento + tamanho real)
-        ft_key = _final_tag_key(ctx.master_key)
+        # Footer AEAD (detecÃ§Ã£o de truncamento + tamanho real)
+        ft_key = _final_tag_key(ctx.master_key.view())
         final_payload = struct.pack(">IQ", chunk_count, total_size)
         nonce = b"\x00" * 12
         final_tag = AESGCM(ft_key).encrypt(nonce, final_payload, ctx.header_aad)
@@ -355,7 +366,7 @@ class AEADFooterHandler(FooterHandler):
     
     def read_footer(self, fin: BinaryIO, ctx: CG2Context, 
                    total_chunks_read: int, total_bytes_written: int) -> Tuple[int, int, Optional[str]]:
-        """Lê footer AEAD e valida integridade."""
+        """LÃª footer AEAD e valida integridade."""
         ext_from_name = None
         
         while True:
@@ -364,12 +375,12 @@ class AEADFooterHandler(FooterHandler):
                 raise ValueError("Footer ausente (arquivo possivelmente truncado)")
                 
             if magic == NAME_MAGIC:
-                # Lê extensão cifrada
+                # LÃª extensÃ£o cifrada
                 ext_from_name = self._unpack_name_blob(fin, ctx)
                 continue
                 
             if magic == END_MAGIC:
-                # Lê e valida footer AEAD
+                # LÃª e valida footer AEAD
                 flen_b = fin.read(4)
                 if len(flen_b) != 4:
                     raise ValueError("Footer truncado (len)")
@@ -377,8 +388,8 @@ class AEADFooterHandler(FooterHandler):
                 blob = fin.read(flen)
                 if len(blob) != flen:
                     raise ValueError("Footer truncado (blob)")
-                
-                ft_key = _final_tag_key(ctx.master_key)
+
+                ft_key = _final_tag_key(ctx.master_key.view())
                 nonce = b"\x00" * 12
                 payload = AESGCM(ft_key).decrypt(nonce, blob, ctx.header_aad)
                 exp_chunks, exp_total = struct.unpack(">IQ", payload)
@@ -386,26 +397,26 @@ class AEADFooterHandler(FooterHandler):
                 if exp_chunks != total_chunks_read or exp_total > total_bytes_written:
                     raise ValueError("Footer inconsistente (contagem/tamanho)")
                 
-                # Rejeita bytes extras após o rodapé
+                # Rejeita bytes extras apÃ³s o rodapÃ©
                 extra = fin.read(1)
                 if extra:
-                    raise ValueError("Dados extras após o rodapé (END0)")
+                    raise ValueError("Dados extras apÃ³s o rodapÃ© (END0)")
                     
                 return exp_chunks, exp_total, ext_from_name
             
-            # Se não for NAME_MAGIC nem END_MAGIC, é um chunk length
-            raise ValueError(f"Magic inválido no footer: {magic}")
+            # Se nÃ£o for NAME_MAGIC nem END_MAGIC, Ã© um chunk length
+            raise ValueError(f"Magic invÃ¡lido no footer: {magic}")
     
     def _pack_name_blob(self, ctx: CG2Context) -> bytes:
         """Produz: nonce(12) | 4B (len) | AESGCM(k).encrypt(nonce, ext_utf8, aad)"""
-        name_k = _name_key(ctx.master_key)
+        name_k = _name_key(ctx.master_key.view())
         nonce = os.urandom(12)
         blob = AESGCM(name_k).encrypt(nonce, ctx.original_extension.encode("utf-8", "ignore"), ctx.header_aad)
         return nonce + struct.pack(">I", len(blob)) + blob
     
     def _unpack_name_blob(self, f: BinaryIO, ctx: CG2Context) -> str:
-        """Lê nonce(12) | 4B len | blob e retorna a extensão em texto."""
-        name_k = _name_key(ctx.master_key)
+        """LÃª nonce(12) | 4B len | blob e retorna a extensÃ£o em texto."""
+        name_k = _name_key(ctx.master_key.view())
         nonce = f.read(12)
         if len(nonce) != 12:
             raise ValueError("NAM0 truncado (nonce)")
@@ -427,7 +438,7 @@ class CTRFooterHandler(FooterHandler):
     
     def write_footer(self, fout: BinaryIO, ctx: CG2Context, 
                     chunk_count: int, total_size: int) -> None:
-        # NAM0 autenticado pela HMAC global (se houver extensão)
+        # NAM0 autenticado pela HMAC global (se houver extensÃ£o)
         if ctx.original_extension:
             name_blob = self._pack_name_blob(ctx)
             fout.write(NAME_MAGIC)
@@ -446,7 +457,7 @@ class CTRFooterHandler(FooterHandler):
         fout.write(self.processor.get_hmac_digest())
     
     def read_footer(self, fin: BinaryIO, ctx: CG2Context, h: py_hmac.HMAC) -> Tuple[int, int, Optional[str]]:
-        """Lê footer CTR e valida HMAC."""
+        """LÃª footer CTR e valida HMAC."""
         ext_from_name = None
         exp_total_from_footer = None
         
@@ -458,10 +469,10 @@ class CTRFooterHandler(FooterHandler):
             if magic == NAME_MAGIC:
                 # NAM0 entra na HMAC
                 h.update(NAME_MAGIC)
-                name_k = _name_key(ctx.master_key)
+                name_k = _name_key(ctx.master_key.view())
                 pos = fin.tell()
                 
-                # Lê componentes do NAM0
+                # LÃª componentes do NAM0
                 nonce = fin.read(12)
                 lb = fin.read(4)
                 if len(nonce) != 12 or len(lb) != 4:
@@ -493,19 +504,19 @@ class CTRFooterHandler(FooterHandler):
                 # Em seguida esperamos TAG0
                 next_magic = fin.read(4)
                 if next_magic != TAG_MAGIC:
-                    raise ValueError("TAG0 ausente após SIZ0 (CTR)")
+                    raise ValueError("TAG0 ausente apÃ³s SIZ0 (CTR)")
                 tag = fin.read(32)
                 if len(tag) != 32:
                     raise ValueError("TAG truncada (CTR)")
                 if not py_hmac.compare_digest(h.digest(), tag):
-                    raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
+                    raise ValueError("HMAC invÃ¡lido (arquivo corrompido ou senha incorreta)")
                     
                 exp_total_from_footer = exp_total_real
                 
-                # Rejeita bytes extras após o TAG
+                # Rejeita bytes extras apÃ³s o TAG
                 extra = fin.read(1)
                 if extra:
-                    raise ValueError("Dados extras após o TAG0 (CTR)")
+                    raise ValueError("Dados extras apÃ³s o TAG0 (CTR)")
                 break
                 
             if magic == TAG_MAGIC:
@@ -514,12 +525,12 @@ class CTRFooterHandler(FooterHandler):
                 if len(tag) != 32:
                     raise ValueError("TAG truncada (CTR)")
                 if not py_hmac.compare_digest(h.digest(), tag):
-                    raise ValueError("HMAC inválido (arquivo corrompido ou senha incorreta)")
+                    raise ValueError("HMAC invÃ¡lido (arquivo corrompido ou senha incorreta)")
                     
                 # Rejeita bytes extras
                 extra = fin.read(1)
                 if extra:
-                    raise ValueError("Dados extras após o TAG0 (CTR)")
+                    raise ValueError("Dados extras apÃ³s o TAG0 (CTR)")
                 break
                 
             # Chunk normal - volta 4 bytes
@@ -530,14 +541,14 @@ class CTRFooterHandler(FooterHandler):
     
     def _pack_name_blob(self, ctx: CG2Context) -> bytes:
         """Produz NAM0 para CTR."""
-        name_k = _name_key(ctx.master_key)
+        name_k = _name_key(ctx.master_key.view())
         nonce = os.urandom(12)
         blob = AESGCM(name_k).encrypt(nonce, ctx.original_extension.encode("utf-8", "ignore"), ctx.header_aad)
         return nonce + struct.pack(">I", len(blob)) + blob
     
     def _unpack_name_blob(self, f: BinaryIO, ctx: CG2Context) -> str:
-        """Lê NAM0 para CTR."""
-        name_k = _name_key(ctx.master_key)
+        """LÃª NAM0 para CTR."""
+        name_k = _name_key(ctx.master_key.view())
         nonce = f.read(12)
         if len(nonce) != 12:
             raise ValueError("NAM0 truncado (nonce)")
@@ -551,9 +562,9 @@ class CTRFooterHandler(FooterHandler):
         pt = AESGCM(name_k).decrypt(nonce, blob, ctx.header_aad)
         return pt.decode("utf-8", "ignore")
 
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #                         MAIN ORCHESTRATORS
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 class CG2Encryptor:
     """Orquestrador principal de criptografia CG2."""
@@ -575,7 +586,7 @@ class CG2Encryptor:
     ) -> Path:
         """Criptografa arquivo para formato CG2."""
         
-        # Garante extensão .cg2
+        # Garante extensÃ£o .cg2
         if out_path.suffix.lower() != CG2_EXT:
             out_path = out_path.with_suffix(CG2_EXT)
         
@@ -613,7 +624,7 @@ class CG2Encryptor:
             self.footer_handler.write_footer(fout, ctx, idx, total_real)
         
         logger.info(
-            "Encrypted CG2 %s → %s (%s, chunks=%d, real=%d)",
+            "Encrypted CG2 %s â†’ %s (%s, chunks=%d, real=%d)",
             in_path.name,
             out_path.name,
             self.algorithm,
@@ -633,7 +644,8 @@ class CG2Encryptor:
         # KDF e chaves
         salt = os.urandom(16)
         kdf_params = {"name": "argon2id", "salt": salt.hex(), **ARGON_PARAMS[self.profile]}
-        mk = derive_key(password, kdf_params)
+        mk_bytes = derive_key(password, kdf_params)
+        mk = SecureBytes(mk_bytes)
         
         # Nonce/IV base
         if self.algorithm == "AES-256-GCM":
@@ -645,7 +657,7 @@ class CG2Encryptor:
         elif self.algorithm == "AES-256-CTR":
             base_nonce = os.urandom(16)
         else:
-            raise ValueError(f"Algoritmo não suportado: {self.algorithm}")
+            raise ValueError(f"Algoritmo nÃ£o suportado: {self.algorithm}")
         
         # Header
         header = CG2Header(
@@ -658,10 +670,12 @@ class CG2Encryptor:
         aad = header.pack()
         
         # Chaves
-        enc_key = mk
-        mac_key = None
+        enc_key: SecureBytes = mk
+        mac_key: Optional[SecureBytes] = None
         if self.algorithm == "AES-256-CTR":
-            enc_key, mac_key = _split_enc_mac_keys(mk)
+            ek, mkh = _split_enc_mac_keys(bytes(mk.view()))
+            enc_key = SecureBytes(ek)
+            mac_key = SecureBytes(mkh)
         
         return CG2Context(
             algorithm=self.algorithm,
@@ -688,7 +702,7 @@ class CG2Encryptor:
         elif algorithm == "AES-256-CTR":
             return AESCTRProcessor()
         else:
-            raise ValueError(f"Algoritmo não suportado: {algorithm}")
+            raise ValueError(f"Algoritmo nÃ£o suportado: {algorithm}")
     
     def _create_footer_handler(self) -> FooterHandler:
         """Factory para handler de footer."""
@@ -717,17 +731,27 @@ class CG2Decryptor:
     ) -> Path | bool:
         """Descriptografa arquivo CG2."""
         
-        # Verifica expiração
+        # Verifica expiraÃ§Ã£o
         if self.header.exp_ts is not None and time.time() > self.header.exp_ts:
             raise PermissionError("File expired")
         
-        # Deriva chaves
-        mk = derive_key(password, self.header.kdf)
-        enc_key = mk
-        mac_key = None
+        # Deriva chaves (SecureBytes) e obtÃ©m salt do Argon2
+        try:
+            salt_hex = self.header.kdf.get("salt")
+            salt_bytes = bytes.fromhex(salt_hex) if isinstance(salt_hex, str) else (
+                bytes(salt_hex) if isinstance(salt_hex, (bytes, bytearray)) else b""
+            )
+        except Exception:
+            salt_bytes = b""
+
+        mk = derive_key_sb(password, self.header.kdf)
+        enc_key: SecureBytes = mk
+        mac_key: Optional[SecureBytes] = None
         if self.header.alg == "AES-256-CTR":
-            enc_key, mac_key = _split_enc_mac_keys(mk)
-        
+            ek, mkh = _split_enc_mac_keys(mk.view())
+            enc_key = SecureBytes(ek)
+            mac_key = SecureBytes(mkh)
+
         ctx = CG2Context(
             algorithm=self.header.alg,
             master_key=mk,
@@ -735,8 +759,8 @@ class CG2Decryptor:
             mac_key=mac_key,
             base_nonce=self.header.nonce,
             header_aad=self.header_aad,
-            salt=b"",  # não usado em decrypt
-            profile=SecurityProfile.BALANCED,  # não usado em decrypt
+            salt=b"",  # nÃ£o usado em decrypt
+            profile=SecurityProfile.BALANCED,  # nÃ£o usado em decrypt
             pad_block_size=0,
             original_extension="",
             expiration_ts=self.header.exp_ts
@@ -770,7 +794,7 @@ class CG2Decryptor:
                         if not len_bytes:
                             raise ValueError("Footer ausente (arquivo possivelmente truncado)")
                         
-                        # Verifica se é magic de footer
+                        # Verifica se Ã© magic de footer
                         if len_bytes in (NAME_MAGIC, END_MAGIC):
                             f.seek(f.tell() - 4)
                             exp_chunks, exp_total_from_footer, ext_from_name = self.footer_handler.read_footer(
@@ -800,7 +824,7 @@ class CG2Decryptor:
                     
                 else:
                     # AES-CTR + HMAC
-                    h = py_hmac.new(mac_key, digestmod="sha256")
+                    h = py_hmac.new(bytes(mac_key.view()), digestmod="sha256")
                     h.update(self.header_aad)
                     
                     # Inicializa processador CTR
@@ -853,13 +877,13 @@ class CG2Decryptor:
             return True
 
         if not verify_only and out_f is not None and exp_total_from_footer is not None:
-            # out_f pode já estar fechado no finally acima; só reabra pelo caminho abaixo.
+            # out_f pode jÃ¡ estar fechado no finally acima; sÃ³ reabra pelo caminho abaixo.
             if exp_total_from_footer < total_written:
                 with out_path.open("rb+") as tf:
                     tf.truncate(exp_total_from_footer)
             out_f = None
         
-        # Renomeia com extensão correta se NAM0 presente
+        # Renomeia com extensÃ£o correta se NAM0 presente
         if not verify_only and ext_from_name:
             want = ext_from_name if ext_from_name.startswith(".") else f".{ext_from_name}"
             cur = out_path.suffix
@@ -871,13 +895,13 @@ class CG2Decryptor:
                 except Exception:
                     pass
         
-        # Garante criação do arquivo quando plaintext tem 0 bytes
+        # Garante criaÃ§Ã£o do arquivo quando plaintext tem 0 bytes
         if not verify_only and not out_path.exists():
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.touch()
         
         logger.info(
-            "Decrypted CG2 %s → %s (%s, chunks=%d)",
+            "Decrypted CG2 %s â†’ %s (%s, chunks=%d)",
             in_path.name,
             out_path.name,
             self.header.alg,
@@ -896,7 +920,7 @@ class CG2Decryptor:
         elif algorithm == "AES-256-CTR":
             return AESCTRProcessor()
         else:
-            raise ValueError(f"Algoritmo não suportado: {algorithm}")
+            raise ValueError(f"Algoritmo nÃ£o suportado: {algorithm}")
     
     def _create_footer_handler(self) -> FooterHandler:
         """Factory para handler de footer."""
@@ -905,9 +929,9 @@ class CG2Decryptor:
         else:
             return CTRFooterHandler(self.processor)
 
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #                       COMPATIBILITY FUNCTIONS
-# ════════════════════════════════════════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 def encrypt_to_cg2(
     in_path: str | Path,
@@ -921,8 +945,8 @@ def encrypt_to_cg2(
     pad_block: int = 0,
 ) -> Path:
     """
-    Criptografa em streaming para CG2 com header autenticado e rodapé.
-    Mantém assinatura idêntica à original para total compatibilidade.
+    Criptografa em streaming para CG2 com header autenticado e rodapÃ©.
+    MantÃ©m assinatura idÃªntica Ã  original para total compatibilidade.
     """
     in_path = Path(in_path)
     out_path = Path(out_path)
@@ -947,12 +971,12 @@ def decrypt_from_cg2(
 ) -> Path | bool:
     """
     Descriptografa/verifica CG2 (streaming).
-    Mantém assinatura idêntica à original para total compatibilidade.
+    MantÃ©m assinatura idÃªntica Ã  original para total compatibilidade.
     """
     in_path = Path(in_path)
     out_path = Path(out_path)
     
-    # Lê header
+    # LÃª header
     hdr, aad, off, _ext_legacy_ignored = read_header(in_path)
     
     decryptor = CG2Decryptor(hdr, aad)
@@ -964,3 +988,4 @@ def decrypt_from_cg2(
         verify_only=verify_only,
         progress_cb=progress_cb
     )
+

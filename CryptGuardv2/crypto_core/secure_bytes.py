@@ -1,98 +1,360 @@
-# crypto_core/secure_bytes.py
+# secure_bytes.py
+"""Secure bytes container with guaranteed memory cleanup and optional memory locking."""
 from __future__ import annotations
 
 import ctypes
-from typing import Union
+import platform
+import sys
+import threading
+import warnings
+from typing import Callable, Optional, Union, Final
 
+# Type alias for byte-like objects
 BytesLike = Union[bytes, bytearray, memoryview]
 
+# Constants
+MIN_LOCK_SIZE: Final[int] = 4096  # Minimum size to attempt memory locking
 
-def _secure_memzero(buf: bytearray) -> None:
+
+def secure_memzero(buf: bytearray) -> None:
     """
-    Zera o conteúdo de um bytearray de forma mais confiável possível:
-    - Tenta usar a API do Windows (RtlSecureZeroMemory) se disponível;
-    - Caso contrário, cai para ctypes.memset;
-    - Em último caso, zera por loop.
+    Zero memory buffer in a way that resists compiler optimization.
+    
+    Tries in order:
+    1. Windows: RtlSecureZeroMemory (guaranteed no optimization)
+    2. POSIX: explicit_bzero when available
+    3. Generic: ctypes.memset with compiler barrier
+    4. Fallback: manual loop with volatile-like access pattern
+    
+    Args:
+        buf: Buffer to zero. Safe to pass empty buffer.
     """
     if not buf:
         return
+    
     n = len(buf)
+    
     try:
-        # Endereço do buffer subjacente
+        # Get buffer address for ctypes operations
         addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
-        # Windows: RtlSecureZeroMemory (se existir)
-        try:
-            _rtl = ctypes.windll.kernel32.RtlSecureZeroMemory  # type: ignore[attr-defined]
-            _rtl.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
-            _rtl.restype = ctypes.c_void_p
-            _rtl(addr, n)
-            return
-        except Exception:
-            pass  # nosec B110 (fallback intencional; caminho alternativo abaixo)
-        # Fallback genérico
+        
+        # Windows: RtlSecureZeroMemory
+        if platform.system() == "Windows":
+            try:
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                rtl_zero = kernel32.RtlSecureZeroMemory
+                rtl_zero.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+                rtl_zero.restype = ctypes.c_void_p
+                rtl_zero(addr, n)
+                return
+            except (AttributeError, OSError):
+                pass  # Fall through to next method
+        
+        # Linux/BSD: explicit_bzero
+        if hasattr(ctypes, "CDLL"):
+            for lib_name in ("libc.so.6", "libc.so.7", "libc.dylib", "libSystem.dylib"):
+                try:
+                    libc = ctypes.CDLL(lib_name)
+                    if hasattr(libc, "explicit_bzero"):
+                        libc.explicit_bzero.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+                        libc.explicit_bzero.restype = None
+                        libc.explicit_bzero(addr, n)
+                        return
+                except (OSError, AttributeError):
+                    continue
+        
+        # Generic: memset with attempt at compiler barrier
         ctypes.memset(addr, 0, n)
+        
+        # Try to prevent optimization by accessing Python internals
+        # This creates a side effect that may prevent dead store elimination
+        try:
+            _ = ctypes.c_int.in_dll(ctypes.pythonapi, "Py_OptimizeFlag")
+        except (AttributeError, ValueError):
+            pass
+            
     except Exception:
-        # Último recurso
-        for i in range(n):
-            buf[i] = 0
+        pass  # Fall through to manual zeroing
+    
+    # Last resort: manual zeroing with forced memory access
+    for i in range(n):
+        buf[i] = 0
+        # Force memory access to prevent optimization
+        _ = buf[i]
+
+
+def try_lock_memory(buf: bytearray) -> bool:
+    """
+    Attempt to lock memory pages to prevent swapping.
+    
+    Args:
+        buf: Buffer to lock in memory
+        
+    Returns:
+        True if successfully locked, False otherwise
+    """
+    if not buf or len(buf) < MIN_LOCK_SIZE:
+        return False
+    
+    try:
+        addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
+        size = len(buf)
+        
+        if platform.system() == "Windows":
+            try:
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                # VirtualLock returns non-zero on success
+                result = kernel32.VirtualLock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+                return bool(result)
+            except (AttributeError, OSError):
+                return False
+        else:
+            # POSIX systems: try mlock
+            for lib_name in ("libc.so.6", "libc.so.7", "libc.dylib", "libSystem.dylib"):
+                try:
+                    libc = ctypes.CDLL(lib_name)
+                    if hasattr(libc, "mlock"):
+                        libc.mlock.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+                        libc.mlock.restype = ctypes.c_int
+                        # mlock returns 0 on success
+                        result = libc.mlock(addr, size)
+                        return result == 0
+                except (OSError, AttributeError):
+                    continue
+    except Exception:
+        pass
+    
+    return False
+
+
+def try_unlock_memory(buf: bytearray) -> bool:
+    """
+    Attempt to unlock previously locked memory pages.
+    
+    Args:
+        buf: Buffer to unlock
+        
+    Returns:
+        True if successfully unlocked, False otherwise
+    """
+    if not buf:
+        return False
+    
+    try:
+        addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
+        size = len(buf)
+        
+        if platform.system() == "Windows":
+            try:
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                result = kernel32.VirtualUnlock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
+                return bool(result)
+            except (AttributeError, OSError):
+                return False
+        else:
+            # POSIX systems: try munlock
+            for lib_name in ("libc.so.6", "libc.so.7", "libc.dylib", "libSystem.dylib"):
+                try:
+                    libc = ctypes.CDLL(lib_name)
+                    if hasattr(libc, "munlock"):
+                        libc.munlock.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+                        libc.munlock.restype = ctypes.c_int
+                        result = libc.munlock(addr, size)
+                        return result == 0
+                except (OSError, AttributeError):
+                    continue
+    except Exception:
+        pass
+    
+    return False
 
 
 class SecureBytes:
     """
-    Contêiner simples para bytes sensíveis.
-
-    - Armazena o conteúdo em um `bytearray` interno.
-    - `to_bytes()` devolve uma CÓPIA (bytes) — após `clear()`, levanta `ValueError`.
-    - `clear()` zera o buffer em memória e invalida leituras futuras.
-    - `cleared` indica se o conteúdo já foi limpo.
-
-    Observações:
-    - Não faz mlock/VirtualLock: fora do escopo do projeto em Python puro.
-    - Foco aqui é semântica correta + limpeza explícita e previsível.
+    Secure container for sensitive byte data with guaranteed cleanup.
+    
+    Features:
+    - Internal mutable buffer (bytearray) for secure zeroing
+    - Optional memory locking to prevent swap (best-effort)
+    - Thread-safe operations with RLock
+    - Context manager support for automatic cleanup
+    - No information leakage through repr/str
+    
+    Usage:
+        # Basic usage
+        sb = SecureBytes(b"secret_key")
+        view = sb.view()  # Get read-only view without copy
+        sb.clear()  # Securely zero the memory
+        
+        # With context manager
+        with SecureBytes(b"temporary_secret") as sb:
+            view = sb.view()
+            # Use the secret
+        # Automatically cleared when exiting context
+        
+        # Callback pattern for temporary access
+        sb.with_bytes(lambda b: process(b))
     """
-
-    __slots__ = ("_buf", "_closed")
-
-    def __init__(self, data: BytesLike):
+    
+    __slots__ = ("_buf", "_cleared", "_locked", "_lock", "__weakref__")
+    
+    def __init__(self, data: BytesLike, *, lock_memory: bool = True) -> None:
+        """
+        Initialize SecureBytes with sensitive data.
+        
+        Args:
+            data: Bytes to protect. Must not be empty.
+            lock_memory: Whether to attempt locking pages in memory.
+            
+        Raises:
+            TypeError: If data is not bytes/bytearray/memoryview
+            ValueError: If data is empty
+        """
+        # Convert input to bytes
         if isinstance(data, memoryview):
-            data = data.tobytes()
+            if data.c_contiguous:
+                data = data.tobytes()
+            else:
+                data = bytes(data)
         elif isinstance(data, bytearray):
-            # Fazemos uma cópia para evitar aliasing com referências externas.
+            # Make a copy to avoid external aliasing
             data = bytes(data)
         elif not isinstance(data, bytes):
-            raise TypeError("SecureBytes espera bytes/bytearray/memoryview")
+            raise TypeError(f"SecureBytes requires bytes/bytearray/memoryview, got {type(data).__name__}")
+        
+        if len(data) == 0:
+            raise ValueError("SecureBytes cannot be empty")
+        
+        # Initialize state
         self._buf = bytearray(data)
-        self._closed = False
-
+        self._cleared = False
+        self._locked = False
+        self._lock = threading.RLock()
+        
+        # Attempt to lock memory if requested
+        if lock_memory and len(self._buf) >= MIN_LOCK_SIZE:
+            self._locked = try_lock_memory(self._buf)
+    
+    def view(self) -> memoryview:
+        """
+        Get a read-only memory view of the data without copying.
+        
+        Returns:
+            Read-only memoryview of the internal buffer.
+            
+        Raises:
+            ValueError: If already cleared
+        """
+        with self._lock:
+            if self._cleared:
+                raise ValueError("SecureBytes already cleared")
+            return memoryview(self._buf).toreadonly()
+    
+    def with_bytes(self, callback: Callable[[bytes], None]) -> None:
+        """
+        Execute callback with a temporary bytes copy.
+        Best-effort cleanup releases the reference immediately after use.
+        
+        Args:
+            callback: Function to call with bytes copy
+        
+        Raises:
+            ValueError: If already cleared
+        """
+        with self._lock:
+            if self._cleared:
+                raise ValueError("SecureBytes already cleared")
+            
+            # Create temporary copy for the callback
+            temp = bytes(self._buf)
+            try:
+                callback(temp)
+            finally:
+                # Bytes are immutable; we cannot securely zero them.
+                # Drop the reference as soon as possible.
+                try:
+                    del temp
+                except Exception:
+                    pass
+    
     def to_bytes(self) -> bytes:
         """
-        Retorna uma cópia dos bytes originais.
-
-        Após `clear()`, levanta `ValueError` para evitar uso acidental de
-        dados que já deveriam estar fora de memória.
+        DEPRECATED: Get a copy of the bytes.
+        
+        Warning: This creates a copy that won't be securely cleared.
+        Use view() or with_bytes() instead.
+        
+        Returns:
+            Copy of the internal bytes
+            
+        Raises:
+            ValueError: If already cleared
         """
-        if self._closed:
-            raise ValueError("SecureBytes already cleared")
-        return bytes(self._buf)
-
+        warnings.warn(
+            "to_bytes() creates an insecure copy. Use view() or with_bytes() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        with self._lock:
+            if self._cleared:
+                raise ValueError("SecureBytes already cleared")
+            return bytes(self._buf)
+    
     def clear(self) -> None:
         """
-        Zeroiza o buffer interno e invalida leituras futuras.
-        Idempotente: múltiplas chamadas não causam erro.
+        Securely zero the internal buffer and mark as cleared.
+        
+        This method is idempotent - calling it multiple times is safe.
+        If memory was locked, attempts to unlock it.
         """
-        if not self._closed:
-            _secure_memzero(self._buf)
-            self._buf.clear()
-            self._closed = True
-
+        with self._lock:
+            if not self._cleared:
+                # Zero the buffer
+                secure_memzero(self._buf)
+                
+                # Unlock memory if it was locked
+                if self._locked:
+                    try_unlock_memory(self._buf)
+                    self._locked = False
+                
+                # Clear the buffer and mark as cleared
+                self._buf.clear()
+                self._cleared = True
+    
     @property
     def cleared(self) -> bool:
-        """Compat: indica se os bytes já foram limpos/descartados."""
-        return self._closed
-
+        """Check if the bytes have been cleared."""
+        with self._lock:
+            return self._cleared
+    
+    def __enter__(self) -> SecureBytes:
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type: type, exc_val: Exception, exc_tb: object) -> None:
+        """Context manager exit - ensures cleanup."""
+        self.clear()
+    
+    def __del__(self) -> None:
+        """Destructor - ensures cleanup even if not explicitly cleared."""
+        try:
+            self.clear()
+        except Exception:
+            pass  # Best effort in destructor
+    
     def __len__(self) -> int:
-        return 0 if self._closed else len(self._buf)
-
+        """Get length of data, or 0 if cleared."""
+        with self._lock:
+            return 0 if self._cleared else len(self._buf)
+    
     def __repr__(self) -> str:
-        state = "cleared" if self._closed else f"{len(self)} bytes"
-        return f"<SecureBytes {state}>"
+        """Safe representation that doesn't leak information."""
+        return "<SecureBytes ***>"
+    
+    def __str__(self) -> str:
+        """Safe string representation that doesn't leak information."""
+        return "<SecureBytes ***>"
+
+
+# Export public API
+__all__ = ["SecureBytes", "secure_memzero", "try_lock_memory", "try_unlock_memory"]

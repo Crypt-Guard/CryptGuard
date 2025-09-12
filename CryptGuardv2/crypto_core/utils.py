@@ -5,7 +5,6 @@ import os
 import time
 import zipfile
 import tempfile
-import random
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -13,13 +12,15 @@ try:
     from .factories import decrypt, encrypt  # password: str
 except Exception:  # pragma: no cover
     encrypt = decrypt = None  # type: ignore[assignment]
+from .algorithms import normalize_algo
 
 def pack_enc_zip(
     inputs: Iterable[str | Path],
     out_zip: str | Path,
-    password: str,
+    password: str | bytes,
     *,
     algo: str = "AESG",
+    flatten: bool = False,
 ) -> str:
     out_zip_p = Path(out_zip)
     out_zip_p.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +32,7 @@ def pack_enc_zip(
                 for f in p.rglob("*"):
                     if f.is_file():
                         # armazena com caminho relativo à pasta-base
-                        z.write(f, f.relative_to(p).as_posix())
+                        z.write(f, (f.name if flatten else f.relative_to(p).as_posix()))
             elif p.is_file():
                 z.write(p, p.name)
             else:
@@ -42,10 +43,9 @@ def pack_enc_zip(
         encrypt(str(out_zip_p), password, algo=algo, out_path=str(cg2_path))
     else:
         from .cg2_ops import encrypt_to_cg2
-        alg_map = {"AESG": "AES-256-GCM", "ACTR": "AES-256-CTR",
-                   "XC20": "XChaCha20-Poly1305", "CH20": "ChaCha20-Poly1305"}
-        pwd = password.encode("utf-8")
-        encrypt_to_cg2(str(out_zip_p), str(cg2_path), pwd, alg=alg_map.get(algo, algo))
+        pwd = password.encode("utf-8") if isinstance(password, str) else password
+        human = normalize_algo(algo)
+        encrypt_to_cg2(str(out_zip_p), str(cg2_path), pwd, alg=human)
     return str(cg2_path)
 
 def _safe_extract(zf: zipfile.ZipFile, out_dir: Path) -> None:

@@ -14,8 +14,16 @@ def init_db():
     """Inicializa o banco de dados com as tabelas necessárias"""
     db_path = get_db_path()
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=5, isolation_level=None)
     cursor = conn.cursor()
+    # PRAGMAs de robustez (best-effort)
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.execute("PRAGMA temp_store=MEMORY;")
+    except Exception:
+        pass
 
     # Cria a tabela tries se não existir
     cursor.execute("""
@@ -33,7 +41,7 @@ def init_db():
 def record_failed_attempt(file_path: str):
     """Registra uma tentativa falha e atualiza o timestamp."""
     init_db()
-    with sqlite3.connect(get_db_path(), timeout=5) as conn:
+    with sqlite3.connect(get_db_path(), timeout=5, isolation_level=None) as conn:
         cur = conn.cursor()
         cur.execute(
             """
@@ -51,7 +59,7 @@ def check_password_attempts(file_path: str, max_attempts: int = 3) -> bool:
     """Verifica se o arquivo ainda pode ser descriptografado"""
     try:
         init_db()
-        with sqlite3.connect(get_db_path(), timeout=5) as conn:
+        with sqlite3.connect(get_db_path(), timeout=5, isolation_level=None) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT attempts FROM tries WHERE file_path = ?", (file_path,))
             result = cursor.fetchone()
@@ -65,7 +73,7 @@ def check_password_attempts(file_path: str, max_attempts: int = 3) -> bool:
 def reset_failed_attempts(file_path: str) -> None:
     """Reseta/limpa as tentativas registradas para um arquivo."""
     init_db()
-    with sqlite3.connect(get_db_path(), timeout=5) as conn:
+    with sqlite3.connect(get_db_path(), timeout=5, isolation_level=None) as conn:
         cur = conn.cursor()
         cur.execute("DELETE FROM tries WHERE file_path = ?", (file_path,))
         # ...no explicit commit needed due to context manager...

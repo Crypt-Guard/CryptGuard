@@ -23,13 +23,8 @@ except ImportError:  # fallback (caso precise manter compat em runtime parcial)
 
 __all__ = ["encrypt", "decrypt", "SecurityProfile", "LOG_PATH"]
 
-# Mapeamento de códigos curtos -> nomes internos
-ALG_MAP = {
-    "AESG": "AES-256-GCM",
-    "ACTR": "AES-256-CTR",
-    "XC20": "XChaCha20-Poly1305",
-    "CH20": "ChaCha20-Poly1305",
-}
+# Mapeamento de códigos curtos -> nomes internos (fonte única em algorithms)
+from .algorithms import SHORT_TO_HUMAN as ALG_MAP, normalize_algo
 
 def _compat_kwargs(kwargs: dict) -> dict:
     if "algo" not in kwargs and "alg" in kwargs:
@@ -65,7 +60,7 @@ def encrypt(in_path: str,
     Wrapper compatível: exige 'algo' como keyword, aceita 'out_path'.
     Gera .cg2 se out_path ausente.
     """
-    algo = ALG_MAP.get(algo, algo)
+    algo = normalize_algo(algo)
     pwd = password.encode() if isinstance(password, str) else password
     dst = out_path or str(Path(in_path).with_suffix(".cg2"))
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
@@ -82,10 +77,36 @@ def decrypt(cg2_path: str,
     Retorna caminho de saída ou 'OK'/None em verify_only.
     """
     pwd = password.encode() if isinstance(password, str) else password
-    if verify_only:
-        ok = decrypt_from_cg2(cg2_path, pwd, verify_only=True)
-        return "OK" if ok else None
     dst = out_path or _guess_out_path(str(cg2_path))
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
-    res = decrypt_from_cg2(cg2_path, pwd, out_path=dst)
+    if verify_only:
+        # cg2_ops expects (in_path, out_path, password, ...)
+        ok = decrypt_from_cg2(cg2_path, dst, pwd, verify_only=True)
+        return "OK" if ok else None
+    # Route to core impl with correct parameter order
+    res = decrypt_from_cg2(cg2_path, dst, pwd, verify_only=False)
     return res or dst
+
+# ----------------------------------------------------------------------------
+# Override wrappers to route via factories (v5 router)
+from .factories import encrypt as _encrypt_factory, decrypt as _decrypt_factory  # noqa: E402
+
+def encrypt(in_path: str,
+            password: Union[str, bytes],
+            *, algo: str,
+            out_path: Optional[str] = None) -> str:  # type: ignore[no-redef]
+    pwd = password.encode() if isinstance(password, str) else password
+    dst = out_path or str(Path(in_path).with_suffix(".cg2"))
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    return _encrypt_factory(in_path, pwd, algo=algo, out_path=dst)
+
+
+def decrypt(cg2_path: str,
+            password: Union[str, bytes],
+            *, out_path: Optional[str] = None,
+            verify_only: bool = False) -> Optional[str]:  # type: ignore[no-redef]
+    pwd = password.encode() if isinstance(password, str) else password
+    dst = out_path or _guess_out_path(str(cg2_path))
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    res = _decrypt_factory(cg2_path, pwd, out_path=dst, verify_only=verify_only)
+    return None if verify_only else (res or dst)

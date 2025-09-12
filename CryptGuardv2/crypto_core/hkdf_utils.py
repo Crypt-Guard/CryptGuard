@@ -13,8 +13,22 @@ from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from .secure_bytes import SecureBytes
+from typing import Union
 
 
-def derive_keys(master: SecureBytes, *, info: bytes, salt: bytes) -> tuple[bytes, bytes]:
-    k = HKDF(algorithm=SHA256(), length=64, salt=salt, info=info).derive(master.to_bytes())
-    return k[:32], k[32:]  # enc_key, hmac_key
+def _as_bytes(data: Union[SecureBytes, bytes, bytearray, memoryview]) -> bytes:
+    if isinstance(data, SecureBytes):
+        return bytes(data.view())
+    if isinstance(data, memoryview):
+        return data.tobytes() if not data.c_contiguous else bytes(data)
+    return bytes(data)
+
+
+def derive_keys(
+    master: Union[SecureBytes, bytes, bytearray, memoryview],
+    *,
+    info: bytes,
+    salt: bytes | None,
+) -> tuple[bytes, bytes]:
+    k = HKDF(algorithm=SHA256(), length=64, salt=salt, info=info).derive(_as_bytes(master))
+    return k[:32], k[32:]

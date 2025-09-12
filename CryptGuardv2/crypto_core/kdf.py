@@ -1,49 +1,49 @@
 from __future__ import annotations
-
-import os
-
 from argon2 import low_level as _argon
+from .secure_bytes import SecureBytes
 
+def _coerce_salt(params) -> bytes:
+    salt = params.get("salt")
+    if isinstance(salt, str):
+        salt = bytes.fromhex(salt)
+    if not isinstance(salt, (bytes, bytearray)) or len(salt) < 16:
+        raise ValueError("salt must be >=16 bytes")
+    return bytes(salt)
 
-def derive_key(password, params, length: int = 32) -> bytes:
-    """Deriva chave via Argon2id (32 bytes por padrão), aceitando password str/bytes e params CG2.
-
-    params deve conter ao menos: {name, salt, time_cost, memory_cost, parallelism}
-    - name é ignorado (normalizamos para Argon2id)
-    - salt pode vir como hex str ou bytes
-    """
-    # 1) password sempre bytes
+def derive_key_sb(password: SecureBytes | bytes | str, params, length: int = 32) -> SecureBytes:
+    """Nova API: retorna SecureBytes."""
+    # password → SecureBytes
     if isinstance(password, str):
-        password = password.encode("utf-8")
-
-    # 2) normaliza params
-    if isinstance(params, bytes | bytearray):
-        # suporte legado: params é o salt bruto
-        salt = bytes(params)
-        t = int(os.getenv("CG2_ARGON_T", 3))
-        m = int(os.getenv("CG2_ARGON_M", 1024 * 1024))
-        p = int(os.getenv("CG2_ARGON_P", os.cpu_count() or 2))
+        _pwd_bytes = password.encode()
     else:
-        # name é aceito mas não altera o tipo (forçamos Argon2id)
-        salt_hex = params["salt"] if isinstance(params.get("salt"), str) else params["salt"].hex()
-        salt = bytes.fromhex(salt_hex)
-        t = int(params.get("time_cost", 3))
-        m = int(params.get("memory_cost", 1024 * 1024))
-        p = int(params.get("parallelism", os.cpu_count() or 2))
+        _pwd_bytes = password
+    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(_pwd_bytes)  # type: ignore[arg-type]
+    salt = _coerce_salt(params)
+    t = int(params.get("time_cost", 2))
+    m = int(params.get("memory_cost", 64 * 1024))
+    p = int(params.get("parallelism", 2))
 
-    # 3) Argon2id sempre — usar chamadas POSICIONAIS (API do low_level)
-    return _argon.hash_secret_raw(password, salt, t, m, p, length, _argon.Type.ID)
+    out: bytes | None = None
+    def _derive(pwd_bytes: bytes):
+        nonlocal out
+        out = _argon.hash_secret_raw(pwd_bytes, salt, t, m, p, length, _argon.Type.ID)
 
-def generate_key_from_password(pswd_sb, salt: bytes, params: dict):
-    # Aceita SecureBytes ou bytes
-    if hasattr(pswd_sb, "to_bytes"):
-        pw = pswd_sb.to_bytes()
-    else:
-        pw = pswd_sb if isinstance(pswd_sb, bytes | bytearray) else bytes(pswd_sb)
-    key = derive_key(pw, {**params, "salt": salt.hex()})
-    return key, params
+    pwd_sb.with_bytes(_derive)
+    return SecureBytes(out)
 
+# Compat — legado que retorna bytes (use apenas durante a migração)
+def derive_key(password, params, length: int = 32) -> bytes:
+    sb = derive_key_sb(password, params, length)
+    try:
+        return bytes(sb.view())  # evita cópia extra grande
+    finally:
+        sb.clear()
 
-# compat: metadata.py espera derive_meta_key
+# Compat com metadata.py
 def derive_meta_key(password, params, length: int = 32) -> bytes:
     return derive_key(password, params, length)
+
+# Função usada por argon_utils.generate_key_from_password()
+def generate_key_from_password(pswd_sb, salt: bytes, params: dict):
+    k = derive_key_sb(pswd_sb, {**params, "salt": salt.hex()})
+    return k, params

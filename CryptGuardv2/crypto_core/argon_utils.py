@@ -16,10 +16,12 @@ from argon2.low_level import Type, hash_secret_raw
 from .key_obfuscator import KeyObfuscator
 from .secure_bytes import SecureBytes
 from .security_warning import warn
+from .paths import BASE_DIR
+from .kdf import generate_key_from_password as _kdf_generate
 
 logger = logging.getLogger("crypto_core")
 
-CALIB_PATH = Path.home() / ".my_encryptor" / "argon_calib.json"
+CALIB_PATH = BASE_DIR / "argon_calib.json"
 _KEY_LEN = 32
 _DEFAULT = dict(time_cost=3, memory_cost=128 * 1024, parallelism=4)
 
@@ -65,46 +67,33 @@ def generate_key_from_password(
     params: dict | None = None,
 ):
     """
-    Deriva chave de 32 B via Argon2id.
-    Retorna **KeyObfuscator** (já mascarado) + dicionário de parâmetros usados.
+    Deriva chave de 32 B via Argon2id e retorna KeyObfuscator + params utilizados.
 
-    Nota: a limpeza (pwd_sb.clear()) é agora responsabilidade do chamador,
-    garantindo que o objeto não seja reutilizado após ter sido zerado.
+    Implementação delega a crypto_core.kdf.generate_key_from_password
+    para derivação (fonte única), aplicando mascaramento via KeyObfuscator.
     """
-    p = dict(params or load_calibrated_params() or _DEFAULT)
-    p = _sanitize_params(p)
+    p_in = dict(params or load_calibrated_params() or _DEFAULT)
+    p = _sanitize_params(p_in)
     if p["time_cost"] < 2:
-        warn("Argon2 time_cost MUITO baixo (<2) – segurança reduzida", sev="MEDIUM")
+        warn("Argon2 time_cost MUITO baixo (<2) — segurança reduzida", sev="MEDIUM")
 
     # Validate salt
-    if not isinstance(salt, bytes | bytearray) or len(salt) < _MIN_SALT_LEN:
+    if not isinstance(salt, (bytes, bytearray)) or len(salt) < _MIN_SALT_LEN:
         raise ValueError("salt must be at least 16 bytes")
 
+    # Ajuste de memória/LANEs para caber no ambiente atual
     need = p["memory_cost"] * 1024
     if need > _available_ram() // 2:
         warn("Reduzindo memory_cost para caber em RAM", sev="LOW")
-        while need > _available_ram() // 2 and p["memory_cost"] > 8 * 1024:
+        while need > _available_ram() // 2 and p["memory_cost"] > _MIN_MEM_KIB:
             p["memory_cost"] //= 2
             need = p["memory_cost"] * 1024
-        # Re-adjust lanes if memory reduced too much
         if p["memory_cost"] < 8 * p["parallelism"]:
             p["parallelism"] = max(1, p["memory_cost"] // 8) or 1
 
-    raw = hash_secret_raw(
-        secret=pwd_sb.to_bytes(),
-        salt=salt,
-        time_cost=p["time_cost"],
-        memory_cost=p["memory_cost"],
-        parallelism=p["parallelism"],
-        hash_len=_KEY_LEN,
-        type=Type.ID,
-    )
-    # Minimize lifetime of the raw key bytes
-    sec = SecureBytes(raw)
-    del raw
-    obf = KeyObfuscator(sec)
-    obf.obfuscate()
-    return obf, p
+    sec_sb, used = _kdf_generate(pwd_sb, salt, p)
+    obf = KeyObfuscator(sec_sb, auto_rotate=True)
+    return obf, used
 
 
 def calibrate_kdf(target_time: float = 1.0) -> dict:

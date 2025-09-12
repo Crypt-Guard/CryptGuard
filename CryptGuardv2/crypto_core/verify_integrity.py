@@ -1,28 +1,20 @@
 """
-Verifica a integridade de arquivos .cg2 via AEAD/footer (sem descriptografar payload).
+Verify integrity for CG2 files (legacy v1–v4 and v5) without decrypting plaintext.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from .cg2_ops import decrypt_from_cg2
 from .fileformat import is_cg2_file
+from .factories import decrypt as _decrypt
 
 
 def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=None) -> bool:
-    """Valida integridade/expiração para CG2.
+    """Return True if the file authenticates; False otherwise.
 
-    Args:
-        enc_path: caminho para arquivo `.cg2`.
-        password: senha (str ou bytes).
-        profile_hint: ignorado aqui (mantido por compatibilidade).
-
-    Returns:
-        True se as tags (e expiração do header) forem válidas; False caso contrário.
-
-    Levanta:
-        ValueError: se o arquivo não for CG2.
+    For v5 this uses SecretStream verify-only, for legacy it routes to the
+    legacy decryptor with verify_only.
     """
     p = Path(enc_path)
     pwd = password.encode() if isinstance(password, str) else password
@@ -31,7 +23,7 @@ def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=N
         raise ValueError("Not a CG2 file")
 
     try:
-        # Em CG2, a verificação é feita via AEAD/rodapé (verify_only=True)
-        return bool(decrypt_from_cg2(p, "", pwd, verify_only=True))
+        _decrypt(p, pwd, out_path=str(p.with_suffix("")), verify_only=True)
+        return True
     except Exception:
         return False

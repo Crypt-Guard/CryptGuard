@@ -9,44 +9,58 @@ if TYPE_CHECKING:
     from .config import SecurityProfile  # noqa: F401
 
 
-_LOGICAL_TO_HUMAN = {
-    "AESG": "AES-256-GCM",
-    "ACTR": "AES-256-CTR",
-    "XC20": "XChaCha20-Poly1305",
-    "CH20": "ChaCha20-Poly1305",
-}
+# Algorithm normalization kept for backward compatibility (unused in v5)
 
-def _normalize_algo(a: str) -> str:
-    up = (a or "").strip().upper()
-    if up in _LOGICAL_TO_HUMAN:
-        return _LOGICAL_TO_HUMAN[up]
-    if a in _LOGICAL_TO_HUMAN.values():
-        return a
-    raise ValueError(f"Algoritmo não suportado: {a!r}. Use AESG|ACTR|XC20|CH20.")
+# New v5 routing utilities
+from .fileformat_v5 import read_header_version_any as _read_ver_any
 
 def encrypt(
     in_path: str | _Path,
     password: str | bytes,
     *,
-    algo: str,
+    algo: str,  # ignored in v5 (kept for compatibility)
     out_path: str | _Path,
     profile: "SecurityProfile" | None = None,  # noqa: UP037
     expires_at: int | None = None,
     progress_cb=None,
     pad_block: int = 0,
+    kdf_profile: str | None = None,
+    padding: str | None = None,
 ) -> str:
-    from .cg2_ops import encrypt_to_cg2 as _enc_cg2
+    # Force v5 encryption via SecretStream (PyNaCl required)
+    # UI-supplied 'algo' is ignored; always XChaCha20-Poly1305 SecretStream.
+    from .xchacha_stream import XChaChaStream
+
     if isinstance(password, str):
         password = password.encode()
     src = _Path(in_path)
     dst = _Path(out_path)
     if dst.suffix.lower() != ".cg2":
         dst = dst.with_suffix(".cg2")
-    if profile is None:
-        from .config import SecurityProfile
-        profile = SecurityProfile.BALANCED
-    human = _normalize_algo(algo)
-    res = _enc_cg2(src, dst, password, human, profile, expires_at, progress_cb=progress_cb, pad_block=pad_block)
+
+    # Resolve padding policy preference
+    pad_policy = None
+    if isinstance(padding, str):
+        p = padding.strip().lower()
+        if p in ("off", "4k", "16k"):
+            pad_policy = p
+    if pad_policy is None:
+        # Map pad_block to the new padding policy: off/4k/16k
+        if pad_block in (4096, 4 * 1024):
+            pad_policy = "4k"
+        elif pad_block in (16384, 16 * 1024):
+            pad_policy = "16k"
+        else:
+            pad_policy = "off"
+
+    # Resolve KDF profile
+    kprof = (kdf_profile or "INTERACTIVE").upper()
+    if kprof not in ("INTERACTIVE", "SENSITIVE"):
+        kprof = "INTERACTIVE"
+
+    res = XChaChaStream().encrypt_file(
+        src, password, out_path=str(dst), kdf_profile=kprof, padding=pad_policy
+    )
     return str(_Path(res).resolve())
 
 def decrypt(
@@ -57,15 +71,27 @@ def decrypt(
     verify_only: bool = False,
     progress_cb=None,
 ) -> str | None:
-    from .cg2_ops import decrypt_from_cg2 as _dec_cg2
     src = _Path(in_path)
     dst = _Path(out_path)
     if isinstance(password, str):
         password = password.encode()
-    res = _dec_cg2(src, dst, password, verify_only=verify_only, progress_cb=progress_cb)
-    if verify_only:
-        return None
-    return str(_Path(res).resolve())
+
+    try:
+        ver = _read_ver_any(src)
+    except Exception:
+        ver = 0
+
+    if ver >= 5:
+        from .xchacha_stream import XChaChaStream
+        res = XChaChaStream().decrypt_file(src, password, out_path=str(dst), verify_only=verify_only)
+        return None if verify_only else str(_Path(res).resolve())
+    else:
+        # legacy v1–v4
+        from .legacy.decrypt_legacy import decrypt_file as _dec_legacy
+        res = _dec_legacy(src, password, out_path=str(dst), verify_only=verify_only)
+        if verify_only:
+            return None
+        return str(_Path(res).resolve())
 
 def Encrypt(*args, **kwargs):
     if "algo" not in kwargs and "alg" in kwargs:
