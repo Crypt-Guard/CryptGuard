@@ -40,6 +40,7 @@ from enum import Enum
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Optional, Protocol, Tuple, TypeVar
+from crypto_core.secure_bytes import SecureBytes
 
 # ─── Verificação de dependências com versões mínimas ───────────────────────
 REQUIRED_DEPS = {
@@ -58,9 +59,13 @@ def check_dependencies():
             mod = __import__(IMPORT_NAME.get(pkg, pkg.replace("-", "_")))
             # Verifica versão se disponível
             if hasattr(mod, "__version__"):
-                from packaging import version
-                if version.parse(mod.__version__) < version.parse(min_version):
-                    missing.append(f"{pkg}>={min_version}")
+                try:
+                    from packaging import version
+                    if version.parse(mod.__version__) < version.parse(min_version):
+                        missing.append(f"{pkg}>={min_version}")
+                except Exception:
+                    # If 'packaging' is not available, skip strict version check
+                    pass
         except ImportError:
             missing.append(f"{pkg}>={min_version}")
     
@@ -75,6 +80,7 @@ import argon2.low_level as _argon2
 import psutil
 from argon2.low_level import Type as _ArgonType
 from cryptography.exceptions import InvalidTag
+from crypto_core.logger import SecureFormatter
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -124,6 +130,14 @@ if platform.system() == "Windows":
 #                              TYPE DEFINITIONS
 # ════════════════════════════════════════════════════════════════════════════
 
+# Coloque no topo de vault.py, antes de usar:
+HEADER_FMT = ">4sB16s24sHIB"
+HEADER_STRUCT = struct.Struct(HEADER_FMT)
+HEADER_LEN = HEADER_STRUCT.size          # 52
+# Usar literal para evitar NameError antes da definição de Config
+HMAC_LEN = 32  # Igual a Config.HMAC_SIZE
+TOTAL_HEADER = HEADER_LEN + HMAC_LEN     # 84
+
 T = TypeVar("T")
 
 class StorageBackend(Protocol):
@@ -171,22 +185,14 @@ class VaultHeader:
     
     @classmethod
     def unpack(cls, data: bytes, hmac_key: bytes) -> VaultHeader:
-        """Deserializa e valida header."""
-        if len(data) < 68:  # 4+1+16+24+2+4+1+32
+        if len(data) < TOTAL_HEADER:
             raise CorruptVault("Header too small")
-        
-        hdr, mac = data[:68-32], data[68-32:68]
+        hdr = data[:HEADER_LEN]
+        mac = data[HEADER_LEN:TOTAL_HEADER]
         if not hmac.compare_digest(mac, hmac.new(hmac_key, hdr, hashlib.sha256).digest()):
             raise WrongPassword("Senha incorreta")
-        
-        magic, ver, salt, nonce, t, m, p = struct.unpack(">4sB16s24sHIB", hdr)
-        return cls(
-            magic=magic,
-            version=ver,
-            salt=salt,
-            nonce=nonce,
-            kdf=KDFParams(t, m, p)
-        )
+        magic, ver, salt, nonce, t, m, p = HEADER_STRUCT.unpack(hdr)
+        return cls(magic=magic, version=ver, salt=salt, nonce=nonce, kdf=KDFParams(t, m, p))
 
 @dataclass
 class VaultEntry:
@@ -527,22 +533,35 @@ class CryptoEngine:
             self.backend = "chacha20"
             self.nonce_len = 12
     
+    def gen_nonce(self) -> bytes:
+        """Gera nonce apropriado ao backend em uso."""
+        if self.backend in ("xchacha20", "nacl"):
+            return secrets.token_bytes(24)
+        # ChaCha20-Poly1305 IETF: 12 bytes
+        return secrets.token_bytes(12)
+
+    def encrypt_with_nonce(self, nonce: bytes, plaintext: bytes, aad: bytes = b"") -> bytes:
+        """Cifra usando um nonce fornecido e retorna apenas o ciphertext."""
+        if self.backend == "xchacha20":
+            return XChaCha20Poly1305(bytes(self.key)).encrypt(nonce, plaintext, aad)
+        elif self.backend == "nacl":
+            return nacl_xch_encrypt(plaintext, aad, nonce, bytes(self.key))
+        else:
+            # Para ChaCha20-Poly1305 (12B), usa os 12 primeiros bytes do nonce
+            use_nonce = nonce[:12] if len(nonce) >= 12 else nonce
+            return ChaCha20Poly1305(bytes(self.key)).encrypt(use_nonce, plaintext, aad)
+
     def encrypt(self, plaintext: bytes, aad: bytes = b"") -> Tuple[bytes, bytes]:
         """Encripta dados retornando (nonce, ciphertext)."""
-        if self.backend == "xchacha20":
-            nonce = secrets.token_bytes(24)
-            ct = XChaCha20Poly1305(bytes(self.key)).encrypt(nonce, plaintext, aad)
-        elif self.backend == "nacl":
-            nonce = secrets.token_bytes(24)
-            ct = nacl_xch_encrypt(plaintext, aad, nonce, bytes(self.key))
-        else:
-            nonce = secrets.token_bytes(12)
-            # Padding para manter compatibilidade de formato
-            full_nonce = nonce + secrets.token_bytes(12)
-            ct = ChaCha20Poly1305(bytes(self.key)).encrypt(nonce, plaintext, aad)
-            nonce = full_nonce
-        
-        return nonce, ct
+        # Gera nonce e aplica compatibilidade de armazenamento (24B no header)
+        raw_nonce = self.gen_nonce()
+        stored_nonce = (
+            raw_nonce + (b"\x00" * 12)
+            if self.backend == "chacha20" and len(raw_nonce) == 12
+            else raw_nonce
+        )
+        ct = self.encrypt_with_nonce(stored_nonce, plaintext, aad)
+        return stored_nonce, ct
     
     def decrypt(self, nonce: bytes, ciphertext: bytes, aad: bytes = b"") -> bytes:
         """Decripta dados."""
@@ -954,15 +973,23 @@ class VaultManager:
             # Serializa índice vazio
             serialized = self.serializer.serialize(self.index.entries)
             
-            # Encripta
-            nonce, ciphertext = self.crypto.encrypt(serialized)
-            header.nonce = nonce
-            
-            # Monta blob final
-            header_bytes = header.pack(hmac_key)
-            final_blob = header_bytes + ciphertext
-            
-            # Salva
+            # Encripta vinculando o header cru como AAD
+            nonce = self.crypto.engine.gen_nonce()
+            if self.crypto.engine.backend == "chacha20" and len(nonce) == 12:
+                nonce = nonce + (b"\x00" * 12)
+            hdr = HEADER_STRUCT.pack(
+                Config.MAGIC,
+                Config.VERSION,
+                salt,
+                nonce,
+                self.kdf_params.time_cost,
+                self.kdf_params.memory_cost,
+                self.kdf_params.parallelism,
+            )
+            ciphertext = self.crypto.engine.encrypt_with_nonce(nonce, serialized, aad=hdr)
+            # MAC do header e gravação
+            mac = self.crypto.compute_hmac(hdr)
+            final_blob = hdr + mac + ciphertext
             self.storage.save(final_blob)
             
             log = _get_logger()
@@ -981,12 +1008,12 @@ class VaultManager:
             
             # Carrega dados
             blob = self.storage.load()
-            if not blob or len(blob) < 68:
+            if not blob or len(blob) < TOTAL_HEADER:
                 raise FileNotFoundError("Vault inexistente ou vazio")
             
             # Parse header temporário para obter salt
-            header_raw = blob[:68]
-            _, _, salt, _, t, m, p = struct.unpack(">4sB16s24sHIB", header_raw[:36])
+            header_raw = blob[:TOTAL_HEADER]
+            _, _, salt, _, t, m, p = struct.unpack(">4sB16s24sHIB", header_raw[:HEADER_LEN])
             
             # Deriva chaves
             self.kdf_params = KDFParams(t, m, p)
@@ -1005,14 +1032,22 @@ class VaultManager:
             self.crypto = VaultCrypto(enc_key, hmac_key)
             
             # Decripta conteúdo
-            ciphertext = blob[68:]
+            ciphertext = blob[TOTAL_HEADER:]
+            aad = header_raw[:HEADER_LEN]  # vincula header cru como AAD
             try:
-                plaintext = self.crypto.decrypt(header.nonce, ciphertext)
+                plaintext = self.crypto.decrypt(header.nonce, ciphertext, aad=aad)
             except InvalidTag:
                 # Adiciona delay para evitar timing attack
                 time.sleep(secrets.randbelow(100) / 1000)
-                self.rate_limiter.record_failure("vault_open")
-                raise WrongPassword("Senha incorreta")
+                # Fallback para arquivos antigos (sem AAD)
+                try:
+                    plaintext = self.crypto.decrypt(header.nonce, ciphertext, aad=b"")
+                    # Migra e regrava usando AAD
+                    self.index.entries = self.serializer.deserialize(plaintext)
+                    self._save()
+                except InvalidTag:
+                    self.rate_limiter.record_failure("vault_open")
+                    raise WrongPassword("Senha incorreta")
             
             # Deserializa
             self.index.entries = self.serializer.deserialize(plaintext)
@@ -1114,8 +1149,8 @@ class VaultManager:
         
         # Valida senha antiga
         blob = self.storage.load()
-        header_raw = blob[:68]
-        _, _, salt, _, _, _, _ = struct.unpack(">4sB16s24sHIB", header_raw[:36])
+        header_raw = blob[:TOTAL_HEADER]
+        _, _, salt, _, _, _, _ = struct.unpack(">4sB16s24sHIB", header_raw[:HEADER_LEN])
         
         # Tenta derivar com senha antiga
         _, old_hmac = derive_keys(old_password, salt, self.kdf_params)
@@ -1151,33 +1186,45 @@ class VaultManager:
         # Usa salt existente ou novo
         if salt is None:
             blob = self.storage.load()
-            if blob and len(blob) >= 68:
-                _, _, salt, _, _, _, _ = struct.unpack(">4sB16s24sHIB", blob[:36])
+            if blob and len(blob) >= TOTAL_HEADER:
+                _, _, salt, _, _, _, _ = struct.unpack(">4sB16s24sHIB", blob[:HEADER_LEN])
             else:
                 salt = secrets.token_bytes(Config.SALT_SIZE)
         
         # Serializa índice
         serialized = self.serializer.serialize(self.index.entries)
         
-        # Encripta
-        nonce, ciphertext = self.crypto.encrypt(serialized)
-        
-        # Cria header
-        header = VaultHeader(
-            magic=Config.MAGIC,
-            version=Config.VERSION,
-            salt=salt,
-            nonce=nonce,
-            kdf=self.kdf_params
+        # Encripta vinculando o header cru como AAD
+        nonce = self.crypto.engine.gen_nonce()
+        if self.crypto.engine.backend == "chacha20" and len(nonce) == 12:
+            nonce = nonce + (b"\x00" * 12)
+        hdr = HEADER_STRUCT.pack(
+            Config.MAGIC,
+            Config.VERSION,
+            salt,
+            nonce,
+            self.kdf_params.time_cost,
+            self.kdf_params.memory_cost,
+            self.kdf_params.parallelism,
         )
+        ciphertext = self.crypto.engine.encrypt_with_nonce(nonce, serialized, aad=hdr)
         
-        # Monta blob final
-        header_bytes = header.pack(self.crypto.hmac_key)
-        final_blob = header_bytes + ciphertext
-        
-        # Salva
+        # Header “cru” (sem MAC)
+        hdr = HEADER_STRUCT.pack(
+            Config.MAGIC,
+            Config.VERSION,
+            salt,
+            nonce,
+            self.kdf_params.time_cost,
+            self.kdf_params.memory_cost,
+            self.kdf_params.parallelism,
+        )
+        # MAC com chave HMAC “desmascarada” (a própria classe cuida disso)
+        mac = self.crypto.compute_hmac(hdr)
+
+        final_blob = hdr + mac + ciphertext
         self.storage.save(final_blob)
-        
+
         log = _get_logger()
         log.info(f"Vault salvo: {len(self.index.entries)} arquivos, {len(final_blob)} bytes")
     
@@ -1207,7 +1254,7 @@ def _get_logger() -> logging.Logger:
             encoding="utf-8"
         )
         
-        formatter = logging.Formatter(
+        formatter = SecureFormatter(
             "%(asctime)s │ %(levelname)s │ %(message)s"
         )
         handler.setFormatter(formatter)

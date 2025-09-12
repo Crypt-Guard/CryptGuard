@@ -12,7 +12,6 @@ import locale
 import os
 import shutil
 import sys
-import tempfile
 import time
 import zipfile
 from collections.abc import Callable
@@ -41,7 +40,6 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QFont,
-    QIcon,
     QLinearGradient,
     QPainter,
     QPalette,
@@ -82,10 +80,10 @@ except Exception:
     pass
 
 # ─── Imports do Projeto ──────────────────────────────────────────────────────
-# Primeiro, verificamos qual versão usar (v2 refatorada ou original)
+from crypto_core.factories import encrypt as cg_encrypt, decrypt as cg_decrypt
+
+# Imports do Vault com fallback apropriado
 try:
-    # Tenta importar versões refatoradas
-    from crypto_core.cg2_ops import encrypt_to_cg2, decrypt_from_cg2
     from vault import (
         Config,
         CorruptVault,
@@ -98,9 +96,23 @@ try:
         open_or_init_vault,
     )
     USING_V2 = True
-except ImportError:
-    # Fallback para versões originais
-    from crypto_core.cg2_ops import encrypt_to_cg2, decrypt_from_cg2
+except ImportError as e:
+    # Define classes mínimas para compatibilidade
+    class VaultLocked(Exception):
+        pass
+    
+    class AtomicStorageBackend:
+        def __init__(self, path):
+            self.path = Path(path)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        
+        def save(self, data: bytes):
+            self.path.write_bytes(data)
+        
+        def load(self) -> bytes:
+            return self.path.read_bytes() if self.path.exists() else b""
+    
+    # Re-importa com classes definidas
     from vault import (
         Config,
         CorruptVault,
@@ -117,7 +129,7 @@ except ImportError:
         class VaultLocked(Exception):
             pass
 
-from crypto_core import LOG_PATH, SecurityProfile
+from crypto_core import LOG_PATH
 from crypto_core.fileformat import is_cg2_file, read_header
 from crypto_core.logger import logger
 from crypto_core.utils import secure_delete, archive_folder
@@ -132,14 +144,7 @@ try:
     XCHACHA20_AVAILABLE = True
     ALGOS.append("XChaCha20-Poly1305")
 except ImportError:
-    XCHACHA20_AVAILABLE = False
-    # Tenta PyNaCl como fallback
-    try:
-        from nacl.bindings import crypto_aead_xchacha20poly1305_ietf_encrypt
-        XCHACHA20_AVAILABLE = True
-        ALGOS.append("XChaCha20-Poly1305")
-    except ImportError:
-        pass
+    XCHACHA20_AVAILABLE = False  # Legacy detection not used in v5 UI
 
 # ════════════════════════════════════════════════════════════════════════════
 #                              UI HELPERS (Estilo Antigo)
@@ -235,17 +240,13 @@ class CryptoWorker(QThread):
         operation: str,  # 'encrypt' ou 'decrypt'
         src_path: str,
         password: str,
-        algorithm: str = "AES-256-GCM",
-        profile: SecurityProfile = SecurityProfile.BALANCED,
         delete_flag: bool = False,
-        extra_params: Optional[dict] = None
+        extra_params: Optional[dict] = None,
     ):
         super().__init__()
         self.operation = operation
         self.src_path = src_path
         self.password = password
-        self.algorithm = algorithm
-        self.profile = profile
         self.delete_flag = delete_flag
         self.extra_params = extra_params or {}
         self._start_time = 0
@@ -282,29 +283,43 @@ class CryptoWorker(QThread):
         """Executa criptografia."""
         src = Path(self.src_path)
         out_path = self.extra_params.get("out_path", src.with_suffix(".cg2"))
-        
-        return Path(encrypt_to_cg2(
-            src,
-            out_path,
-            self.password.encode(),
-            self.algorithm,
-            self.profile,
-            exp_ts=self.extra_params.get("expires_at"),
-            progress_cb=progress_cb,
-            pad_block=self.extra_params.get("pad_block", 0)
-        ))
+        # Route via v5 factories; fixed algorithm, pass kdf profile and padding
+        try:
+            return Path(cg_encrypt(
+                in_path=str(src),
+                password=self.password.encode(),
+                algo="XC20",  # ignored; v5 fixed
+                out_path=str(out_path),
+                progress_cb=progress_cb,
+                kdf_profile=self.extra_params.get("kdf_profile", "INTERACTIVE"),
+                padding=self.extra_params.get("padding", "off"),
+            ))
+        except TypeError as e:
+            # Erro comum quando a instalação do PyNaCl/libsodium está quebrada ou
+            # houve mudança de assinatura inesperada.
+            msg = str(e)
+            if (
+                "crypto_secretstream_xchacha20poly1305_init_push" in msg and
+                "missing 1 required positional argument" in msg
+            ):
+                raise RuntimeError(
+                    "SecretStream init failed: PyNaCl/libsodium mismatch.\n"
+                    "Fix with:\n  pip install --force-reinstall pynacl\n"
+                    "If on Windows, ensure a recent libsodium is available."
+                ) from e
+            raise
     
     def _decrypt(self, progress_cb: Callable) -> Path:
         """Executa descriptografia."""
         src = Path(self.src_path)
         out_path = self.extra_params.get("out_path", src.with_suffix(""))
         
-        result = decrypt_from_cg2(
-            src,
-            out_path,
-            self.password.encode(),
+        result = cg_decrypt(
+            in_path=str(src),
+            password=self.password.encode(),
+            out_path=str(out_path),
             verify_only=False,
-            progress_cb=progress_cb
+            progress_cb=progress_cb,
         )
         
         return Path(result) if result else Path("")
@@ -402,17 +417,17 @@ class MainWindow(QWidget):
         lay_file.addWidget(self.file_input)
         lay_file.addWidget(btn_pick)
         
-        # Algoritmo (nome NOVO)
-        self.combo_algorithm = self._combo(ALGOS)
-        lay_alg = self._field("Algorithm", self.combo_algorithm)
+        # Algorithm (fixed for v5)
+        self.label_algorithm = QLabel("XChaCha20-Poly1305 (SecretStream)")
+        lay_alg = self._field("Algorithm", self.label_algorithm)
         
-        # Security Profile (nome NOVO)
-        self.combo_profile = self._combo([p.name.title() for p in SecurityProfile])
-        self.combo_profile.setCurrentIndex(1)  # Balanced
-        lay_prof = self._field("Security profile", self.combo_profile)
+        # KDF Profile (v5)
+        self.combo_profile = self._combo(["Interactive", "Sensitive"])  # v5 KDF profiles
+        self.combo_profile.setCurrentIndex(0)
+        lay_prof = self._field("KDF profile", self.combo_profile)
         
-        # Padding (nome NOVO)
-        self.combo_padding = self._combo(["Off", "4 KiB", "16 KiB", "64 KiB", "1 MiB"])
+        # Padding (v5)
+        self.combo_padding = self._combo(["Off", "4 KB", "16 KB"])
         self.combo_padding.setToolTip(
             "Adds zero padding per chunk to hide exact size in transit.\n"
             "The real size is restored on decrypt."
@@ -575,7 +590,7 @@ class MainWindow(QWidget):
     def _create_aliases(self):
         """Cria aliases para compatibilidade com nomes antigos."""
         self.file_line = self.file_input
-        self.cmb_alg = self.combo_algorithm
+        self.cmb_alg = None
         self.cmb_prof = self.combo_profile
         self.cmb_pad = self.combo_padding
         self.pwd = self.password_input
@@ -660,19 +675,22 @@ class MainWindow(QWidget):
                 self.status_bar.showMessage(f"{file_type} loaded via drag & drop: {path.name}")
     
     def _detect_algo(self, path: str):
-        """Auto-detecta algoritmo de arquivo CG2."""
+        """Detect CG2 version (v1–v4 legacy or v5) and update status."""
         try:
             src = Path(path)
             if not src.exists() or src.is_dir():
                 return
-            if is_cg2_file(src):
-                hdr, *_ = read_header(src)
-                idx = self.combo_algorithm.findText(hdr.alg)
-                if idx >= 0:
-                    self.combo_algorithm.setCurrentIndex(idx)
-                    self.status_bar.showMessage(f"Detected CG2 format: {hdr.alg}")
+            from crypto_core.fileformat_v5 import read_header_version_any
+            try:
+                ver = read_header_version_any(src)
+            except Exception:
+                return  # not a CG2 file; stay silent
+            if ver >= 5:
+                self.status_bar.showMessage("Detected CG2 v5")
+            else:
+                self.status_bar.showMessage("⚠️ Legacy CG2 format (read-only)")
         except Exception as e:
-            self.status_bar.showMessage(f"Could not detect algorithm: {e}")
+            self.status_bar.showMessage(f"Could not detect format: {e}")
     
     # ─────────────────────────────────────────────────────────────────────────
     #                               SLOTS
@@ -727,134 +745,117 @@ class MainWindow(QWidget):
     
     def _start_operation(self, operation: str):
         """Inicia operação de criptografia/descriptografia."""
-        # Habilita/desabilita controles baseado na operação
-        self.combo_algorithm.setEnabled(operation == "encrypt")
-        self.combo_padding.setEnabled(operation == "encrypt")
-        
-        # Validações
-        path = self.file_input.text()
-        pwd = self.password_input.text()
-        
-        if not path:
-            return self.status_bar.showMessage("Select a file first.")
-        if not pwd:
-            return self.status_bar.showMessage("Enter password.")
-        
-        self._is_encrypt = (operation == "encrypt")
-        self._original_path = path
-        src = path
-        self._tmp_zip = None
-        self._forced_out = ""
-        
-        src_path = Path(src)
-        
-        # Validação de pasta para decrypt
-        if src_path.is_dir():
-            if not self._is_encrypt:
-                QMessageBox.warning(self, "Invalid Selection", "Please select a file for decrypt/verify.")
-                return self.status_bar.showMessage("Select a file for decrypt/verify.")
-            if not self.check_archive.isChecked():
-                QMessageBox.information(
-                    self,
-                    "Auto-Archive",
-                    "Folders require ZIP archiving for encryption. Enabling automatically."
-                )
-                self.check_archive.setChecked(True)
-        
-        # Empacota pasta → ZIP temporário antes de cifrar
-        if self._is_encrypt and self.check_archive.isChecked() and src_path.is_dir():
-            try:
-                tmp_zip = archive_folder(src)
-                self._tmp_zip = tmp_zip
-                src = str(tmp_zip)
-                # Força nome de saída consistente com o nome da pasta
-                self._forced_out = str(Path(self.file_input.text()).with_suffix(".cg2"))
-                
-                # PATCH 7.1: Salva tamanho real do ZIP para progresso correto
-                self._operation_size = Path(tmp_zip).stat().st_size
-            except Exception as e:
-                return self.status_bar.showMessage(f"Zip error: {e}")
-        
-        # Total para barra de progresso
         try:
-            src_size = Path(src).stat().st_size
-        except FileNotFoundError:
-            if self._tmp_zip:
-                with contextlib.suppress(Exception):
-                    os.remove(self._tmp_zip)
-            return self.status_bar.showMessage(f"Source file not found: {src}")
-        except Exception as e:
-            if self._tmp_zip:
-                with contextlib.suppress(Exception):
-                    os.remove(self._tmp_zip)
-            return self.status_bar.showMessage(f"Error accessing file: {e}")
-        
-        # Algoritmo
-        algo_idx = self.combo_algorithm.currentIndex()
-        profile = list(SecurityProfile)[self.combo_profile.currentIndex()]
-        algo_names = {0: "AES-256-GCM", 1: "AES-256-CTR", 2: "ChaCha20-Poly1305"}
-        if XCHACHA20_AVAILABLE:
-            algo_names[3] = "XChaCha20-Poly1305"
-        alg_name = algo_names.get(algo_idx, "AES-256-GCM")
-        
-        if self._is_encrypt:
-            self.status_bar.showMessage(f"Encrypting with {alg_name} (CG2 format)")
-        else:
-            if is_cg2_file(src):
-                self.status_bar.showMessage("Decrypting CG2 format")
+            path = self.file_input.text().strip()
+            if not path:
+                self.status_bar.showMessage("Select a file first.")
+                return
+            pwd = self.password_input.text()
+            if not pwd:
+                self.status_bar.showMessage("Enter a password.")
+                return
+
+            self._is_encrypt = (operation == "encrypt")
+
+            self._original_path = path
+            src = path
+            self._tmp_zip = None
+            self._forced_out = ""
+            src_path = Path(src)
+
+            if src_path.is_dir():
+                if not self._is_encrypt:
+                    QMessageBox.warning(self, "Invalid Selection", "Please select a file for decrypt/verify.")
+                    self.status_bar.showMessage("Select a file for decrypt/verify.")
+                    return
+                if not self.check_archive.isChecked():
+                    QMessageBox.information(
+                        self,
+                        "Auto-Archive",
+                        "Folders require ZIP archiving for encryption. Enabling automatically."
+                    )
+                    self.check_archive.setChecked(True)
+
+            if self._is_encrypt and self.check_archive.isChecked() and src_path.is_dir():
+                try:
+                    tmp_zip = archive_folder(src)
+                    self._tmp_zip = tmp_zip
+                    src = str(tmp_zip)
+                    self._forced_out = str(Path(self.file_input.text()).with_suffix(".cg2"))
+                    self._operation_size = Path(tmp_zip).stat().st_size
+                except Exception as e:
+                    self.status_bar.showMessage(f"Zip error: {e}")
+                    return
+
+            try:
+                src_size = Path(src).stat().st_size
+            except Exception as e:
+                if self._tmp_zip:
+                    with contextlib.suppress(Exception):
+                        os.remove(self._tmp_zip)
+                self.status_bar.showMessage(f"Source access error: {e}")
+                return
+
+            alg_name = "XChaCha20-Poly1305 (SecretStream)"
+            kdf_profile = "INTERACTIVE" if self.combo_profile.currentText().lower().startswith("inter") else "SENSITIVE"
+
+            if self._is_encrypt:
+                self.status_bar.showMessage(f"Encrypting with {alg_name}")
             else:
-                self.status_bar.showMessage("Decrypting legacy format")
-        
-        delete_flag = self.check_delete.isChecked()
-        
-        # Parâmetros extras
-        extra: dict[str, Any] = {}
-        
-        if self._is_encrypt and self.check_expiration.isChecked():
-            qd = self.date_expiration.date()
-            exp_dt = datetime(qd.year(), qd.month(), qd.day(), tzinfo=UTC)
-            if exp_dt.date() < datetime.now(UTC).date():
-                return self.status_bar.showMessage("Expiration date cannot be in the past.")
-            extra["expires_at"] = int(exp_dt.timestamp())
-        
-        if self._is_encrypt:
-            pad_map = {"Off": 0, "4 KiB": 4096, "16 KiB": 16384, "64 KiB": 65536, "1 MiB": 1048576}
-            extra["pad_block"] = pad_map.get(self.combo_padding.currentText(), 0)
-            
-            # Output path
-            if self._forced_out:
-                extra["out_path"] = self._forced_out
-            else:
-                extra["out_path"] = str(Path(src).with_suffix(".cg2"))
-        
-        # Se não setamos _operation_size ainda, seta agora
-        if not hasattr(self, "_operation_size"):
-            self._operation_size = src_size
-        
-        self._toggle(False)
-        self.progress_bar.setMaximum(0)
-        self.progress_bar.setValue(0)
-        self.status_bar.showMessage("Deriving key (Argon2)…")
-        
-        # Cria e inicia worker
-        self.worker = CryptoWorker(
-            operation,
-            src,
-            pwd,
-            alg_name,
-            profile,
-            delete_flag,
-            extra
-        )
-        
-        self.worker.progress.connect(self._update_progress)
-        self.worker.finished.connect(self._operation_finished)
-        self.worker.error.connect(self._operation_error)
-        self.worker.start()
-        
-        # Limpa senha
-        self.password_input.clear()
-    
+                try:
+                    from crypto_core.fileformat_v5 import read_header_version_any
+                    ver = read_header_version_any(src)
+                    self.status_bar.showMessage(
+                        "Decrypting CG2 v5 (SecretStream)" if ver >= 5 else "Decrypting legacy CG2"
+                    )
+                except Exception:
+                    self.status_bar.showMessage("Decrypting (unknown format)")
+
+            delete_flag = self.check_delete.isChecked()
+            extra: dict[str, Any] = {}
+
+            if self._is_encrypt and self.check_expiration.isChecked():
+                qd = self.date_expiration.date()
+                exp_dt = datetime(qd.year(), qd.month(), qd.day(), tzinfo=UTC)
+                if exp_dt.date() < datetime.now(UTC).date():
+                    self.status_bar.showMessage("Expiration date cannot be in the past.")
+                    return
+                extra["expires_at"] = int(exp_dt.timestamp())
+
+            if self._is_encrypt:
+                pad_name = self.combo_padding.currentText().lower().replace(" ", "")
+                pad_map = {"off": "off", "4kb": "4k", "16kb": "16k"}
+                extra["padding"] = pad_map.get(pad_name, "off")
+                extra["kdf_profile"] = kdf_profile
+                extra["out_path"] = self._forced_out or str(Path(src).with_suffix(".cg2"))
+
+            if not hasattr(self, "_operation_size"):
+                self._operation_size = src_size
+
+            # Disable UI & prepare progress
+            self._toggle(False)
+            self.progress_bar.setMaximum(0)
+            self.progress_bar.setValue(0)
+            self.status_bar.showMessage("Deriving key (Argon2)…")
+
+            self.worker = CryptoWorker(
+                operation,
+                src,
+                pwd,
+                delete_flag,
+                extra
+            )
+            self.worker.progress.connect(self._update_progress)
+            self.worker.finished.connect(self._operation_finished)
+            self.worker.error.connect(self._operation_error)
+            self.worker.start()
+            self.password_input.clear()
+        except Exception as ex:
+            logger.exception("start_operation failure")
+            QMessageBox.critical(self, "Erro", f"Falha ao iniciar: {ex}")
+            self.status_bar.showMessage(f"Erro ao iniciar: {ex}", 10000)
+            self._toggle(True)
+
     def _verify_file(self):
         """Verifica integridade de arquivo criptografado."""
         path = self.file_input.text()
@@ -863,10 +864,8 @@ class MainWindow(QWidget):
         if not path or not pwd:
             return self.status_bar.showMessage("Select file and enter password.")
         
-        profile = list(SecurityProfile)[self.combo_profile.currentIndex()]
-        
         try:
-            if verify_integrity(path, pwd, profile):
+            if verify_integrity(path, pwd):
                 QMessageBox.information(self, "Verify", "Integridade OK.")
             else:
                 raise ValueError("Integridade falhou.")
@@ -904,7 +903,6 @@ class MainWindow(QWidget):
             self.btn_encrypt,
             self.btn_decrypt,
             self.btn_verify,
-            self.combo_algorithm,
             self.combo_profile,
             self.combo_padding,
             self.password_input,
@@ -1038,6 +1036,8 @@ class MainWindow(QWidget):
             msg = "Senha ou arquivo incorretos."
         elif "expired" in msg.lower():
             msg = "Arquivo expirado, não pode ser descriptografado."
+        if "PyNaCl/libsodium mismatch" in msg or "SecretStream init failed" in msg or "SecretStream API mismatch" in msg:
+            msg += "\nSugestão: pip install -U --force-reinstall 'pynacl>=1.5.0'"
         
         QMessageBox.critical(self, "Erro", msg)
         self.status_bar.showMessage(f"Error: {msg}", 10000)
@@ -1052,94 +1052,108 @@ class MainWindow(QWidget):
         finally:
             self._toggle(True)
     
-    # ─────────────────────────────────────────────────────────────────────────
-    #                          VAULT & DIALOGS
-    # ─────────────────────────────────────────────────────────────────────────
-    
-    def _open_vault(self):
-        """Abre diálogo do Vault."""
-        while True:
-            if self.vm is None:
-                pw, ok = QInputDialog.getText(
-                    self,
-                    "Vault",
-                    "Master-password:",
-                    QLineEdit.Password
-                )
-                if not ok or not pw:
-                    return
-                
+    # --- MOVIDO PARA CIMA & TORNADO NÃO BLOQUEANTE ---
+    def _secretstream_preflight(self, silent: bool = False) -> tuple[bool, str]:
+        """
+        Verifica se a API crypto_secretstream_xchacha20poly1305_init_push tem a
+        assinatura esperada (1 arg: key). Em versões legadas pode exigir 2 args
+        (header, key) ou outra forma – não suportada pelo xchacha_stream atual.
+        Retorna (ok, mensagem_de_erro_ou_vazia).
+        """
+        try:
+            import inspect, nacl
+            from nacl import bindings as nb
+            func = nb.crypto_secretstream_xchacha20poly1305_init_push
+            sig = inspect.signature(func)
+            # Assinatura moderna: (key: bytes) -> (state, header)
+            if len(sig.parameters) == 1:
+                # Teste rápido
                 try:
-                    # Obtém caminho do vault
-                    vault_path = Config.default_vault_path()
-                    
-                    if vault_path.exists() and vault_path.stat().st_size == 0:
-                        vault_path.unlink()
-                    
-                    exists = vault_path.exists()
-                    
-                    if not exists:
-                        # Cria novo vault
-                        if USING_V2:
-                            vm = VaultManager(AtomicStorageBackend(vault_path))
-                        else:
-                            # Implementação básica local para compatibilidade
-                            class SimpleBackend:
-                                def __init__(self, path):
-                                    self.path = Path(path)
-                                    self.path.parent.mkdir(parents=True, exist_ok=True)
-                                
-                                def save(self, data: bytes):
-                                    self.path.write_bytes(data)
-                                
-                                def load(self) -> bytes:
-                                    return self.path.read_bytes() if self.path.exists() else b""
-                            
-                            vm = VaultManager(storage=SimpleBackend(vault_path))
-                        
-                        vm.create(SecureMemory(pw))
-                        self.vm = vm
-                        self.status_bar.showMessage("Novo Vault criado com sucesso.", 8000)
+                    func(b"\x00" * 32)
+                except Exception:
+                    # Pode falhar por key não aleatória, ignoramos se TypeError não ocorre.
+                    pass
+                return True, ""
+            # Assinatura legada ou inesperada
+            msg = (
+                f"Incompatible SecretStream API (expected 1 param, got {len(sig.parameters)}). "
+                f"PyNaCl version: {getattr(nacl, '__version__', '?')}. "
+                "Upgrade with: pip install -U --force-reinstall 'pynacl>=1.5.0'"
+            )
+            if not silent:
+                QMessageBox.critical(self, "SecretStream API", msg)
+            return False, msg
+        except Exception as e:
+            return False, f"SecretStream preflight failed: {e}"
+
+    def _open_vault(self):
+        """Abre (ou cria) o Vault e mostra o diálogo de seleção de arquivo."""
+        while True:
+            pw, ok = QInputDialog.getText(
+                self,
+                "Vault Password",
+                "Digite a senha do Vault:",
+                QLineEdit.Password
+            )
+            if not ok or not pw:
+                return
+            try:
+                vault_path = Config.default_vault_path()
+                if vault_path.exists() and vault_path.stat().st_size == 0:
+                    vault_path.unlink()
+                exists = vault_path.exists()
+                if not exists:
+                    if USING_V2:
+                        vm = VaultManager(AtomicStorageBackend(vault_path))
                     else:
-                        self.vm = open_or_init_vault(pw, vault_path)
-                        self.status_bar.showMessage("Vault aberto com sucesso.", 8000)
-                
-                except CorruptVault:
-                    if QMessageBox.question(
-                        self,
-                        "Vault corrompido",
-                        "O arquivo vault3.dat parece corrompido.\nDeseja sobrescrevê-lo?",
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.No,
-                    ) == QMessageBox.Yes:
-                        vault_path.unlink(missing_ok=True)
-                        continue
-                    else:
-                        return
-                
-                except WrongPassword:
-                    QMessageBox.warning(self, "Vault", "Senha do Vault incorreta. Tente novamente.")
+                        class SimpleBackend:
+                            def __init__(self, path):
+                                self.path = Path(path)
+                                self.path.parent.mkdir(parents=True, exist_ok=True)
+                            def save(self, data: bytes):
+                                self.path.write_bytes(data)
+                            def load(self) -> bytes:
+                                return self.path.read_bytes() if self.path.exists() else b""
+                        vm = VaultManager(storage=SimpleBackend(vault_path))
+                    vm.create(SecureMemory(pw))
+                    self.vm = vm
+                    self.status_bar.showMessage("Novo Vault criado com sucesso.", 8000)
+                else:
+                    self.vm = open_or_init_vault(pw, vault_path)
+                    self.status_bar.showMessage("Vault aberto com sucesso.", 8000)
+            except CorruptVault:
+                if QMessageBox.question(
+                    self,
+                    "Vault corrompido",
+                    "O arquivo vault3.dat parece corrompido.\nDeseja sobrescrevê-lo?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                ) == QMessageBox.Yes:
+                    vault_path.unlink(missing_ok=True)
                     continue
-                
-                except VaultLocked as e:
-                    QMessageBox.warning(self, "Vault Bloqueado", str(e))
+                else:
                     return
-                
-                finally:
-                    pw = ""
-            
-            if self.vm is not None:
-                dlg = VaultDialog(self.vm, self)
-                dlg.file_selected.connect(
-                    lambda p: (
-                        self.file_input.setText(p),
-                        self._detect_algo(p),
-                        self.status_bar.showMessage("File selected from Vault."),
-                    )
-                )
-                dlg.exec()
+            except WrongPassword:
+                QMessageBox.warning(self, "Vault", "Senha do Vault incorreta. Tente novamente.")
+                continue
+            except VaultLocked as e:
+                QMessageBox.warning(self, "Vault Bloqueado", str(e))
+                return
+            finally:
+                pw = ""
             break
-    
+
+        if self.vm is not None:
+            dlg = VaultDialog(self.vm, self)
+            dlg.file_selected.connect(
+                lambda p: (
+                    self.file_input.setText(p),
+                    self._detect_algo(p),
+                    self.status_bar.showMessage("File selected from Vault."),
+                )
+            )
+            dlg.exec()
+
     def _change_vault_password(self):
         """Altera senha do vault."""
         if self.vm is None:
@@ -1237,13 +1251,13 @@ class MainWindow(QWidget):
             "About CryptGuardv2",
             "<h3>CryptGuardv2</h3>"
             "<p>Version 2.7.0</p>"
-            "<p>Secure file encryption with modern algorithms.</p>"
+            "<p>Secure file encryption with modern primitives.</p>"
             "<br>"
             "<p><b>Features:</b></p>"
             "<ul>"
-            "<li>AES-256-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305</li>"
-            "<li>Argon2id key derivation</li>"
-            "<li>Authenticated encryption (AEAD)</li>"
+            "<li>XChaCha20-Poly1305 (SecretStream) encryption</li>"
+            "<li>Argon2id key derivation with time-target profiles</li>"
+            "<li>Authenticated encryption (AEAD) with header-bound AAD</li>"
             "<li>Anti-truncation protection</li>"
             "<li>Optional padding for size obfuscation</li>"
             "<li>Secure Vault for encrypted files</li>"
@@ -1262,7 +1276,7 @@ class MainWindow(QWidget):
             "<p><b>To Encrypt:</b></p>"
             "<ol>"
             "<li>Select a file or folder</li>"
-            "<li>Choose algorithm and security level</li>"
+            "<li>KDF profile and padding are available under Options</li>"
             "<li>Enter a strong password</li>"
             "<li>Click Encrypt</li>"
             "</ol>"
@@ -1282,6 +1296,39 @@ class MainWindow(QWidget):
             "<li>Set expiration dates for sensitive files</li>"
             "</ul>"
         )
+
+    def _secretstream_preflight(self, silent: bool = False) -> tuple[bool, str]:
+        """
+        Verifica se a API crypto_secretstream_xchacha20poly1305_init_push tem a
+        assinatura esperada (1 arg: key). Em versões legadas pode exigir 2 args
+        (header, key) ou outra forma – não suportada pelo xchacha_stream atual.
+        Retorna (ok, mensagem_de_erro_ou_vazia).
+        """
+        try:
+            import inspect, nacl
+            from nacl import bindings as nb
+            func = nb.crypto_secretstream_xchacha20poly1305_init_push
+            sig = inspect.signature(func)
+            # Assinatura moderna: (key: bytes) -> (state, header)
+            if len(sig.parameters) == 1:
+                # Teste rápido
+                try:
+                    func(b"\x00" * 32)
+                except Exception:
+                    # Pode falhar por key não aleatória, ignoramos se TypeError não ocorre.
+                    pass
+                return True, ""
+            # Assinatura legada ou inesperada
+            msg = (
+                f"Incompatible SecretStream API (expected 1 param, got {len(sig.parameters)}). "
+                f"PyNaCl version: {getattr(nacl, '__version__', '?')}. "
+                "Upgrade with: pip install -U --force-reinstall 'pynacl>=1.5.0'"
+            )
+            if not silent:
+                QMessageBox.critical(self, "SecretStream API", msg)
+            return False, msg
+        except Exception as e:
+            return False, f"SecretStream preflight failed: {e}"
 
 # ════════════════════════════════════════════════════════════════════════════
 #                              MAIN ENTRY POINT
