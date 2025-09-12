@@ -157,23 +157,23 @@ For security issues, do not open a public issue — use **SECURITY.md**.
 
 ## 📜 License
 
-Apache License 2.0 — veja [`LICENSE`](./LICENSE).
+Apache License 2.0 — see [`LICENSE`](./LICENSE).
 
 ---
 
 ## 🛡️ Security Policy
 
-Consulte [`SECURITY.md`](./SECURITY.md).
+See [`SECURITY.md`](./SECURITY.md).
 
 ---
 
-## 📚 Changelog (resumo)
+## 📚 Changelog (summary)
 
 * **3.0**
 
-  * **Novo**: escritor único **XChaCha20-Poly1305 SecretStream**; header como **AAD**; `TAG_FINAL` com metadados autenticados; restauração automática de nome/ext; teto de **Pad size = 16 KiB**; perfis KDF **Interactive/Sensitive**; Vault com AAD + `SecureFormatter`.
-  * **Compat**: leitura de formatos antigos (v1–v4). Escrita sempre no novo formato.
-
+  * **New**: single writer **XChaCha20-Poly1305 SecretStream**; header as **AAD**; `TAG_FINAL` with authenticated metadata; automatic name/ext restoration; **Pad size ceiling = 16 KiB**; KDF profiles **Interactive/Sensitive**; Vault with AAD + `SecureFormatter`.
+  * **Compat**: reading old formats (v1–v4). Writing always in the new format.
+  
 * **2.7.0**
 
   * Multi-algorithm (AES-GCM / ChaCha20-Poly1305 / AES-CTR+HMAC), authenticated header/footer (`END0/NAM0`), initial Vault, padding up to **1 MiB**, etc.
