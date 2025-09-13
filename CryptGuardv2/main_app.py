@@ -293,6 +293,8 @@ class CryptoWorker(QThread):
                 progress_cb=progress_cb,
                 kdf_profile=self.extra_params.get("kdf_profile", "INTERACTIVE"),
                 padding=self.extra_params.get("padding", "off"),
+                keyfile=self.extra_params.get("keyfile"),
+                hide_filename=self.extra_params.get("hide_filename", False),
             ))
         except TypeError as e:
             # Erro comum quando a instalação do PyNaCl/libsodium está quebrada ou
@@ -320,6 +322,7 @@ class CryptoWorker(QThread):
             out_path=str(out_path),
             verify_only=False,
             progress_cb=progress_cb,
+            keyfile=self.extra_params.get("keyfile"),
         )
         
         return Path(result) if result else Path("")
@@ -482,6 +485,27 @@ class MainWindow(QWidget):
         self.btn_show_password.toggled.connect(self._toggle_password_visibility)
         lay_pwd.addWidget(self.btn_show_password)
 
+        # Keyfile (2FA)
+        self.check_keyfile = QCheckBox("Use keyfile")
+        self.keyfile_input = QLineEdit()
+        self.keyfile_input.setPlaceholderText("Pick a keyfile…")
+        self.keyfile_input.setReadOnly(True)
+        self.keyfile_input.setAcceptDrops(False)
+        self.keyfile_input.setMaximumWidth(360)
+        self.btn_pick_keyfile = AccentButton("Pick")
+        self.btn_pick_keyfile.clicked.connect(self._browse_keyfile)
+        self.check_keyfile.toggled.connect(self.keyfile_input.setEnabled)
+        self.check_keyfile.toggled.connect(self.btn_pick_keyfile.setEnabled)
+        self.keyfile_input.setEnabled(False)
+        self.btn_pick_keyfile.setEnabled(False)
+        lay_kfile = QHBoxLayout()
+        lay_kfile.addWidget(self.check_keyfile)
+        lay_kfile.addWidget(self.keyfile_input)
+        lay_kfile.addWidget(self.btn_pick_keyfile)
+
+        # Hide filename option (encrypt only)
+        self.check_hide_filename = QCheckBox("Hide filename (restore only extension)")
+
         
         # Options (nomes NOVOS)
         self.check_delete = QCheckBox("Secure-delete input after operation")
@@ -533,6 +557,8 @@ class MainWindow(QWidget):
         center.addLayout(lay_pad)
         center.addLayout(lay_exp)
         center.addLayout(lay_pwd)
+        center.addLayout(lay_kfile)
+        center.addWidget(self.check_hide_filename, 0, Qt.AlignLeft)
         center.addWidget(self.check_delete, 0, Qt.AlignLeft)
         center.addWidget(self.check_archive, 0, Qt.AlignLeft)
         center.addWidget(self.check_vault, 0, Qt.AlignLeft)
@@ -725,6 +751,13 @@ class MainWindow(QWidget):
                 if not self.check_archive.isChecked():
                     self.check_archive.setChecked(True)
     
+    def _browse_keyfile(self):
+        """Select keyfile path for 2FA."""
+        f, _ = QFileDialog.getOpenFileName(self, "Choose keyfile")
+        if f:
+            self.keyfile_input.setText(f)
+            self.status_bar.showMessage("Keyfile selected.")
+
     def _show_calendar_popup(self):
         """Mostra calendário do DateEdit."""
         if self.date_expiration.isEnabled():
@@ -814,6 +847,10 @@ class MainWindow(QWidget):
             delete_flag = self.check_delete.isChecked()
             extra: dict[str, Any] = {}
 
+            # Optional keyfile for both encrypt/decrypt
+            if self.check_keyfile.isChecked() and self.keyfile_input.text().strip():
+                extra["keyfile"] = self.keyfile_input.text().strip()
+
             if self._is_encrypt and self.check_expiration.isChecked():
                 qd = self.date_expiration.date()
                 exp_dt = datetime(qd.year(), qd.month(), qd.day(), tzinfo=UTC)
@@ -828,6 +865,7 @@ class MainWindow(QWidget):
                 extra["padding"] = pad_map.get(pad_name, "off")
                 extra["kdf_profile"] = kdf_profile
                 extra["out_path"] = self._forced_out or str(Path(src).with_suffix(".cg2"))
+                extra["hide_filename"] = self.check_hide_filename.isChecked()
 
             if not hasattr(self, "_operation_size"):
                 self._operation_size = src_size
@@ -865,7 +903,8 @@ class MainWindow(QWidget):
             return self.status_bar.showMessage("Select file and enter password.")
         
         try:
-            if verify_integrity(path, pwd):
+            kf = self.keyfile_input.text().strip() if self.check_keyfile.isChecked() else None
+            if verify_integrity(path, pwd, keyfile=kf):
                 QMessageBox.information(self, "Verify", "Integridade OK.")
             else:
                 raise ValueError("Integridade falhou.")
@@ -906,6 +945,10 @@ class MainWindow(QWidget):
             self.combo_profile,
             self.combo_padding,
             self.password_input,
+            self.check_keyfile,
+            self.keyfile_input,
+            self.btn_pick_keyfile,
+            self.check_hide_filename,
             self.check_delete,
             self.check_archive,
             self.check_vault,
@@ -1335,6 +1378,13 @@ class MainWindow(QWidget):
 # ════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    # Best-effort process hardening
+    try:
+        from crypto_core.memharden import harden_process_best_effort
+
+        harden_process_best_effort()
+    except Exception:
+        pass
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
