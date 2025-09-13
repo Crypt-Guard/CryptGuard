@@ -1314,55 +1314,63 @@ class MainWindow(QWidget):
             )
     def _show_about(self):
         """Mostra diálogo Sobre (paridade com main_app.py)."""
+        ver = getattr(self, "APP_VERSION", "3.0")
         QMessageBox.about(
             self,
-            "About CryptGuardv2",
-            "<h3>CryptGuardv2</h3>"
-            "<p>Version 2.7.0</p>"
-            "<p>Secure file encryption with modern primitives.</p>"
-            "<br>"
-            "<p><b>Features:</b></p>"
-            "<ul>"
-            "<li>XChaCha20-Poly1305 (SecretStream) encryption</li>"
-            "<li>Argon2id key derivation with time-target profiles</li>"
-            "<li>Authenticated encryption (AEAD) with header-bound AAD</li>"
-            "<li>Anti-truncation protection</li>"
-            "<li>Optional padding for size obfuscation</li>"
-            "<li>Secure Vault for encrypted files</li>"
-            "</ul>"
-            "<br>"
-            "<p>© 2024-2025 CryptGuard Team</p>"
+            "Sobre o CryptGuardv2",
+            (
+                "<h3>CryptGuardv2</h3>"
+                f"<p>Versão {ver}</p>"
+                "<p>Criptografia de arquivos e pastas com arquitetura moderna e auditável.</p>"
+                "<p><b>Destaques:</b></p>"
+                "<ul>"
+                "<li><b>Container v5</b> com AAD ligada ao cabeçalho e JSON canônico</li>"
+                "<li>Streaming <b>XChaCha20-Poly1305</b> (libsodium SecretStream)</li>"
+                "<li><b>Argon2id</b> com perfis por alvo de tempo</li>"
+                "<li>Escrita atômica e segura contra panes (tmp + fsync no diretório)</li>"
+                "<li><b>Padding</b> opcional para ofuscar tamanhos</li>"
+                "<li>Suporte a <b>senha + keyfile</b></li>"
+                "<li><b>Vault</b> para gerenciar itens criptografados</li>"
+                "<li>Logs com redação; verificação sem deixar plaintext</li>"
+                "</ul>"
+                "<p>© 2024–2025 CryptGuard Team</p>"
+            ),
         )
 
     def _show_help(self):
         """Mostra diálogo de ajuda (paridade com main_app.py)."""
         QMessageBox.information(
             self,
-            "Help",
-            "<h3>How to use CryptGuardv2</h3>"
-            "<br>"
-            "<p><b>To Encrypt:</b></p>"
-            "<ol>"
-            "<li>Select a file or folder</li>"
-            "<li>KDF profile and padding are available under Options</li>"
-            "<li>Enter a strong password</li>"
-            "<li>Click Encrypt</li>"
-            "</ol>"
-            "<br>"
-            "<p><b>To Decrypt:</b></p>"
-            "<ol>"
-            "<li>Select an encrypted .cg2 file</li>"
-            "<li>Enter the password</li>"
-            "<li>Click Decrypt</li>"
-            "</ol>"
-            "<br>"
-            "<p><b>Tips:</b></p>"
-            "<ul>"
-            "<li>Use strong passwords (12+ characters)</li>"
-            "<li>Store encrypted files in the Vault for extra security</li>"
-            "<li>Enable padding to hide file sizes</li>"
-            "<li>Set expiration dates for sensitive files</li>"
-            "</ul>"
+            "Ajuda",
+            (
+                "<h3>Como usar o CryptGuardv2 (formato v5)</h3>"
+                "<p><b>Criptografar:</b></p>"
+                "<ol>"
+                "<li>Selecione um arquivo ou pasta (arraste & solte ou <i>Selecionar…</i>).</li>"
+                "<li>Em <b>Opções</b>, defina:<br>"
+                " &nbsp;• <b>Perfil KDF</b>: <i>Interactive</i> (~350 ms) ou <i>Sensitive</i> (~700 ms)<br>"
+                " &nbsp;• <b>Padding</b>: off / 4k / 16k (oculta o tamanho exato)<br>"
+                " &nbsp;• <b>Ocultar nome do arquivo</b> (restaura só a extensão)<br>"
+                " &nbsp;• <b>Keyfile</b> (opcional, 2º fator)"
+                "</li>"
+                "<li>Digite uma senha forte (12+ caracteres ou frase longa).</li>"
+                "<li>Clique em <b>Criptografar</b>.</li>"
+                "</ol>"
+                "<p><b>Descriptografar:</b></p>"
+                "<ol>"
+                "<li>Selecione um arquivo <code>.cg2</code>.</li>"
+                "<li>Informe a senha (e o keyfile, se usado).</li>"
+                "<li>Clique em <b>Descriptografar</b>.</li>"
+                "</ol>"
+                "<p><b>Dicas e notas:</b></p>"
+                "<ul>"
+                "<li>AEAD em streaming (<i>XChaCha20-Poly1305 SecretStream</i>) impede truncamento/reordenação.</li>"
+                "<li>Padding oculta o tamanho; a decifragem volta ao tamanho original.</li>"
+                "<li>Escritas são atômicas (tmp + fsync). Sem deixar plaintext em falhas de autenticação.</li>"
+                "<li>Senhas/keyfiles perdidos não podem ser recuperados.</li>"
+                "<li>Use o <b>Vault</b> para organizar itens criptografados.</li>"
+                "</ul>"
+            ),
         )
 
     def _secretstream_preflight(self, silent: bool = False) -> tuple[bool, str]:
