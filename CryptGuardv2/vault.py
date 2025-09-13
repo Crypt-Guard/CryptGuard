@@ -1105,13 +1105,27 @@ class VaultManager:
         # Prepara destino com proteção contra path traversal
         dest_dir = Path(dest_dir).resolve()
         safe_name = Path(entry.label).name  # Remove qualquer path
+        # Sanitiza nome
+        safe_name = safe_name.replace("\x00", "_")
+        try:
+            safe_name = safe_name.encode('ascii', 'ignore').decode('ascii')
+        except Exception:
+            pass
+        if not safe_name or safe_name in ('.', '..'):
+            safe_name = f"file_{hashlib.sha256(entry.label.encode()).hexdigest()[:8]}"
         out_path = dest_dir / safe_name
         
         # Verifica se o caminho final está dentro do diretório destino
-        if not str(out_path.resolve()).startswith(str(dest_dir)):
-            raise ValueError("Tentativa de path traversal detectada")
+        try:
+            if not out_path.resolve().is_relative_to(dest_dir):
+                raise ValueError("Tentativa de path traversal detectada")
+        except AttributeError:
+            if not str(out_path.resolve()).startswith(str(dest_dir)):
+                raise ValueError("Tentativa de path traversal detectada")
         
         # Evita sobrescrita
+        if out_path.exists() and out_path.is_symlink():
+            raise ValueError("Destino é um link simbólico - operação bloqueada")
         counter = 1
         while out_path.exists():
             stem = out_path.stem

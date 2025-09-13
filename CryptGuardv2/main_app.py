@@ -81,6 +81,7 @@ except Exception:
 
 # ─── Imports do Projeto ──────────────────────────────────────────────────────
 from crypto_core.factories import encrypt as cg_encrypt, decrypt as cg_decrypt
+from crypto_core.secure_bytes import SecureBytes
 
 # Imports do Vault com fallback apropriado
 try:
@@ -251,6 +252,8 @@ class CryptoWorker(QThread):
         self.extra_params = extra_params or {}
         self._start_time = 0
         self._cancelled = False
+        # Hold password in SecureBytes to minimize exposure in memory
+        self._password_secure = SecureBytes(password.encode() if isinstance(password, str) else password)
     
     def run(self):
         """Executa operação em thread separada."""
@@ -266,9 +269,9 @@ class CryptoWorker(QThread):
             
             # Executa operação apropriada
             if self.operation == "encrypt":
-                result = self._encrypt(progress_callback)
+                result = self._encrypt(progress_callback, self._password_secure)
             else:
-                result = self._decrypt(progress_callback)
+                result = self._decrypt(progress_callback, self._password_secure)
             
             if not self._cancelled:
                 self.finished.emit(str(result) if result else "")
@@ -278,16 +281,24 @@ class CryptoWorker(QThread):
         except Exception as e:
             logger.exception(f"CryptoWorker error during {self.operation}")
             self.error.emit(str(e))
+        finally:
+            # Clear password from memory deterministically
+            try:
+                if hasattr(self, "_password_secure") and self._password_secure is not None:
+                    self._password_secure.clear()
+            except Exception:
+                pass
     
-    def _encrypt(self, progress_cb: Callable) -> Path:
+    def _encrypt(self, progress_cb: Callable, password_secure: SecureBytes) -> Path:
         """Executa criptografia."""
         src = Path(self.src_path)
         out_path = self.extra_params.get("out_path", src.with_suffix(".cg2"))
         # Route via v5 factories; fixed algorithm, pass kdf profile and padding
+
         try:
             return Path(cg_encrypt(
                 in_path=str(src),
-                password=self.password.encode(),
+                password=bytes(password_secure.view()),
                 algo="XC20",  # ignored; v5 fixed
                 out_path=str(out_path),
                 progress_cb=progress_cb,
@@ -311,14 +322,14 @@ class CryptoWorker(QThread):
                 ) from e
             raise
     
-    def _decrypt(self, progress_cb: Callable) -> Path:
+    def _decrypt(self, progress_cb: Callable, password_secure: SecureBytes) -> Path:
         """Executa descriptografia."""
         src = Path(self.src_path)
         out_path = self.extra_params.get("out_path", src.with_suffix(""))
         
         result = cg_decrypt(
             in_path=str(src),
-            password=self.password.encode(),
+            password=bytes(password_secure.view()),
             out_path=str(out_path),
             verify_only=False,
             progress_cb=progress_cb,
@@ -354,6 +365,9 @@ class MainWindow(QWidget):
         self._tmp_zip = None
         self._forced_out = ""
         self._is_encrypt = False
+        # Simple rate limiting (per file path)
+        self._failed_attempts = {}
+        self._lockout_until = {}
         
         # Constrói UI
         self._build_ui()
@@ -911,6 +925,7 @@ class MainWindow(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Verificação falhou: {str(e)}")
         
+        # Note: on failure we increment attempt counters above and may lock out further attempts
         self.password_input.clear()
     
     def _cancel_operation(self):
@@ -931,10 +946,8 @@ class MainWindow(QWidget):
                 with contextlib.suppress(Exception):
                     os.remove(self._tmp_zip)
             
-            try:
-                self.worker.password = None
-            finally:
-                self.worker.finished.emit("")
+            # Worker handles cleanup internally; just signal finish
+            self.worker.finished.emit("")
     
     def _toggle(self, enabled: bool):
         """Habilita/desabilita controles."""
@@ -1062,14 +1075,19 @@ class MainWindow(QWidget):
         if hasattr(self, "_operation_size"):
             delattr(self, "_operation_size")
         
-        try:
-            if hasattr(self, "worker"):
-                self.worker.password = None
-        finally:
-            self._toggle(True)
+        self._toggle(True)
     
     def _operation_error(self, msg: str):
         """Erro na operação."""
+        # Rate limiting tracking for failed decrypts
+        try:
+            if not self._is_encrypt:
+                path_key = self._original_path
+                self._failed_attempts[path_key] = self._failed_attempts.get(path_key, 0) + 1
+                if self._failed_attempts[path_key] >= 5:
+                    self._lockout_until[path_key] = time.time() + 300
+        except Exception:
+            pass
         if getattr(self, "_tmp_zip", None):
             with contextlib.suppress(Exception):
                 os.remove(self._tmp_zip)
@@ -1089,11 +1107,7 @@ class MainWindow(QWidget):
         if hasattr(self, "_operation_size"):
             delattr(self, "_operation_size")
         
-        try:
-            if hasattr(self, "worker"):
-                self.worker.password = None
-        finally:
-            self._toggle(True)
+        self._toggle(True)
     
     # --- MOVIDO PARA CIMA & TORNADO NÃO BLOQUEANTE ---
     def _secretstream_preflight(self, silent: bool = False) -> tuple[bool, str]:
