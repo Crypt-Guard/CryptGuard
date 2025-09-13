@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 CryptGuardv2 – secure GUI
 Versão com interface clássica e core refatorado compatível com vault_v2.py e cg2_ops_v2.py
@@ -58,6 +59,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStatusBar,
     QToolButton,
     QVBoxLayout,
@@ -351,8 +354,8 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("CryptGuardv2 – secure")
-        self.resize(940, 630)
-        self.setMinimumSize(940, 630)
+        self.resize(1024, 680)
+        self.setMinimumSize(1024, 680)
         
         # Aplica paleta antiga PRIMEIRO
         self._apply_palette_old_theme()
@@ -427,6 +430,8 @@ class MainWindow(QWidget):
         self.file_input.setPlaceholderText("Drop a file or click Select…")
         self.file_input.setReadOnly(True)
         self.file_input.setAcceptDrops(False)
+        self.file_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.file_input.setMinimumWidth(600)
         
         btn_pick = AccentButton("Select…")
         btn_pick.clicked.connect(self._browse_file)  # Slot NOVO
@@ -481,7 +486,8 @@ class MainWindow(QWidget):
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_input.setPlaceholderText("Password…")
-        self.password_input.setMaximumWidth(280)
+        self.password_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.password_input.setMinimumWidth(320)
         self.password_input.textChanged.connect(self._update_password_strength)
         
         self.strength_bar = QProgressBar()
@@ -505,7 +511,8 @@ class MainWindow(QWidget):
         self.keyfile_input.setPlaceholderText("Pick a keyfile…")
         self.keyfile_input.setReadOnly(True)
         self.keyfile_input.setAcceptDrops(False)
-        self.keyfile_input.setMaximumWidth(360)
+        self.keyfile_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.keyfile_input.setMinimumWidth(400)
         self.btn_pick_keyfile = AccentButton("Pick")
         self.btn_pick_keyfile.clicked.connect(self._browse_keyfile)
         self.check_keyfile.toggled.connect(self.keyfile_input.setEnabled)
@@ -616,7 +623,11 @@ class MainWindow(QWidget):
         main.addWidget(header)
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
-        body.addWidget(central_frame, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(central_frame)
+        body.addWidget(scroll, 1)
         main.addLayout(body)
         main.addWidget(self.status_bar)
         
@@ -1400,6 +1411,14 @@ if __name__ == "__main__":
     except Exception:
         pass
     app = QApplication(sys.argv)
+    # i18n hook: load ./i18n/cryptguard_<locale>.qm if available
+    try:
+        from PySide6.QtCore import QLocale, QTranslator
+        _tr = QTranslator()
+        if _tr.load(QLocale.system(), "cryptguard", "_", "i18n"):
+            app.installTranslator(_tr)
+    except Exception:
+        pass
     win = MainWindow()
     win.show()
     sys.exit(app.exec())

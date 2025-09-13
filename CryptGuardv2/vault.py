@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """vault_v2.py – Vault 3.x refatorado com correções de segurança
 
 Mudanças principais:
@@ -110,6 +111,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QSizePolicy,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -1352,7 +1354,8 @@ class VaultDialog(QDialog):
         super().__init__(parent)
         self.presenter = VaultPresenter(vault_manager)
         self.setWindowTitle("Vault – Arquivos")
-        self.resize(420, 380)
+        self.resize(700, 520)
+        self.setMinimumSize(640, 480)
         self._build_ui()
         self._populate()
     
@@ -1368,6 +1371,9 @@ class VaultDialog(QDialog):
         self.list_widget.setDefaultDropAction(Qt.MoveAction)
         self.list_widget.model().rowsMoved.connect(self._on_reorder)
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
+        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setAlternatingRowColors(True)
         
         layout.addWidget(QLabel("Duplo-clique para extrair:"))
         layout.addWidget(self.list_widget, 1)
