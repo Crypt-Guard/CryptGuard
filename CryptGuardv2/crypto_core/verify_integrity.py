@@ -10,7 +10,7 @@ from .fileformat import is_cg2_file
 from .factories import decrypt as _decrypt
 
 
-def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=None) -> bool:
+def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=None, *, keyfile: Path | str | None = None) -> bool:
     """Return True if the file authenticates; False otherwise.
 
     For v5 this uses SecretStream verify-only, for legacy it routes to the
@@ -23,7 +23,7 @@ def verify_integrity(enc_path: Path | str, password: str | bytes, profile_hint=N
         raise ValueError("Not a CG2 file")
 
     try:
-        _decrypt(p, pwd, out_path=str(p.with_suffix("")), verify_only=True)
+        _decrypt(p, pwd, out_path=str(p.with_suffix("")), verify_only=True, keyfile=str(keyfile) if keyfile else None)
         return True
     except Exception:
         return False

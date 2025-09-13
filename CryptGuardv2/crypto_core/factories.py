@@ -26,6 +26,8 @@ def encrypt(
     pad_block: int = 0,
     kdf_profile: str | None = None,
     padding: str | None = None,
+    keyfile: str | _Path | None = None,
+    hide_filename: bool = False,
 ) -> str:
     # Force v5 encryption via SecretStream (PyNaCl required)
     # UI-supplied 'algo' is ignored; always XChaCha20-Poly1305 SecretStream.
@@ -59,7 +61,13 @@ def encrypt(
         kprof = "INTERACTIVE"
 
     res = XChaChaStream().encrypt_file(
-        src, password, out_path=str(dst), kdf_profile=kprof, padding=pad_policy
+        src,
+        password,
+        out_path=str(dst),
+        kdf_profile=kprof,
+        padding=pad_policy,
+        keyfile=str(keyfile) if keyfile else None,
+        hide_filename=bool(hide_filename),
     )
     return str(_Path(res).resolve())
 
@@ -70,6 +78,7 @@ def decrypt(
     out_path: str | _Path,
     verify_only: bool = False,
     progress_cb=None,
+    keyfile: str | _Path | None = None,
 ) -> str | None:
     src = _Path(in_path)
     dst = _Path(out_path)
@@ -83,7 +92,13 @@ def decrypt(
 
     if ver >= 5:
         from .xchacha_stream import XChaChaStream
-        res = XChaChaStream().decrypt_file(src, password, out_path=str(dst), verify_only=verify_only)
+        res = XChaChaStream().decrypt_file(
+            src,
+            password,
+            out_path=str(dst),
+            verify_only=verify_only,
+            keyfile=str(keyfile) if keyfile else None,
+        )
         return None if verify_only else str(_Path(res).resolve())
     else:
         # legacy v1–v4

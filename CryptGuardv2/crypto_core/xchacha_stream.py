@@ -6,6 +6,10 @@ import os
 import struct
 from pathlib import Path
 from typing import Optional
+from hashlib import blake2b
+
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
 
 from .fileformat_v5 import (
     SS_HEADER_BYTES,
@@ -14,6 +18,10 @@ from .fileformat_v5 import (
     read_v5_header,
 )
 from .kdf_v5 import derive_key_from_params_json, derive_key_v5
+try:  # optional best-effort secure memory
+    from .securemem import secret_bytes as _secret_bytes
+except Exception:  # pragma: no cover - optional
+    _secret_bytes = None
 
 # ---- SecretStream bindings and compatibility wrappers ----------------------
 try:
@@ -25,7 +33,7 @@ except Exception as _e:  # pragma: no cover - environment dependent
 def _load_secretstream_bindings():
     if ssb is None:
         raise _MissingSecretStream(
-            "PyNaCl/libsodium não disponível para SecretStream. Instale com: pip install pynacl"
+            "PyNaCl/libsodium nÃ£o disponÃ­vel para SecretStream. Instale com: pip install pynacl"
         )
     # sanity check against file format constant
     if ssb.crypto_secretstream_xchacha20poly1305_HEADERBYTES != SS_HEADER_BYTES:
@@ -116,7 +124,7 @@ def _require_secretstream():
         )
     except Exception as e:  # pragma: no cover - environment dependent
         raise _MissingSecretStream(
-            "PyNaCl/libsodium não disponível para SecretStream. Instale com: pip install pynacl"
+            "PyNaCl/libsodium nÃ£o disponÃ­vel para SecretStream. Instale com: pip install pynacl"
         ) from e
 
 
@@ -166,15 +174,31 @@ class XChaChaStream:
         out_path: str | os.PathLike | None = None,
         kdf_profile: str = "INTERACTIVE",
         padding: str = "off",
+        keyfile: str | os.PathLike | None = None,
+        hide_filename: bool = False,
     ) -> str:
         pwd = _coerce_pwd(password)
         in_p = Path(in_path)
         out_p = Path(out_path) if out_path else Path(in_path).with_suffix(".cg2")
 
         key32, kdf_json = derive_key_v5(pwd, kdf_profile)
+        # Optional keyfile mixing (2FA)
+        if keyfile:
+            kb = Path(keyfile).read_bytes()
+            kpep = blake2b(b"CG3-KFILE" + kb, digest_size=32).digest()
+            hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"CG3\x00kfile-mix", info=b"key-derivation/v3")
+            key32 = hkdf.derive(key32 + kpep)
+            kb = None
         
-        # Inicialização compatível do SecretStream
-        state, ss_header = ss_init_push_compat(key32)
+        # InicializaÃ§Ã£o compatÃ­vel do SecretStream
+        if _secret_bytes is not None:
+            with _secret_bytes(initial=key32) as _kmv:
+                state, ss_header = ss_init_push_compat(bytes(_kmv))
+        else:
+            _key_ba = bytearray(key32)
+            state, ss_header = ss_init_push_compat(bytes(_key_ba))
+            for i in range(len(_key_ba)):
+                _key_ba[i] = 0
         
         header = V5Header(kdf_params_json=kdf_json, ss_header=ss_header).pack()
 
@@ -199,11 +223,11 @@ class XChaChaStream:
                 chunks += 1
 
             # Final metadata inside TAG_FINAL
-            meta = {
+                meta = {
                 "chunks": int(chunks),
                 "pt_size": int(total_pt),
                 "orig_ext": Path(in_p.name).suffix or "",
-                "orig_name": Path(in_p.name).name,
+                "orig_name": None if hide_filename else Path(in_p.name).name,
                 "padding": padding,
             }
             meta_blob = canonical_json_bytes(meta)
@@ -220,66 +244,100 @@ class XChaChaStream:
         *,
         out_path: str | os.PathLike | None = None,
         verify_only: bool = False,
+        keyfile: str | os.PathLike | None = None,
     ) -> Optional[str]:
         pwd = _coerce_pwd(password)
         src = Path(in_path)
         dst = Path(out_path) if out_path else Path(str(src.with_suffix("")))
+        dst_dir = dst.parent
 
         # Parse header and bind as AAD
         hdr, header_bytes, off = read_v5_header(src)
         key32 = derive_key_from_params_json(pwd, hdr.kdf_params_json)
+        if keyfile:
+            kb = Path(keyfile).read_bytes()
+            kpep = blake2b(b"CG3-KFILE" + kb, digest_size=32).digest()
+            hkdf = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"CG3\x00kfile-mix", info=b"key-derivation/v3")
+            key32 = hkdf.derive(key32 + kpep)
+            kb = None
 
-        # Inicialização compatível do lado de leitura
-        state = ss_init_pull_compat(hdr.ss_header, key32)
+        # InicializaÃ§Ã£o compatÃ­vel do lado de leitura
+        if _secret_bytes is not None:
+            with _secret_bytes(initial=key32) as _kmv:
+                state = ss_init_pull_compat(hdr.ss_header, bytes(_kmv))
+        else:
+            _key_ba = bytearray(key32)
+            state = ss_init_pull_compat(hdr.ss_header, bytes(_key_ba))
+            for i in range(len(_key_ba)):
+                _key_ba[i] = 0
 
         # Read framed messages: [len|4][ciphertext] ... until TAG_FINAL
+        from .securetemp import SecureTempFile
         with src.open("rb") as f:
             f.seek(off)
             final_seen = False
             out = None
+            tmp = None
             final_meta = {}
             try:
                 if not verify_only:
-                    out = dst.open("wb")
+                    tmp = SecureTempFile(suffix=".part", dir=str(dst_dir))
+                    out = tmp.fh
                 while True:
                     ln_bytes = f.read(4)
                     if not ln_bytes:
                         break
                     if len(ln_bytes) < 4:
-                        raise ValueError("Falha na autenticação")
+                        raise ValueError("Falha na autenticaÃ§Ã£o")
                     (clen,) = struct.unpack(">I", ln_bytes)
                     if clen <= 0 or clen > (1 << 31):
-                        raise ValueError("Falha na autenticação")
+                        raise ValueError("Falha na autenticaÃ§Ã£o")
                     c = _read_exact(f, clen)
                     try:
-                        pt, tag = ss_pull(state, c, header_bytes)
+                        ret = ss_pull(state, c, header_bytes)
                     except Exception:
-                        raise ValueError("Falha na autenticação")
+                        raise ValueError("Falha na autentica??uo")
+                    ad = b""
+                    if isinstance(ret, tuple) and len(ret) == 2:
+                        pt, tag = ret
+                    elif isinstance(ret, tuple) and len(ret) == 3:
+                        pt, ad, tag = ret
+                    else:
+                        raise ValueError("Falha na autentica??uo")
                     # tag is a small int; constant-time compare to FINAL
                     if hmac.compare_digest(bytes([tag]), bytes([TAG_FINAL])):
                         # finalize
-                        try:
-                            final_meta = json.loads(pt)
-                        except Exception:
-                            raise ValueError("Falha na autenticação")
+                        # finalize: metadata may be in pt or ad (JSON). Avoid writing JSON to output.
+                        meta_bytes = ad if ad else pt
+                        if meta_bytes:
+                            try:
+                                final_meta = json.loads(meta_bytes)
+                            except Exception:
+                                # Not valid JSON; treat pt as data
+                                if not verify_only and out is not None and pt:
+                                    out.write(pt)
                         final_seen = True
                         # ensure no trailing bytes after final
                         rest = f.read(1)
                         if rest:
-                            raise ValueError("Falha na autenticação")
+                            raise ValueError("Falha na autenticaÃ§Ã£o")
                         break
                     else:
                         if verify_only:
                             continue
                         if out is None:
-                            raise ValueError("Falha na autenticação")
+                            raise ValueError("Falha na autenticaÃ§Ã£o")
                         out.write(pt)
             finally:
                 if out is not None:
-                    out.close()
+                    try:
+                        out.flush()
+                    except Exception:
+                        pass
+                # tmp is closed/finalized later
 
             if not final_seen:
-                raise ValueError("Falha na autenticação")
+                raise ValueError("Falha na autenticaÃ§Ã£o")
 
         if verify_only:
             return None
@@ -293,14 +351,16 @@ class XChaChaStream:
             orig_name = None
             orig_ext = None
 
-        # If user didn't supply out_path, prefer original filename; otherwise, only add extension if missing
+        # If user didn't supply out_path, prefer original filename; otherwise, handle hidden-filename mode
         if out_path is None and orig_name:
             final_dst = dst.parent / orig_name
-        elif (not final_dst.suffix) and orig_ext:
+        elif out_path is None and (not orig_name) and orig_ext:
+            final_dst = dst.parent / f"decrypted{orig_ext}"
+        elif (out_path is not None) and (not final_dst.suffix) and orig_ext:
             final_dst = final_dst.with_suffix(orig_ext)
 
         # Avoid overwriting existing files
-        if final_dst.exists() and final_dst.resolve() != dst.resolve():
+        if final_dst.exists():
             stem, suf = final_dst.stem, final_dst.suffix
             i = 1
             while True:
@@ -310,8 +370,12 @@ class XChaChaStream:
                     break
                 i += 1
 
-        if final_dst != dst:
-            os.replace(str(dst), str(final_dst))
+        # Finalize temp into place atomically
+        if tmp is not None:
+            try:
+                tmp.finalize(final_dst)
+            finally:
+                tmp = None
         return str(final_dst.resolve())
 
 

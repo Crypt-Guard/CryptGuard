@@ -9,6 +9,7 @@ import re
 import sys
 from logging import Logger
 from logging.handlers import RotatingFileHandler
+from .redactlog import NoLocalsFilter
 
 from .paths import LOG_PATH  # fonte única de verdade para o caminho do log
 
@@ -68,6 +69,8 @@ logger.setLevel(logging.DEBUG)  # controle global; ajuste no app conforme necess
 if not logger.handlers:
     handler = _build_handler()
     logger.addHandler(handler)
+    # Best-effort redaction to avoid locals/tracebacks in logs
+    logger.addFilter(NoLocalsFilter())
 logger.propagate = False  # não propagar para root (evita logs em dobro)
 
 
