@@ -7,6 +7,8 @@ import platform
 import sys
 import threading
 import warnings
+import weakref
+from importlib import util as _imp_util
 from typing import Callable, Optional, Union, Final
 
 # Type alias for byte-like objects
@@ -14,6 +16,7 @@ BytesLike = Union[bytes, bytearray, memoryview]
 
 # Constants
 MIN_LOCK_SIZE: Final[int] = 4096  # Minimum size to attempt memory locking
+_HAVE_SODIUM: Final[bool] = _imp_util.find_spec("nacl") is not None
 
 
 def secure_memzero(buf: bytearray) -> None:
@@ -35,6 +38,17 @@ def secure_memzero(buf: bytearray) -> None:
     n = len(buf)
     
     try:
+        # Prefer libsodium's sodium_memzero when available
+        if _HAVE_SODIUM:
+            try:
+                import nacl.bindings as _sod  # type: ignore
+                # sodium_memzero expects (void*, size_t)
+                addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
+                _sod.sodium_memzero(ctypes.c_void_p(addr), ctypes.c_size_t(len(buf)))
+                return
+            except Exception:
+                pass
+
         # Get buffer address for ctypes operations
         addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
         
@@ -154,6 +168,16 @@ def try_unlock_memory(buf: bytearray) -> bool:
         return False
     
     try:
+        # Prefer sodium_munlock when available
+        if _HAVE_SODIUM:
+            try:
+                import nacl.bindings as _sod  # type: ignore
+                addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
+                _sod.sodium_munlock(ctypes.c_void_p(addr), ctypes.c_size_t(len(buf)))
+                return True
+            except Exception:
+                pass
+
         addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
         size = len(buf)
         
@@ -209,7 +233,7 @@ class SecureBytes:
         sb.with_bytes(lambda b: process(b))
     """
     
-    __slots__ = ("_buf", "_cleared", "_locked", "_lock", "__weakref__")
+    __slots__ = ("_buf", "_cleared", "_locked", "_lock", "_finalizer", "__weakref__")
     
     def __init__(self, data: BytesLike, *, lock_memory: bool = True) -> None:
         """
@@ -243,10 +267,25 @@ class SecureBytes:
         self._cleared = False
         self._locked = False
         self._lock = threading.RLock()
+        # Ensure cleanup even if GC'd without context manager
+        self._finalizer = weakref.finalize(self, self.clear)
         
         # Attempt to lock memory if requested
         if lock_memory and len(self._buf) >= MIN_LOCK_SIZE:
-            self._locked = try_lock_memory(self._buf)
+            # Prefer sodium_mlock when available
+            ok = False
+            if _HAVE_SODIUM:
+                try:
+                    import nacl.bindings as _sod  # type: ignore
+                    addr = ctypes.addressof(ctypes.c_char.from_buffer(self._buf))
+                    _sod.sodium_mlock(ctypes.c_void_p(addr), ctypes.c_size_t(len(self._buf)))
+                    ok = True
+                except Exception:
+                    ok = False
+            if not ok:
+                self._locked = try_lock_memory(self._buf)
+            else:
+                self._locked = True
             if not self._locked:
                 warnings.warn(
                     f"Failed to lock {len(self._buf)} bytes in memory; data may be swapped to disk",
@@ -256,17 +295,22 @@ class SecureBytes:
     def view(self) -> memoryview:
         """
         Get a read-only memory view of the data without copying.
-        
+
         Returns:
             Read-only memoryview of the internal buffer.
-            
+
         Raises:
             ValueError: If already cleared
         """
         with self._lock:
             if self._cleared:
                 raise ValueError("SecureBytes already cleared")
-            return memoryview(self._buf).toreadonly()
+            mv = memoryview(self._buf)
+            try:
+                return mv.toreadonly()
+            except Exception:
+                # Fallback: copy to immutable bytes then memoryview
+                return memoryview(bytes(self._buf))
     
     def with_bytes(self, callback: Callable[[bytes], None]) -> None:
         """

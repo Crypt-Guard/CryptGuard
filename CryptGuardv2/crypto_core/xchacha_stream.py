@@ -1,4 +1,5 @@
 from __future__ import annotations
+# -*- coding: utf-8 -*-
 
 import hmac
 import json
@@ -33,7 +34,7 @@ except Exception as _e:  # pragma: no cover - environment dependent
 def _load_secretstream_bindings():
     if ssb is None:
         raise _MissingSecretStream(
-            "PyNaCl/libsodium nÃ£o disponÃ­vel para SecretStream. Instale com: pip install pynacl"
+            "PyNaCl/libsodium não disponível para SecretStream. Instale com: pip install pynacl"
         )
     # sanity check against file format constant
     if ssb.crypto_secretstream_xchacha20poly1305_HEADERBYTES != SS_HEADER_BYTES:
@@ -124,7 +125,7 @@ def _require_secretstream():
         )
     except Exception as e:  # pragma: no cover - environment dependent
         raise _MissingSecretStream(
-            "PyNaCl/libsodium nÃ£o disponÃ­vel para SecretStream. Instale com: pip install pynacl"
+            "PyNaCl/libsodium não disponível para SecretStream. Instale com: pip install pynacl"
         ) from e
 
 
@@ -222,8 +223,8 @@ class XChaChaStream:
                 fout.write(ct)
                 chunks += 1
 
-            # Final metadata inside TAG_FINAL
-                meta = {
+            # Final metadata inside TAG_FINAL (after the loop)
+            meta = {
                 "chunks": int(chunks),
                 "pt_size": int(total_pt),
                 "orig_ext": Path(in_p.name).suffix or "",
@@ -288,22 +289,22 @@ class XChaChaStream:
                     if not ln_bytes:
                         break
                     if len(ln_bytes) < 4:
-                        raise ValueError("Falha na autenticaÃ§Ã£o")
+                        raise ValueError("Falha na autenticação")
                     (clen,) = struct.unpack(">I", ln_bytes)
                     if clen <= 0 or clen > (1 << 31):
-                        raise ValueError("Falha na autenticaÃ§Ã£o")
+                        raise ValueError("Falha na autenticação")
                     c = _read_exact(f, clen)
                     try:
                         ret = ss_pull(state, c, header_bytes)
                     except Exception:
-                        raise ValueError("Falha na autentica??uo")
+                        raise ValueError("Falha na autenticação")
                     ad = b""
                     if isinstance(ret, tuple) and len(ret) == 2:
                         pt, tag = ret
                     elif isinstance(ret, tuple) and len(ret) == 3:
                         pt, ad, tag = ret
                     else:
-                        raise ValueError("Falha na autentica??uo")
+                        raise ValueError("Falha na autenticação")
                     # tag is a small int; constant-time compare to FINAL
                     if hmac.compare_digest(bytes([tag]), bytes([TAG_FINAL])):
                         # finalize
@@ -320,13 +321,13 @@ class XChaChaStream:
                         # ensure no trailing bytes after final
                         rest = f.read(1)
                         if rest:
-                            raise ValueError("Falha na autenticaÃ§Ã£o")
+                            raise ValueError("Falha na autenticação")
                         break
                     else:
                         if verify_only:
                             continue
                         if out is None:
-                            raise ValueError("Falha na autenticaÃ§Ã£o")
+                            raise ValueError("Falha na autenticação")
                         out.write(pt)
             finally:
                 if out is not None:
@@ -337,12 +338,21 @@ class XChaChaStream:
                 # tmp is closed/finalized later
 
             if not final_seen:
-                raise ValueError("Falha na autenticaÃ§Ã£o")
+                raise ValueError("Falha na autenticação")
 
         if verify_only:
             return None
 
-        # Decide final filename using metadata
+        # Decide final filename usando metadata
+        # If padding was used, truncate plaintext to original size
+        if out is not None and isinstance(final_meta, dict):
+            try:
+                expected_size = int(final_meta.get("pt_size", -1))
+                if final_meta.get("padding") in ("4k", "16k") and expected_size >= 0:
+                    out.flush()
+                    out.truncate(expected_size)
+            except Exception:
+                pass
         final_dst = dst
         if isinstance(final_meta, dict):
             orig_name = final_meta.get("orig_name")
@@ -353,11 +363,22 @@ class XChaChaStream:
 
         # If user didn't supply out_path, prefer original filename; otherwise, handle hidden-filename mode
         if out_path is None and orig_name:
-            final_dst = dst.parent / orig_name
+            safe_name = Path(str(orig_name)).name
+            if not safe_name or safe_name in (".", ".."):
+                safe_name = "decrypted"
+            final_dst = dst.parent / safe_name
         elif out_path is None and (not orig_name) and orig_ext:
             final_dst = dst.parent / f"decrypted{orig_ext}"
         elif (out_path is not None) and (not final_dst.suffix) and orig_ext:
             final_dst = final_dst.with_suffix(orig_ext)
+
+        # Constrain final path to the target directory
+        try:
+            _base = dst.parent.resolve()
+            _cand = final_dst.resolve()
+            _ = _cand.relative_to(_base)
+        except Exception:
+            final_dst = dst.parent / "decrypted"
 
         # Avoid overwriting existing files
         if final_dst.exists():

@@ -120,3 +120,14 @@ def Decrypt(*args, **kwargs):
         kwargs["out_path"] = kwargs.pop("output")
     return decrypt(*args, **kwargs)
 # ===========================================================================
+
+def verify(in_path: str | _Path, password: str | bytes, *, keyfile: str | _Path | None = None) -> bool:
+    """Verify authentication without leaving artifacts on disk.
+
+    Returns True if decryption/authentication succeeds, False otherwise.
+    """
+    try:
+        decrypt(in_path, password, out_path=_Path(in_path).with_suffix(".tmp"), verify_only=True, keyfile=keyfile)
+        return True
+    except Exception:
+        return False

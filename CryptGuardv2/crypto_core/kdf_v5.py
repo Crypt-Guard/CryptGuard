@@ -4,7 +4,8 @@ import base64
 import os
 import secrets
 import time
-from typing import Tuple
+from dataclasses import dataclass
+from typing import Tuple, Literal, Dict, Any, Union
 
 try:
     from argon2 import low_level as _argon
@@ -12,6 +13,93 @@ except Exception as e:  # pragma: no cover - surfaced in error messages if missi
     _argon = None  # type: ignore
 
 from .fileformat_v5 import canonical_json_bytes
+from .argon_utils import Argon2Params, calibrate_argon2id, validate_params
+
+Password = Union[str, bytes]
+
+
+@dataclass(frozen=True)
+class KDFProfile:
+    name: Literal["INTERACTIVE", "SENSITIVE"]
+    target_ms: int
+    base_mem_mib: int
+    parallelism: int
+
+
+INTERACTIVE = KDFProfile("INTERACTIVE", target_ms=350, base_mem_mib=64, parallelism=1)
+SENSITIVE = KDFProfile("SENSITIVE", target_ms=700, base_mem_mib=256, parallelism=1)
+
+
+def _to_bytes_password(pw: Password) -> bytes:
+    if isinstance(pw, bytes):
+        return pw
+    if isinstance(pw, str):
+        return pw.encode("utf-8")
+    raise TypeError("password deve ser str ou bytes")
+
+
+def _build_kdf_json(params: Argon2Params, salt: bytes, profile: KDFProfile) -> bytes:
+    obj = {
+        "algo": "argon2id",
+        "t": int(params.time_cost),
+        "m": int(params.memory_cost),  # KiB
+        "p": int(params.parallelism),
+        "salt_hex": salt.hex(),
+        "profile": profile.name,
+        "measured_ms": float(params.measured_ms),
+    }
+    return canonical_json_bytes(obj)
+
+
+def _parse_kdf_json(kdf_json: bytes) -> Dict[str, Any]:
+    import json
+
+    try:
+        obj = json.loads(kdf_json.decode("utf-8"))
+    except Exception as e:  # pragma: no cover - handled upstream
+        raise ValueError("KDF_JSON inválido (UTF-8/JSON)") from e
+    required = {"algo", "t", "m", "p", "salt_hex"}
+    if not required.issubset(set(obj.keys())):
+        raise ValueError("KDF_JSON incompleto")
+    if obj.get("algo") != "argon2id":
+        raise ValueError("KDF_JSON algo não suportado")
+    validate_params(int(obj["t"]), int(obj["m"]), int(obj["p"]))
+    salt = bytes.fromhex(str(obj["salt_hex"]))
+    if len(salt) != 32:
+        raise ValueError("salt deve ter 32 bytes (hex)")
+    obj["_salt_bytes"] = salt
+    return obj
+
+
+def derive_key_and_params(
+    password: Password,
+    profile: Literal["INTERACTIVE", "SENSITIVE"] = "INTERACTIVE",
+) -> Tuple[bytes, bytes]:
+    """
+    Deriva uma chave de 32B via Argon2id e retorna (key32, kdf_params_json_bytes).
+    O JSON é canônico e pronto para AAD.
+    """
+    pw = _to_bytes_password(password)
+    prof = INTERACTIVE if profile == "INTERACTIVE" else SENSITIVE
+    params = calibrate_argon2id(
+        target_ms=prof.target_ms,
+        base_mem_mib=prof.base_mem_mib,
+        parallelism=prof.parallelism,
+        password_probe=b"probe",
+    )
+    salt = secrets.token_bytes(32)
+    key32 = _derive_once(pw, salt, params.time_cost, params.memory_cost, params.parallelism, 32)
+    kdf_json = _build_kdf_json(params, salt, prof)
+    return key32, kdf_json
+
+
+def derive_key_from_params(password: Password, kdf_params_json: bytes) -> bytes:
+    """
+    Re-deriva a chave de 32B usando os parâmetros persistidos (JSON canônico).
+    """
+    pw = _to_bytes_password(password)
+    obj = _parse_kdf_json(kdf_params_json)
+    return _derive_once(pw, obj["_salt_bytes"], int(obj["t"]), int(obj["m"]), int(obj["p"]), 32)
 
 
 def _cpu_count() -> int:
@@ -157,5 +245,9 @@ def derive_key_from_params_json(password: bytes | str, kdf_params_json: bytes) -
 __all__ = [
     "derive_key_v5",
     "derive_key_from_params_json",
+    "KDFProfile",
+    "INTERACTIVE",
+    "SENSITIVE",
+    "derive_key_and_params",
+    "derive_key_from_params",
 ]
-

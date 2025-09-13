@@ -1,98 +1,108 @@
 """
-Logger com SecureFormatter – remove bytes sensíveis (hex / Base64) e centraliza configuração.
+Central logger for CryptGuard.
+
+Goals:
+- Rotate log file at LOG_PATH.
+- Redact secrets (hex, base64, tokens, passwords).
+- Remove full tracebacks/locals (keep type+message only).
+- Optional PySide6 integration (qInstallMessageHandler).
+
+Public API: `logger`, `LOG_PATH`
 """
 
 from __future__ import annotations
+# -*- coding: utf-8 -*-
 
 import logging
-import re
+import os
 import sys
 from logging import Logger
 from logging.handlers import RotatingFileHandler
-from .redactlog import NoLocalsFilter
 
-from .paths import LOG_PATH  # fonte única de verdade para o caminho do log
+from .paths import LOG_PATH
+from .redactlog import NoLocalsFilter, RedactingFormatter
 
-
-class SecureFormatter(logging.Formatter):
-    """
-    Sanitiza mensagens para evitar vazamento de segredos (chaves, senhas, blobs).
-    - Mascara sequências hexadecimais longas (>= 32 chars).
-    - Mascara sequências base64 longas (>= 40 chars).
-    - Mascara padrões comuns 'password=...', 'secret=...', 'key=...'.
-    """
-
-    HEX_RE = re.compile(r"\b[0-9a-fA-F]{32,}\b")
-    B64_RE = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
-    KV_RE = re.compile(r"(?i)(password|secret|key)\s*=\s*([^\s,;]+)")
-
-    def format(self, record: logging.LogRecord) -> str:
-        msg = super().format(record)
-
-        # hex
-        msg = self.HEX_RE.sub(lambda m: f"<hex:{len(m.group(0))}B REDACTED>", msg)
-        # base64
-        msg = self.B64_RE.sub(lambda m: f"<b64:{len(m.group(0))}B REDACTED>", msg)
-        # key=value patterns
-        msg = self.KV_RE.sub(lambda m: f"{m.group(1)}=<REDACTED>", msg)
-        return msg
+_DEF_LEVEL = os.getenv("CRYPTGUARD_LOG_LEVEL", "INFO").upper()
+_LEVEL = getattr(logging, _DEF_LEVEL, logging.INFO)
 
 
-def _build_handler() -> logging.Handler:
-    """
-    Tenta criar um RotatingFileHandler; se falhar, faz fallback para stderr.
-    """
-    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    datefmt = "%Y-%m-%d %H:%M:%S"
-
+def _ensure_log_dir() -> None:
     try:
-        # Garante diretório
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(
-            LOG_PATH,
-            maxBytes=1_000_000,
-            backupCount=5,
-            encoding="utf-8",
-            delay=True,
-        )
+        if os.name != "nt":
+            os.chmod(LOG_PATH.parent, 0o700)
     except Exception:
-        handler = logging.StreamHandler(sys.stderr)
-
-    handler.setFormatter(SecureFormatter(fmt=fmt, datefmt=datefmt))
-    return handler
+        # Avoid raising directory permission errors during logging setup
+        pass
 
 
-# ③ configuração de logger
-logger: Logger = logging.getLogger("crypto_core")
-logger.setLevel(logging.DEBUG)  # controle global; ajuste no app conforme necessário
-# Evita handlers duplicados em reimport
-if not logger.handlers:
-    handler = _build_handler()
-    logger.addHandler(handler)
-    # Best-effort redaction to avoid locals/tracebacks in logs
-    logger.addFilter(NoLocalsFilter())
-logger.propagate = False  # não propagar para root (evita logs em dobro)
+def _build_logger() -> Logger:
+    _ensure_log_dir()
+    lg = logging.getLogger("crypto_core")
+    lg.setLevel(_LEVEL)
+    lg.propagate = False
+
+    # Avoid duplicate handlers on re-import
+    if lg.handlers:
+        return lg
+
+    fh = RotatingFileHandler(
+        LOG_PATH,
+        maxBytes=5 * 1024 * 1024,  # 5 MiB
+        backupCount=3,
+        encoding="utf-8",
+        delay=True,
+    )
+    fmt = RedactingFormatter(
+        fmt="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S%z",
+        enable_colors=False,
+    )
+    fh.setFormatter(fmt)
+    lg.addHandler(fh)
+
+    # Optional stderr handler when debugging
+    if _LEVEL <= logging.DEBUG:
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setFormatter(
+            RedactingFormatter(
+                fmt="%(asctime)s [%(levelname)s] %(message)s",
+                datefmt="%H:%M:%S",
+                enable_colors=True,
+            )
+        )
+        lg.addHandler(sh)
+
+    # Filter out locals/tracebacks
+    lg.addFilter(NoLocalsFilter())
+
+    # Optional Qt integration
+    try:
+        from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+
+        def _qt_handler(msg_type: int, context, message: str) -> None:  # type: ignore[override]
+            if msg_type == QtMsgType.QtFatalMsg:
+                lg.critical("QtFatal: %s", message)
+            elif msg_type == QtMsgType.QtCriticalMsg:
+                lg.error("QtCritical: %s", message)
+            elif msg_type == QtMsgType.QtWarningMsg:
+                lg.warning("QtWarning: %s", message)
+            else:
+                lg.info("QtInfo: %s", message)
+
+        qInstallMessageHandler(_qt_handler)
+    except Exception:
+        # PySide6 not available
+        pass
+
+    lg.info("=== CryptGuard iniciado ===")
+    return lg
 
 
-# Integração opcional com Qt (se PySide6 estiver disponível)
-try:
-    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+logger: Logger = _build_logger()
 
-    def _qt_handler(mode, context, message):
-        if mode == QtMsgType.QtCriticalMsg:
-            logger.error("QtCritical: %s", message)
-        elif mode == QtMsgType.QtWarningMsg:
-            logger.warning("QtWarning: %s", message)
-        else:
-            logger.info("QtInfo: %s", message)
+# Retrocompatibilidade: antigos chamavam SecureFormatter a partir deste módulo
+SecureFormatter = RedactingFormatter
 
-    qInstallMessageHandler(_qt_handler)
-except Exception:
-    # PySide6 não disponível/necessário
-    pass
-
-# Mensagem única de inicialização
-logger.info("=== CryptGuard iniciado ===")
-
-# Re-export para conveniência (outros módulos fazem `from .logger import LOG_PATH`)
-__all__ = ["logger", "LOG_PATH"]
+# Re-export for convenience
+__all__ = ["logger", "LOG_PATH", "SecureFormatter"]

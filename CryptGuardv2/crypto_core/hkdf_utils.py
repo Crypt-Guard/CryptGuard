@@ -1,19 +1,19 @@
 """
-hkdf_utils.py  –  única fonte de verdade para derivar
-(enc_key, hmac_key) a partir da chave mestra Argon2id.
+hkdf_utils.py — HKDF helpers for deriving sub-keys from a 32-byte master key.
 
-• Usa HKDF‑SHA256 com 64 bytes de saída → 32 B enc_key || 32 B hmac_key
-• Recebe explicitamente o mesmo `salt` de 16 B já usado no Argon2  (↑ robustez)
-• `info` muda conforme o backend para manter compatibilidade (PFA‑keys/CGv2‑keys)
+- RFC5869 HKDF-SHA256 (pure, via hashlib/hmac), 32-byte subkeys.
+- derive_keys(master, info, salt) keeps current API for (enc_key, hmac_key).
+- derive_subkey(master_key32, label, length=32, context={}) for domain-separated subkeys.
 """
 
 from __future__ import annotations
 
-from cryptography.hazmat.primitives.hashes import SHA256
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+import hashlib
+import hmac
+from typing import Union, Optional, Dict
 
+from .fileformat_v5 import canonical_json_bytes
 from .secure_bytes import SecureBytes
-from typing import Union
 
 
 def _as_bytes(data: Union[SecureBytes, bytes, bytearray, memoryview]) -> bytes:
@@ -24,11 +24,62 @@ def _as_bytes(data: Union[SecureBytes, bytes, bytearray, memoryview]) -> bytes:
     return bytes(data)
 
 
+_HASH = hashlib.sha256
+
+
+def _hkdf_extract(salt: Optional[bytes], ikm: bytes) -> bytes:
+    if salt is None:
+        salt = b"\x00" * _HASH().digest_size
+    return hmac.new(salt, ikm, _HASH).digest()
+
+
+def _hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    if length <= 0 or length > 255 * _HASH().digest_size:
+        raise ValueError("HKDF length inválido")
+    okm = b""
+    t = b""
+    n = 0
+    while len(okm) < length:
+        n += 1
+        t = hmac.new(prk, t + info + bytes([n]), _HASH).digest()
+        okm += t
+    return okm[:length]
+
+
 def derive_keys(
     master: Union[SecureBytes, bytes, bytearray, memoryview],
     *,
     info: bytes,
     salt: bytes | None,
 ) -> tuple[bytes, bytes]:
-    k = HKDF(algorithm=SHA256(), length=64, salt=salt, info=info).derive(_as_bytes(master))
-    return k[:32], k[32:]
+    """Backward-compatible API: returns (enc_key32, hmac_key32)."""
+    ikm = _as_bytes(master)
+    prk = _hkdf_extract(salt, ikm)
+    okm = _hkdf_expand(prk, info, 64)
+    return okm[:32], okm[32:]
+
+
+def derive_subkey(
+    master_key32: bytes,
+    label: str,
+    length: int = 32,
+    context: Optional[Dict] = None,
+    salt: Optional[bytes] = None,
+) -> bytes:
+    """
+    RFC5869 HKDF-SHA256 with domain separation:
+      info = b"CG2/v5 hkdf|" + label.encode('utf-8') + b"|" + canonical_json(context)
+    Typical:
+      stream_key = derive_subkey(key32, "stream")
+    """
+    if not isinstance(master_key32, (bytes, bytearray)) or len(master_key32) != 32:
+        raise ValueError("master_key32 deve ter 32 bytes")
+    info = (
+        b"CG2/v5 hkdf|" + label.encode("utf-8") + b"|" + canonical_json_bytes(context or {})
+    )
+    prk = _hkdf_extract(salt, bytes(master_key32))
+    return _hkdf_expand(prk, info, int(length))
+
+
+__all__ = ["derive_keys", "derive_subkey"]
+

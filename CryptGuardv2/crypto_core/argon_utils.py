@@ -9,6 +9,9 @@ import logging
 import os
 import time
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Literal
+from secrets import token_bytes
 
 import psutil
 from argon2.low_level import Type, hash_secret_raw
@@ -154,3 +157,70 @@ def load_calibrated_params():
     except Exception:
         pass
     return None
+
+# ---------------------------------------------------------------------------
+# New v5-friendly Argon2 helpers with guardrails and deterministic calibration
+# ---------------------------------------------------------------------------
+
+# Guardrails for v5 calibration
+MIN_T, MAX_T = 1, 10
+MIN_M_KIB, MAX_M_KIB = 16 * 1024, 2 * 1024 * 1024  # 16 MiB .. 2 GiB
+MIN_P, MAX_P = 1, 4
+
+
+@dataclass(frozen=True)
+class Argon2Params:
+    time_cost: int  # t
+    memory_cost: int  # KiB
+    parallelism: int  # p
+    salt: bytes  # 32B
+    measured_ms: float
+    profile: Literal["INTERACTIVE", "SENSITIVE"]
+
+
+def _clamp(v: int, lo: int, hi: int) -> int:
+    return max(lo, min(hi, int(v)))
+
+
+def validate_params(t: int, m_kib: int, p: int) -> None:
+    if not (MIN_T <= t <= MAX_T):
+        raise ValueError("Argon2id time_cost fora de faixa")
+    if not (MIN_M_KIB <= m_kib <= MAX_M_KIB):
+        raise ValueError("Argon2id memory_cost fora de faixa (KiB)")
+    if not (MIN_P <= p <= MAX_P):
+        raise ValueError("Argon2id parallelism fora de faixa")
+
+
+def calibrate_argon2id(
+    target_ms: int = 350,
+    base_mem_mib: int = 64,
+    parallelism: int = 1,
+    password_probe: bytes = b"probe",
+) -> Argon2Params:
+    """
+    Encontra t (1..10) que atinja ~target_ms com memória base (MiB) e p.
+    Retorna parâmetros em KiB + salt de 32B e tempo medido.
+    """
+    p = _clamp(parallelism, MIN_P, MAX_P)
+    m_kib = _clamp(base_mem_mib * 1024, MIN_M_KIB, MAX_M_KIB)
+    t = MIN_T
+    salt = token_bytes(32)
+    measured = 0.0
+    while t <= MAX_T:
+        start = time.perf_counter()
+        _ = hash_secret_raw(
+            password_probe,
+            salt,
+            time_cost=t,
+            memory_cost=m_kib,
+            parallelism=p,
+            hash_len=32,
+            type=Type.ID,
+        )
+        measured = (time.perf_counter() - start) * 1000.0
+        if measured >= target_ms:
+            break
+        t += 1
+    validate_params(t, m_kib, p)
+    profile = "INTERACTIVE" if target_ms <= 450 else "SENSITIVE"
+    return Argon2Params(t, m_kib, p, salt, round(measured, 1), profile)

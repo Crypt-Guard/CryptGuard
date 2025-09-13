@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -61,7 +62,14 @@ class CG2Header:
 
         # Serialize KDF JSON
         try:
-            kdf_blob = json.dumps(self.kdf, separators=(",", ":"), sort_keys=False).encode()
+            # Keep sort_keys=False for compatibility. Harden against NaN/Inf and force UTF-8.
+            kdf_blob = json.dumps(
+                self.kdf,
+                separators=(",", ":"),
+                sort_keys=False,
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
         except Exception as e:
             raise ValueError(f"Invalid KDF parameters: {e}") from e
 
@@ -116,11 +124,13 @@ class CG2Header:
         need(off + 4, "kdf length")
         kdf_len = struct.unpack_from(">I", buf, off)[0]
         off += 4
+        if kdf_len <= 0 or kdf_len > MAX_HEADER_LEN:
+            raise ValueError("Invalid KDF length")
         need(off + kdf_len, "kdf json")
         kdf_blob = buf[off : off + kdf_len]
         off += kdf_len
         try:
-            kdf = json.loads(kdf_blob)
+            kdf = json.loads(kdf_blob.decode("utf-8"))
         except Exception as e:
             raise ValueError(f"Invalid KDF JSON: {e}") from e
 
@@ -128,9 +138,20 @@ class CG2Header:
         need(off + 2, "nonce length")
         nonce_len = struct.unpack_from(">H", buf, off)[0]
         off += 2
+        if nonce_len <= 0 or nonce_len > 0xFFFF:
+            raise ValueError("Invalid nonce length")
         need(off + nonce_len, "nonce")
         nonce = buf[off : off + nonce_len]
         off += nonce_len
+        # Validate nonce size according to algorithm
+        expected = {
+            "AES-256-GCM": 12,
+            "ChaCha20-Poly1305": 12,
+            "XChaCha20-Poly1305": 24,
+            "AES-256-CTR": 16,
+        }[alg]
+        if len(nonce) != expected:
+            raise ValueError(f"Invalid nonce length for {alg} (got {len(nonce)}, want {expected})")
 
         # expiração
         need(off + 8, "expiration")

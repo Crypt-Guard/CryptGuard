@@ -15,6 +15,11 @@ class SecureTempFile:
     def __init__(self, suffix: str = "", dir: str | None = None):
         self._fh = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=dir)
         self.path = Path(self._fh.name)
+        # Reinforce restrictive permissions where applicable
+        try:
+            os.chmod(self._fh.name, 0o600)
+        except Exception:
+            pass
         self._finalized = False
 
     @property
@@ -39,6 +44,18 @@ class SecureTempFile:
         self._fh.close()
         os.replace(self.path, dst)
         self._finalized = True
+        # fsync directory to ensure durability of the rename (POSIX)
+        try:
+            # Only attempt if os.O_DIRECTORY is available
+            dir_flag = getattr(os, "O_DIRECTORY", None)
+            if dir_flag is not None:
+                dir_fd = os.open(str(Path(dst).parent), dir_flag)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+        except Exception:
+            pass
 
     def close(self):
         try:
@@ -56,4 +73,3 @@ class SecureTempFile:
 
     def __exit__(self, *exc):
         self.close()
-

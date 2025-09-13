@@ -1,18 +1,50 @@
 from __future__ import annotations
+import io
 import secrets
 
 import os
 import time
 import zipfile
 import tempfile
+import hashlib
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Iterator
 
 try:
     from .factories import decrypt, encrypt  # password: str
 except Exception:  # pragma: no cover
     encrypt = decrypt = None  # type: ignore[assignment]
 from .algorithms import normalize_algo
+
+
+# ---------------------------------------------------------------------------
+# Filesystem safety helpers
+# ---------------------------------------------------------------------------
+def is_within_dir(base: Path, target: Path) -> bool:
+    """True if target is inside base (after resolve())."""
+    try:
+        base_r = Path(base).resolve()
+        targ_r = Path(target).resolve()
+        _ = targ_r.relative_to(base_r)
+        return True
+    except Exception:
+        return False
+
+
+def fsync_dir(path: Path) -> None:
+    """Best-effort fsync on directory to ensure rename durability (POSIX)."""
+    try:
+        # Only attempt on platforms that support O_DIRECTORY
+        if getattr(os, "O_DIRECTORY", None) is not None:
+            fd = os.open(str(Path(path)), os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    except Exception:
+        # Ignore: not all platforms or FS support this
+        pass
 
 def pack_enc_zip(
     inputs: Iterable[str | Path],
@@ -49,11 +81,31 @@ def pack_enc_zip(
     return str(cg2_path)
 
 def _safe_extract(zf: zipfile.ZipFile, out_dir: Path) -> None:
+    """Safely extract a ZIP, preventing zip-slip and skipping symlinks.
+
+    - Reject absolute paths and any component with '..'
+    - Constrain extraction to out_dir using resolve/relative_to
+    - Skip UNIX symlink entries
+    """
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    base = out_dir.resolve()
     for m in zf.infolist():
-        dest = out_dir / m.filename
+        name = Path(m.filename)
+        # Reject absolute and parent traversal
+        if name.is_absolute() or ".." in name.parts:
+            raise ValueError(f"Tentativa de Zip Slip: {m.filename!r}")
+        # Detect symlink via external_attr (UNIX) and skip
+        try:
+            is_symlink = ((m.external_attr >> 16) & 0o170000) == 0o120000
+        except Exception:
+            is_symlink = False
+        if is_symlink:
+            continue
+
+        dest = (out_dir / name)
         dest_abs = dest.resolve()
-        if not str(dest_abs).startswith(str(out_dir.resolve())):
+        if not is_within_dir(base, dest_abs):
             raise ValueError(f"Tentativa de Zip Slip: {m.filename!r}")
         if m.is_dir():
             dest_abs.mkdir(parents=True, exist_ok=True)
@@ -91,6 +143,49 @@ def unpack_enc_zip(
     except Exception:
         pass  # nosec B110 (fallback silencioso/Windows locks)
     return str(out_dir_p)
+
+def write_atomic_secure(path: str | Path, data: bytes) -> None:
+    """
+    Atomically write bytes to a file by writing to a temp file in the same
+    directory and then replacing. Best-effort fsync for durability.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=p.name + ".", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "wb", buffering=0) as f:
+            f.write(data)
+            try:
+                os.fsync(f.fileno())
+            except Exception:
+                pass  # Best-effort on platforms without fsync
+        os.replace(tmp_path, p)
+        # Ensure directory entry is durable
+        fsync_dir(p.parent)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass  # Windows locks, ignore
+
+# ---------------------------------------------------------------------------
+# Optional helpers for chunked IO and hashing
+# ---------------------------------------------------------------------------
+def read_chunks(fp: io.BufferedReader, chunk_size: int = 1024 * 1024) -> Iterator[bytes]:
+    while True:
+        b = fp.read(chunk_size)
+        if not b:
+            return
+        yield b
+
+
+def file_blake2s(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    h = hashlib.blake2s()
+    with open(path, "rb") as f:
+        for ch in read_chunks(f, chunk_size):
+            h.update(ch)
+    return h.hexdigest()
 
 # ---------------- extra GUI helpers (v2.1.5d) ----------------
 def archive_folder(folder: str | Path) -> str:

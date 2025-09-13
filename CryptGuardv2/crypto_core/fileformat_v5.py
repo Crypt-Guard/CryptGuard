@@ -7,47 +7,62 @@ from pathlib import Path
 from typing import Tuple
 
 # CG2 v5 header (all bytes are AAD)
-# MAGIC(4) | VERSION(1=0x05) | ALG_ID(1=0x01) | KDF_LEN(u16) | KDF_JSON | SS_HEADER(24)
+# MAGIC(4) | VERSION(1=0x05) | ALG_ID(1=0x01) | KDF_LEN(u16, BE) | KDF_JSON | SS_HEADER(24)
 
 MAGIC = b"CG25"
 VERSION = 0x05
 ALG_ID = 0x01  # fixed: XChaCha20-Poly1305 SecretStream
 
-MAX_HEADER_LEN = 1 << 20  # 1 MiB safety cap
 SS_HEADER_BYTES = 24
+MAX_HEADER_LEN = 1 << 20  # 1 MiB safety cap
 
 
-def canonical_json_bytes(obj: dict) -> bytes:
+def canonical_json_bytes(obj: object) -> bytes:
+    """
+    Serialize JSON in a deterministic (canonical) way:
+    - UTF-8 bytes
+    - sort_keys=True
+    - no spaces (separators=(",", ":"))
+    - forbid NaN/Infinity
+    """
     return json.dumps(
         obj,
-        ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
 
 
-@dataclass
+@dataclass(frozen=True)
 class V5Header:
     kdf_params_json: bytes
     ss_header: bytes
 
+    @property
+    def version(self) -> int:
+        return VERSION
+
+    @property
+    def alg_id(self) -> int:
+        return ALG_ID
+
     def pack(self) -> bytes:
         if not isinstance(self.kdf_params_json, (bytes, bytearray)):
             raise TypeError("kdf_params_json must be bytes")
-        kdf_blob = bytes(self.kdf_params_json)
-        if len(kdf_blob) > 0xFFFF:
-            raise ValueError("KDF params too large (must fit in u16)")
-        if not isinstance(self.ss_header, (bytes, bytearray)) or len(self.ss_header) != SS_HEADER_BYTES:
-            raise ValueError("ss_header must be 24 bytes")
+        if len(self.ss_header) != SS_HEADER_BYTES:
+            raise ValueError("Bad SecretStream header size")
+        klen = len(self.kdf_params_json)
+        if klen == 0 or klen > 0xFFFF:
+            raise ValueError("Invalid KDF length")
         return b"".join(
             [
                 MAGIC,
                 struct.pack(">B", VERSION),
                 struct.pack(">B", ALG_ID),
-                struct.pack(">H", len(kdf_blob)),
-                kdf_blob,
-                bytes(self.ss_header),
+                struct.pack(">H", klen),
+                bytes(self.kdf_params_json),
+                self.ss_header,
             ]
         )
 
@@ -57,6 +72,7 @@ def parse_header(buf: bytes) -> Tuple[V5Header, int]:
     Parse a v5 header from the given bytes buffer (must start at MAGIC).
     Returns (V5Header, offset_after_header).
     """
+
     def need(n: int, what: str) -> None:
         if len(buf) < n:
             raise ValueError(f"Truncated header ({what})")
@@ -70,70 +86,105 @@ def parse_header(buf: bytes) -> Tuple[V5Header, int]:
     ver = struct.unpack_from(">B", buf, off)[0]
     off += 1
     if ver != VERSION:
-        raise ValueError(f"Unsupported CG2 version {ver}")
+        raise ValueError(f"Unsupported CG2 v5 version byte: {ver}")
 
-    # algorithm id
+    # alg id
     need(off + 1, "alg id")
-    alg_id = struct.unpack_from(">B", buf, off)[0]
+    alg = struct.unpack_from(">B", buf, off)[0]
     off += 1
-    if alg_id != ALG_ID:
-        raise ValueError("Unsupported algorithm id for v5")
+    if alg != ALG_ID:
+        raise ValueError(f"Unsupported ALG_ID: {alg}")
 
-    # kdf json
-    need(off + 2, "kdf length")
-    kdf_len = struct.unpack_from(">H", buf, off)[0]
+    # kdf len
+    need(off + 2, "kdf_len")
+    (kdf_len,) = struct.unpack_from(">H", buf, off)
     off += 2
-    need(off + kdf_len, "kdf json")
-    kdf_blob = buf[off : off + kdf_len]
+    if kdf_len == 0 or kdf_len > 0xFFFF:
+        raise ValueError("Invalid KDF length")
+    need(off + kdf_len, "kdf_json")
+    kdf_json = bytes(buf[off : off + kdf_len])
     off += kdf_len
 
-    # ss header
-    need(off + SS_HEADER_BYTES, "secretstream header")
-    ss_header = buf[off : off + SS_HEADER_BYTES]
+    # secretstream header
+    need(off + SS_HEADER_BYTES, "ss_header")
+    ss_header = bytes(buf[off : off + SS_HEADER_BYTES])
     off += SS_HEADER_BYTES
 
-    return V5Header(kdf_params_json=kdf_blob, ss_header=ss_header), off
+    hdr = V5Header(kdf_params_json=kdf_json, ss_header=ss_header)
+    return hdr, off
 
 
-def read_v5_header(path: str | Path) -> tuple[V5Header, bytes, int]:
-    p = Path(path)
-    with p.open("rb") as f:
-        head = f.read(4)
-        if head != MAGIC:
-            raise ValueError("Not a CG2 v5 file.")
-        buf = head + f.read(4096)
-        while True:
-            try:
-                hdr, off = parse_header(buf)
-                raw = buf[:off]
-                return hdr, raw, off
-            except ValueError as e:
-                if "Truncated header" in str(e):
-                    more = f.read(4096)
-                    if not more:
-                        raise
-                    buf += more
-                    if len(buf) > MAX_HEADER_LEN:
-                        raise ValueError("Header too large")
-                    continue
-                raise
+def read_v5_header(path_or_file) -> Tuple[V5Header, bytes, int]:
+    """
+    Reads the v5 header from a file path or file-like object opened in binary mode.
+    Returns (V5Header, header_bytes, offset_after_header).
+    """
+
+    def _read(fp, n: int) -> bytes:
+        b = fp.read(n)
+        if b is None or len(b) < n:
+            raise ValueError("Truncated header")
+        return b
+
+    close_me = False
+    if hasattr(path_or_file, "read"):
+        fp = path_or_file
+    else:
+        fp = open(Path(path_or_file), "rb")
+        close_me = True
+    try:
+        prefix = _read(fp, 8)  # MAGIC + VER + ALG + KDF_LEN
+        if not prefix.startswith(MAGIC):
+            raise ValueError("Not a CG2 v5 file (bad magic)")
+        ver = prefix[4]
+        alg = prefix[5]
+        if ver != VERSION:
+            raise ValueError(f"Unsupported CG2 v5 version byte: {ver}")
+        if alg != ALG_ID:
+            raise ValueError(f"Unsupported ALG_ID: {alg}")
+        kdf_len = struct.unpack_from(">H", prefix, 6)[0]
+        if kdf_len == 0 or kdf_len > 0xFFFF:
+            raise ValueError("Invalid KDF length")
+        rest_len = kdf_len + SS_HEADER_BYTES
+        if 8 + rest_len > MAX_HEADER_LEN:
+            raise ValueError("Header too large")
+        rest = _read(fp, rest_len)
+        header_bytes = prefix + rest
+        hdr, off = parse_header(header_bytes)
+        return hdr, header_bytes, off
+    finally:
+        if close_me:
+            fp.close()
 
 
-def read_header_version_any(path: str | Path) -> int:
-    p = Path(path)
-    with p.open("rb") as f:
-        magic = f.read(4)
-    if magic == MAGIC:
-        return VERSION
-    # legacy magic handled by legacy reader
-    from .fileformat import MAGIC as LEG_MAGIC, read_header as legacy_read
-    if magic == LEG_MAGIC:
-        try:
-            hdr, _, _, _ = legacy_read(path)
-            return int(hdr.version)
-        except Exception as e:
-            raise ValueError(f"Failed to read legacy header: {e}") from e
-    raise ValueError("Unknown file format (magic)")
+def read_header_version_any(path_or_file) -> int:
+    """
+    Detect header version for CG2 files.
+    Returns an int (e.g., 5 for v5). Raises if neither legacy nor v5.
+    """
+    close_me = False
+    if hasattr(path_or_file, "read"):
+        fp = path_or_file
+    else:
+        fp = open(Path(path_or_file), "rb")
+        close_me = True
+    try:
+        magic = fp.read(4)
+        if magic == MAGIC:
+            ver_b = fp.read(1)
+            if len(ver_b) != 1:
+                raise ValueError("Truncated header")
+            return ver_b[0]
+        elif magic == b"CG2\0":
+            ver_b = fp.read(1)  # legacy v1–v4
+            if len(ver_b) != 1:
+                raise ValueError("Truncated legacy header")
+            return ver_b[0]
+        else:
+            raise ValueError("Unknown file format (magic)")
+    finally:
+        if close_me:
+            fp.close()
 
 
 __all__ = [
@@ -147,4 +198,3 @@ __all__ = [
     "read_header_version_any",
     "canonical_json_bytes",
 ]
-
