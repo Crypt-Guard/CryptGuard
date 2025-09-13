@@ -1,4 +1,4 @@
-# 🛡️ Security Policy — CryptGuard v2 (v2.7.0)
+# 🛡️ Security Policy — CryptGuard v2 (v3.0)
 
 CryptGuard v2 is a file-encryption tool and CG2 file format focused on practical security.  
 This document explains what the software **does and does not** protect, safe-use guidance, and how to report vulnerabilities.
