@@ -14,10 +14,13 @@ def derive_key_sb(password: SecureBytes | bytes | str, params, length: int = 32)
     """Nova API: retorna SecureBytes."""
     # password → SecureBytes
     if isinstance(password, str):
-        _pwd_bytes = password.encode()
+        pwd_sb = SecureBytes(password.encode())
+    elif isinstance(password, SecureBytes):
+        pwd_sb = password
+    elif isinstance(password, (bytes, bytearray)):
+        pwd_sb = SecureBytes(bytes(password))
     else:
-        _pwd_bytes = password
-    pwd_sb = password if isinstance(password, SecureBytes) else SecureBytes(_pwd_bytes)  # type: ignore[arg-type]
+        raise TypeError(f"Password must be str, bytes or SecureBytes, not {type(password)}")
     salt = _coerce_salt(params)
     t = int(params.get("time_cost", 2))
     m = int(params.get("memory_cost", 64 * 1024))

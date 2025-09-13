@@ -103,6 +103,19 @@ def try_lock_memory(buf: bytearray) -> bool:
         if platform.system() == "Windows":
             try:
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                # Attempt to increase working set to accommodate the lock
+                try:
+                    GetCurrentProcess = kernel32.GetCurrentProcess
+                    GetProcessWorkingSetSize = kernel32.GetProcessWorkingSetSize
+                    SetProcessWorkingSetSize = kernel32.SetProcessWorkingSetSize
+                    min_ws = ctypes.c_size_t()
+                    max_ws = ctypes.c_size_t()
+                    GetProcessWorkingSetSize(GetCurrentProcess(), ctypes.byref(min_ws), ctypes.byref(max_ws))
+                    new_min = ctypes.c_size_t(min_ws.value + size)
+                    new_max = ctypes.c_size_t(max_ws.value + size)
+                    SetProcessWorkingSetSize(GetCurrentProcess(), new_min, new_max)
+                except Exception:
+                    pass
                 # VirtualLock returns non-zero on success
                 result = kernel32.VirtualLock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
                 return bool(result)
@@ -234,6 +247,11 @@ class SecureBytes:
         # Attempt to lock memory if requested
         if lock_memory and len(self._buf) >= MIN_LOCK_SIZE:
             self._locked = try_lock_memory(self._buf)
+            if not self._locked:
+                warnings.warn(
+                    f"Failed to lock {len(self._buf)} bytes in memory; data may be swapped to disk",
+                    stacklevel=2,
+                )
     
     def view(self) -> memoryview:
         """

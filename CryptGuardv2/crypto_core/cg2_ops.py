@@ -108,6 +108,10 @@ def _derive_chunk_nonce(base: bytes, idx: int) -> bytes:
     Nota: compatibilidade de leitura (v1–v4). Limite teórico ~2^32 chunks.
     Não usar para escrita nova: v5 usa SecretStream (libsodium).
     """
+    if idx < 0 or idx > 0xFFFFFFFF:
+        raise ValueError(f"Invalid chunk index: {idx}")
+    if len(base) < 4:
+        raise ValueError(f"Base nonce too short: {len(base)} bytes")
     ctr = int.from_bytes(base[-4:], "big") ^ idx
     return base[:-4] + ctr.to_bytes(4, "big")
 
@@ -213,6 +217,9 @@ class AESGCMProcessor(ChunkProcessor):
         nonce = _derive_chunk_nonce(ctx.base_nonce, index)
         if len(nonce) != 12:
             raise ValueError(f"Invalid nonce length: expected 12 bytes")
+        # Ensure nonce uniqueness via counter bounds
+        if index < 0 or index > 0xFFFFFFFF:
+            raise ValueError(f"Chunk index {index} exceeds maximum (2^32-1) for safe nonce derivation")
             
         ct = AESGCM(bytes(ctx.enc_key.view())).encrypt(nonce, chunk, ctx.header_aad)
         return struct.pack(">I", len(ct)) + ct

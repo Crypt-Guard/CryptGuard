@@ -313,8 +313,8 @@ class XChaChaStream:
                             try:
                                 final_meta = json.loads(meta_bytes)
                             except Exception:
-                                # Not valid JSON; treat pt as data
-                                if not verify_only and out is not None and pt:
+                                # Not valid JSON; write only if it's actual data (no AAD present)
+                                if not verify_only and out is not None and pt and not ad:
                                     out.write(pt)
                         final_seen = True
                         # ensure no trailing bytes after final
