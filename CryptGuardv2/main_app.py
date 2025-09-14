@@ -1,13 +1,13 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CryptGuardv2 – secure GUI
-Versão com interface clássica e core refatorado compatível com vault_v2.py e cg2_ops_v2.py
+CryptGuardv2 - secure GUI
+Versao com interface classica e core refatorado compativel com vault_v2.py e cg2_ops_v2.py
 """
 
 from __future__ import annotations
 
-# ─── Standard library ────────────────────────────────────────────────────────
+# --------------------------------------------------------------- Standard library ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€â”€
 import contextlib
 import locale
 import os
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional, Any
 import warnings
 
-# ─── PySide6 / Qt ────────────────────────────────────────────────────────────
+# --------------------------------------------------------------- PySide6 / Qt ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 from PySide6.QtCore import (
     QDate,
     QEasingCurve,
@@ -33,6 +33,7 @@ from PySide6.QtCore import (
     QTimer,
     QUrl,
     Signal,
+    QSize,  # added
 )
 from PySide6.QtGui import (
     QBrush,
@@ -67,7 +68,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# ─── Configuração de warnings e encoding ────────────────────────────────────
+# --------------------------------------------------------------- Configuração de warnings e encoding ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*utcfromtimestamp.*")
 
 # stdout/stderr UTF-8 no Windows
@@ -82,7 +83,7 @@ try:
 except Exception:
     pass
 
-# ─── Imports do Projeto ──────────────────────────────────────────────────────
+# --------------------------------------------------------------- Imports do Projeto ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 from crypto_core.factories import encrypt as cg_encrypt, decrypt as cg_decrypt
 from crypto_core.secure_bytes import SecureBytes
 
@@ -101,7 +102,7 @@ try:
     )
     USING_V2 = True
 except ImportError as e:
-    # Define classes mínimas para compatibilidade
+    # Define classes mÃ­nimas para compatibilidade
     class VaultLocked(Exception):
         pass
     
@@ -139,7 +140,32 @@ from crypto_core.logger import logger
 from crypto_core.utils import secure_delete, archive_folder
 from crypto_core.verify_integrity import verify_integrity
 
-# ─── Detecção de algoritmos disponíveis ─────────────────────────────────────
+# --- NEW: KeyGuard sidebar (Qt) ---
+# Carrega o helper com fallback robusto caso o pacote não esteja em modules/keyguard/.
+attach_keyguard_qt = None
+try:
+    from modules.keyguard import attach_keyguard_qt  # caminho preferido
+except Exception:
+    attach_keyguard_qt = None
+    try:
+        import importlib.util, pathlib
+        _BASE = pathlib.Path(__file__).resolve().parent
+        for _cand in (
+            _BASE / "modules" / "keyguard" / "qt_pane.py",
+            _BASE / "qt_pane.py",
+        ):
+            if _cand.exists():
+                _spec = importlib.util.spec_from_file_location("keyguard_qt_pane", _cand)
+                _mod = importlib.util.module_from_spec(_spec)  # type: ignore
+                assert _spec and _spec.loader
+                _spec.loader.exec_module(_mod)                 # type: ignore
+                attach_keyguard_qt = getattr(_mod, "attach_keyguard_qt", None)
+                if attach_keyguard_qt:
+                    break
+    except Exception:
+        attach_keyguard_qt = None
+
+# --------------------------------------------------------------- Detecção de algoritmos disponiveis ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
 ALGOS = ["AES-256-GCM", "AES-256-CTR", "ChaCha20-Poly1305"]
 
 # Detecta XChaCha20
@@ -150,14 +176,14 @@ try:
 except ImportError:
     XCHACHA20_AVAILABLE = False  # Legacy detection not used in v5 UI
 
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                              UI HELPERS (Estilo Antigo)
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 
 def human_speed(bytes_processed: int, elapsed_seconds: float) -> str:
     """Formata velocidade de transferência."""
     if elapsed_seconds <= 0:
-        return "— MB/s"
+        return "- MB/s"
     bps = bytes_processed / elapsed_seconds
     if bps < 1024:
         return f"{bps:.1f} B/s"
@@ -228,9 +254,9 @@ class GradientHeader(QFrame):
         g.setColorAt(1, QColor("#764ba2"))
         painter.fillRect(self.rect(), QBrush(g))
 
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                           WORKER THREAD (Core mantido)
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 
 class CryptoWorker(QThread):
     """Thread worker para operações de criptografia."""
@@ -282,7 +308,7 @@ class CryptoWorker(QThread):
         except InterruptedError:
             pass
         except Exception as e:
-            logger.exception(f"CryptoWorker error during {self.operation}")
+            logger.exception("CryptoWorker error during %s: %s", self.operation, e)
             self.error.emit(str(e))
         finally:
             # Clear password from memory deterministically
@@ -311,7 +337,7 @@ class CryptoWorker(QThread):
                 hide_filename=self.extra_params.get("hide_filename", False),
             ))
         except TypeError as e:
-            # Erro comum quando a instalação do PyNaCl/libsodium está quebrada ou
+            # Erro comum quando a instalação do PyNaCl/libsodium estÃ¡ quebrada ou
             # houve mudança de assinatura inesperada.
             msg = str(e)
             if (
@@ -346,16 +372,17 @@ class CryptoWorker(QThread):
         self._cancelled = True
         self.requestInterruption()
 
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                        MAIN WINDOW (Interface Antiga)
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CryptGuardv2 – secure")
-        self.resize(1024, 680)
-        self.setMinimumSize(1024, 680)
+        self.setWindowTitle("CryptGuardv2 - secure")
+        # Ajuste de tamanho da janela para 1920×1080 @125%
+        self.setMinimumSize(QSize(1100, 700))
+        self.resize(QSize(1100, 700))
         
         # Aplica paleta antiga PRIMEIRO
         self._apply_palette_old_theme()
@@ -374,264 +401,120 @@ class MainWindow(QWidget):
         
         # Constrói UI
         self._build_ui()
-        
-        # Enable drag & drop
+
+        # Garantir KeyGuard apos montar a UI (próximo ciclo do event loop)
+        QTimer.singleShot(0, self._ensure_keyguard)
         self.setAcceptDrops(True)
-    
-    def _apply_palette_old_theme(self):
-        """Aplica paleta dark da UI antiga."""
+
+    # ----------------------------- tema/paleta (faltante) -----------------------------
+    def _apply_palette_old_theme(self) -> None:
+        """
+        Define paleta dark + CSS base (estilo clássico do app).
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+
         pal = QPalette()
-        pal.setColor(QPalette.Window, QColor("#20232a"))
-        pal.setColor(QPalette.Base, QColor("#2d3343"))
-        pal.setColor(QPalette.Text, QColor("#eceff4"))
-        pal.setColor(QPalette.Button, QColor("#37474F"))
-        pal.setColor(QPalette.ButtonText, QColor("#ECEFF1"))
-        pal.setColor(QPalette.Highlight, QColor("#29B6F6"))
-        pal.setColor(QPalette.HighlightedText, QColor("#fefeff"))
-        QApplication.setPalette(pal)
-    
-    def _build_ui(self):
-        """Constrói UI no estilo antigo."""
-        # Header
-        header = QFrame()
-        header.setFixedHeight(64)
-        header.setStyleSheet(
-            "QFrame{background:#263238;color:#ECEFF1;border-bottom:2px solid #37474F;}"
-        )
-        hlay = QHBoxLayout(header)
-        hlay.setContentsMargins(18, 0, 18, 0)
-        title = QLabel("🔐 CryptGuardv2", font=QFont("Inter", 20, QFont.DemiBold))
-        title.setStyleSheet("color:white")
-        hlay.addWidget(title)
-        hlay.addStretch()
-        # About / Help (paridade com UI nova)
-        btn_about = QPushButton("About")
-        btn_about.setStyleSheet(
-            "QPushButton {background: transparent; color: #ECEFF1; "
-            "border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; padding: 5px 12px;}"
-            "QPushButton:hover {background: rgba(255,255,255,0.1); "
-            "border-color: rgba(255,255,255,0.5);}"
-        )
-        btn_about.clicked.connect(self._show_about)
-        hlay.addWidget(btn_about)
+        pal.setColor(QPalette.Window, QColor("#1b212b"))
+        pal.setColor(QPalette.WindowText, QColor("#e6eaf0"))
+        pal.setColor(QPalette.Base, QColor("#202734"))
+        pal.setColor(QPalette.AlternateBase, QColor("#283244"))
+        pal.setColor(QPalette.Text, QColor("#e6eaf0"))
+        pal.setColor(QPalette.ToolTipBase, QColor("#2b3342"))
+        pal.setColor(QPalette.ToolTipText, QColor("#e6eaf0"))
+        pal.setColor(QPalette.Button, QColor("#303a4b"))
+        pal.setColor(QPalette.ButtonText, QColor("#e6eaf0"))
+        pal.setColor(QPalette.Highlight, QColor("#536dfe"))
+        pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        with contextlib.suppress(Exception):
+            pal.setColor(QPalette.PlaceholderText, QColor(230, 234, 240, 120))
+        app.setPalette(pal)
 
-        btn_help = QPushButton("Help")
-        btn_help.setStyleSheet(
-            "QPushButton {background: transparent; color: #ECEFF1; "
-            "border: 1px solid rgba(255,255,255,0.3); border-radius: 4px; padding: 5px 12px;}"
-            "QPushButton:hover {background: rgba(255,255,255,0.1); "
-            "border-color: rgba(255,255,255,0.5);}"
-        )
-        btn_help.clicked.connect(self._show_help)
-        hlay.addWidget(btn_help)
-        
-        # File selection (mantém nomes NOVOS!)
-        self.file_input = QLineEdit()  # Nome NOVO
-        self.file_input.setPlaceholderText("Drop a file or click Select…")
-        self.file_input.setReadOnly(True)
-        self.file_input.setAcceptDrops(False)
-        self.file_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.file_input.setMinimumWidth(600)
-        
-        btn_pick = AccentButton("Select…")
-        btn_pick.clicked.connect(self._browse_file)  # Slot NOVO
-        lay_file = QHBoxLayout()
-        lay_file.addWidget(self.file_input)
-        lay_file.addWidget(btn_pick)
-        
-        # Algorithm (fixed for v5)
-        self.label_algorithm = QLabel("XChaCha20-Poly1305 (SecretStream)")
-        lay_alg = self._field("Algorithm", self.label_algorithm)
-        
-        # KDF Profile (v5)
-        self.combo_profile = self._combo(["Interactive", "Sensitive"])  # v5 KDF profiles
-        self.combo_profile.setCurrentIndex(0)
-        lay_prof = self._field("KDF profile", self.combo_profile)
-        
-        # Padding (v5)
-        self.combo_padding = self._combo(["Off", "4 KB", "16 KB"])
-        self.combo_padding.setToolTip(
-            "Adds zero padding per chunk to hide exact size in transit.\n"
-            "The real size is restored on decrypt."
-        )
-        lay_pad = self._field("Pad size", self.combo_padding)
-        
-        # Expiration (nomes NOVOS)
-        self.date_expiration = ClickableDateEdit(QDate.currentDate())
-        self.date_expiration.setCalendarPopup(True)
-        self.date_expiration.setDisplayFormat("dd/MM/yyyy")
-        self.date_expiration.setMinimumDate(QDate.currentDate())
-        self.date_expiration.setEnabled(False)
-        
-        cal_btn = QPushButton("📅")
-        cal_btn.setMaximumWidth(30)
-        cal_btn.setStyleSheet("background:#37474F;color:#ECEFF1;border:1px solid #455A64;")
-        cal_btn.setEnabled(False)
-        cal_btn.clicked.connect(self._show_calendar_popup)
-        
-        self.check_expiration = QCheckBox("Enable expiration date")
-        self.check_expiration.toggled.connect(self.date_expiration.setEnabled)
-        self.check_expiration.toggled.connect(cal_btn.setEnabled)
-        
-        lab_exp = QLabel("Expiration date")
-        lab_exp.setFont(QFont("Inter", 10, QFont.Bold))
-        lay_exp = QHBoxLayout()
-        lay_exp.addWidget(lab_exp)
-        lay_exp.addWidget(self.date_expiration)
-        lay_exp.addWidget(cal_btn)
-        lay_exp.addWidget(self.check_expiration)
-        lay_exp.addStretch()
-        
-        # Password (nomes NOVOS)
-        self.password_input = QLineEdit()
-        self.password_input.setEchoMode(QLineEdit.Password)
-        self.password_input.setPlaceholderText("Password…")
-        self.password_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.password_input.setMinimumWidth(320)
-        self.password_input.textChanged.connect(self._update_password_strength)
-        
-        self.strength_bar = QProgressBar()
-        self.strength_bar.setMaximum(4)
-        self.strength_bar.setTextVisible(False)
-        self.strength_bar.setFixedWidth(140)
-        
-        lay_pwd = QHBoxLayout()
-        lay_pwd.addWidget(self.password_input)
-        lay_pwd.addWidget(self.strength_bar)
-        # 👁 Mostrar/ocultar senha (paridade com UI nova)
-        self.btn_show_password = QPushButton("👁")
-        self.btn_show_password.setCheckable(True)
-        self.btn_show_password.setFixedSize(30, 30)
-        self.btn_show_password.toggled.connect(self._toggle_password_visibility)
-        lay_pwd.addWidget(self.btn_show_password)
-
-        # Keyfile (2FA)
-        self.check_keyfile = QCheckBox("Use keyfile")
-        self.keyfile_input = QLineEdit()
-        self.keyfile_input.setPlaceholderText("Pick a keyfile…")
-        self.keyfile_input.setReadOnly(True)
-        self.keyfile_input.setAcceptDrops(False)
-        self.keyfile_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.keyfile_input.setMinimumWidth(400)
-        self.btn_pick_keyfile = AccentButton("Pick")
-        self.btn_pick_keyfile.clicked.connect(self._browse_keyfile)
-        self.check_keyfile.toggled.connect(self.keyfile_input.setEnabled)
-        self.check_keyfile.toggled.connect(self.btn_pick_keyfile.setEnabled)
-        self.keyfile_input.setEnabled(False)
-        self.btn_pick_keyfile.setEnabled(False)
-        lay_kfile = QHBoxLayout()
-        lay_kfile.addWidget(self.check_keyfile)
-        lay_kfile.addWidget(self.keyfile_input)
-        lay_kfile.addWidget(self.btn_pick_keyfile)
-
-        # Hide filename option (encrypt only)
-        self.check_hide_filename = QCheckBox("Hide filename (restore only extension)")
-
-        
-        # Options (nomes NOVOS)
-        self.check_delete = QCheckBox("Secure-delete input after operation")
-        self.check_archive = QCheckBox("Archive folder before encrypt (ZIP)")
-        self.check_vault = QCheckBox("Store encrypted file in Vault")
-        self.check_extract = QCheckBox("Extract ZIP after decrypt")  # NOVO!
-        self.check_extract.setVisible(False)  # esconde da UI
-        
-        # Buttons (nomes NOVOS)
-        self.btn_encrypt = AccentButton("Encrypt")
-        self.btn_decrypt = AccentButton("Decrypt")
-        self.btn_verify = AccentButton("Verify")
-        self.btn_cancel = AccentButton("Cancel")
-        self.btn_cancel.setEnabled(False)
-        
-        self.btn_encrypt.clicked.connect(lambda: self._start_operation("encrypt"))
-        self.btn_decrypt.clicked.connect(lambda: self._start_operation("decrypt"))
-        self.btn_verify.clicked.connect(self._verify_file)
-        self.btn_cancel.clicked.connect(self._cancel_operation)
-        
-        lay_btn = QHBoxLayout()
-        lay_btn.addWidget(self.btn_encrypt)
-        lay_btn.addWidget(self.btn_decrypt)
-        lay_btn.addWidget(self.btn_verify)
-        lay_btn.addWidget(self.btn_cancel)
-        lay_btn.addStretch()
-        
-        # Progress (nomes NOVOS)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_bar.setAlignment(Qt.AlignCenter)
-        self.progress_bar.setStyleSheet(
-            "QProgressBar{background:#37474F;border:1px solid #263238;border-radius:5px;}"
-            "QProgressBar::chunk{background:#29B6F6;}"
-        )
-        
-        self.label_speed = QLabel("Speed: — MB/s")
-        h_speed = QHBoxLayout()
-        h_speed.addStretch()
-        h_speed.addWidget(self.label_speed)
-        
-        # Layout central (ordem antiga)
-        center = QVBoxLayout()
-        center.setSpacing(16)
-        center.setContentsMargins(22, 22, 22, 22)
-        center.addLayout(lay_file)
-        center.addLayout(lay_alg)
-        center.addLayout(lay_prof)
-        center.addLayout(lay_pad)
-        center.addLayout(lay_exp)
-        center.addLayout(lay_pwd)
-        center.addLayout(lay_kfile)
-        center.addWidget(self.check_hide_filename, 0, Qt.AlignLeft)
-        center.addWidget(self.check_delete, 0, Qt.AlignLeft)
-        center.addWidget(self.check_archive, 0, Qt.AlignLeft)
-        center.addWidget(self.check_vault, 0, Qt.AlignLeft)
-        center.addWidget(self.check_extract, 0, Qt.AlignLeft)
-        center.addLayout(lay_btn)
-        center.addWidget(self.progress_bar)
-        center.addLayout(h_speed)
-        center.addStretch()
-        
-        central_frame = QFrame()
-        central_frame.setLayout(center)
-        central_frame.setStyleSheet("background:#263238;")
-        
-        # Status bar (nome NOVO)
-        self.status_bar = QStatusBar()
-        self.status_bar.showMessage("Ready.")
-        self.status_bar.setStyleSheet("QStatusBar::item { border: 0px; }")
-        
-        log_btn = QPushButton("Log", clicked=self._open_log)
-        log_btn.setStyleSheet("background:transparent;color:#90A4AE;")
-        self.status_bar.addPermanentWidget(log_btn)
-        
-        change_pwd_btn = QPushButton("Change Password")
-        change_pwd_btn.setStyleSheet("background:transparent;color:#90A4AE;")
-        change_pwd_btn.clicked.connect(self._change_vault_password)
-        self.status_bar.addPermanentWidget(change_pwd_btn)
-        
-        vault_btn = QPushButton("Vault")
-        vault_btn.setStyleSheet("background:transparent;color:#90A4AE;")
-        vault_btn.clicked.connect(self._open_vault)
-        self.status_bar.addPermanentWidget(vault_btn)
-        settings_btn = QPushButton("Settings")
-        settings_btn.setStyleSheet("background:transparent;color:#90A4AE;")
-        settings_btn.clicked.connect(self._show_settings)
-        self.status_bar.addPermanentWidget(settings_btn)
-
-        
-        # Layout principal
-        main = QVBoxLayout(self)
-        main.setContentsMargins(0, 0, 0, 0)
-        main.addWidget(header)
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(central_frame)
-        body.addWidget(scroll, 1)
-        main.addLayout(body)
-        main.addWidget(self.status_bar)
-        
-        # Cria label_status para compatibilidade (não visível)
+        app.setStyleSheet("""
+            QWidget { background: #1b212b; color: #e6eaf0; }
+            QLabel  { color: #e6eaf0; }
+            QLineEdit, QPlainTextEdit, QTextEdit {
+                background: #2a3342; color: #e6eaf0;
+                border: 1px solid #3a4356; border-radius: 6px; padding: 4px;
+            }
+            QComboBox {
+                background: #2a3342; color: #e6eaf0;
+                border: 1px solid #3a4356; border-radius: 6px; padding: 4px 8px;
+            }
+            QComboBox QAbstractItemView {
+                background: #2a3342; color: #e6eaf0;
+                selection-background-color: #536dfe;
+            }
+            QPushButton {
+                background: #536dfe; color: #ffffff;
+                border: none; border-radius: 6px; padding: 6px 12px;
+            }
+            QPushButton:disabled { background: #4e586e; }
+            QCheckBox { padding: 0px 2px; margin: 0; }
+            QProgressBar {
+                background: #1f2633; color: #e6eaf0; height: 12px;
+                border: 1px solid #3a4356; border-radius: 4px;
+                text-align: center;
+            }
+            QProgressBar::chunk { background: #536dfe; }
+            QStatusBar { background: #151a22; color: #9aa3b2; }
+            QToolTip { background: #2b3342; color: #e6eaf0; border: 1px solid #3a4356; }
+        """)
+    # --- KeyGuard integration (centralizado) ------------------------------
+    def _ensure_keyguard(self) -> None:
+        """Anexa o KeyGuard (Qt) no lado direito (com fallback de import) uma única vez."""
+        # Se ainda não temos helper, tenta novamente o fallback dinâmico.
+        global attach_keyguard_qt
+        if attach_keyguard_qt is None:
+            try:
+                import importlib.util, pathlib
+                _BASE = pathlib.Path(__file__).resolve().parent
+                for _cand in (
+                    _BASE / "modules" / "keyguard" / "qt_pane.py",
+                    _BASE / "qt_pane.py",
+                ):
+                    if _cand.exists():
+                        _spec = importlib.util.spec_from_file_location("keyguard_qt_pane", _cand)
+                        _mod = importlib.util.module_from_spec(_spec)  # type: ignore
+                        assert _spec and _spec.loader
+                        _spec.loader.exec_module(_mod)                 # type: ignore
+                        attach_keyguard_qt = getattr(_mod, "attach_keyguard_qt", None)
+                        if attach_keyguard_qt:
+                            break
+            except Exception as e:
+                logger.exception("Falha ao importar KeyGuard: %s", e)
+                attach_keyguard_qt = None
+        if attach_keyguard_qt is None:
+            # Reporta para você saber o motivo caso o painel não apareça.
+            if hasattr(self, "status_bar"):
+                self.status_bar.showMessage("KeyGuard module not found (import failed).", 6000)
+            return
+        body = getattr(self, "body_layout", None)
+        if body is None:
+            return
+        # já anexado?
+        if getattr(self, "keyguard_pane", None):
+            return
+        try:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.VLine)
+            sep.setStyleSheet("color:#1b202a;")
+            self.body_layout.addWidget(sep, 0)
+            pane = attach_keyguard_qt(self, width=380)
+            if pane:
+                try:
+                    pane.setMinimumWidth(380)
+                except Exception as e:
+                    logger.exception("Erro ao configurar KeyGuard pane: %s", e)
+                    pass
+                self.keyguard_pane = pane
+                if hasattr(self, "status_bar"):
+                    self.status_bar.showMessage("KeyGuard loaded.", 2500)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                logger.exception("KeyGuard sidebar unavailable: %s", e)
+        # Cria label_status para compatibilidade (não visÃ­vel)
         self.label_status = QLabel()
         self.label_time = QLabel()
         
@@ -656,6 +539,13 @@ class MainWindow(QWidget):
         self.status = self.status_bar
         self.btn_enc = self.btn_encrypt
         self.btn_dec = self.btn_decrypt
+
+    def apply_generated_password(self, pwd: str):
+        """Allow KeyGuard pane to paste password into main module."""
+        try:
+            self.password_input.setText(pwd)
+        except Exception:
+            pass
     
     def _field(self, label: str, widget):
         """Helper da UI antiga para alinhar label + widget."""
@@ -697,13 +587,15 @@ class MainWindow(QWidget):
             if any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in txt):
                 score += 1
         
-        self.strength_bar.setValue(score)
+        # Converter score de 0-4 para 0-100
+        strength_value = (score * 25) if score > 0 else 0
+        self.strength_bar.setValue(strength_value)
         colors = ["#d32f2f", "#f57c00", "#fbc02d", "#43a047", "#1b5e20"]
         self.strength_bar.setStyleSheet(f"QProgressBar::chunk{{background:{colors[min(score, 4)]};}}") 
     
-    # ─────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
     #                           EVENT HANDLERS
-    # ─────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
     
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -739,16 +631,16 @@ class MainWindow(QWidget):
             if ver >= 5:
                 self.status_bar.showMessage("Detected CG2 v5")
             else:
-                self.status_bar.showMessage("⚠️ Legacy CG2 format (read-only)")
+                self.status_bar.showMessage("Legacy CG2 format (read-only)")
         except Exception as e:
             self.status_bar.showMessage(f"Could not detect format: {e}")
     
-    # ─────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
     #                               SLOTS
-    # ─────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
     
     def _browse_file(self):
-        """Abre diálogo para selecionar arquivo/pasta."""
+        """Abre diÃ¡logo para selecionar arquivo/pasta."""
         msg = QMessageBox(self)
         msg.setWindowTitle("Select type")
         msg.setText("Choose what you want to encrypt / decrypt:")
@@ -783,24 +675,13 @@ class MainWindow(QWidget):
             self.keyfile_input.setText(f)
             self.status_bar.showMessage("Keyfile selected.")
 
-    def _show_calendar_popup(self):
-        """Mostra calendário do DateEdit."""
-        if self.date_expiration.isEnabled():
-            for child in self.date_expiration.children():
-                if isinstance(child, QPushButton) or "QToolButton" in child.metaObject().className():
-                    child.click()
-                    return
-            self.date_expiration.setFocus()
-    
     def _toggle_password_visibility(self, checked: bool):
-        """Alterna visibilidade da senha (paridade com main_app.py)."""
-        if checked:
-            self.password_input.setEchoMode(QLineEdit.Normal)
-            self.btn_show_password.setText("🔒")
-        else:
-            self.password_input.setEchoMode(QLineEdit.Password)
-            self.btn_show_password.setText("👁")
-    
+        """Alterna visibilidade da senha com rotulos ASCII (evita mojibake)."""
+        self.password_input.setEchoMode(QLineEdit.Normal if checked else QLineEdit.Password)
+        try:
+            self.btn_show_password.setText("Hide" if checked else "Show")
+        except Exception:
+            pass
     def _start_operation(self, operation: str):
         """Inicia operação de criptografia/descriptografia."""
         try:
@@ -949,7 +830,7 @@ class MainWindow(QWidget):
                 timer.start(100)
                 self.worker.wait(1000)
             
-            self.status_bar.showMessage("ℹ️ Operação cancelada.", 5000)
+            self.status_bar.showMessage("Operation cancelled.", 5000)
             self.btn_cancel.setEnabled(False)
             self._toggle(True)
             
@@ -985,7 +866,7 @@ class MainWindow(QWidget):
         if enabled:
             self.btn_cancel.setEnabled(False)
             self.progress_bar.setMaximum(100)
-            self.label_speed.setText("Speed: — MB/s")
+            self.label_speed.setText("Speed: - MB/s")
             if hasattr(self, "worker"):
                 del self.worker
         else:
@@ -1007,7 +888,7 @@ class MainWindow(QWidget):
         self.label_speed.setText(f"Speed: {speed}")
     
     def _operation_finished(self, out_path: str):
-        """Operação concluída com sucesso."""
+        """operação concluída com sucesso."""
         if not out_path:
             self.status_bar.showMessage("Operation cancelled.", 5000)
             self._toggle(True)
@@ -1015,13 +896,13 @@ class MainWindow(QWidget):
         
         self.progress_bar.setValue(100)
         
-        # Limpa ZIP temporário
+        # Limpa ZIP temporÃ¡rio
         if hasattr(self, "_tmp_zip") and self._tmp_zip:
             Path(self._tmp_zip).unlink(missing_ok=True)
         
         final_output = out_path
         
-        # PATCH 7.2: Extração automática pós-decrypt
+        # PATCH 7.2: Extração automÃ¡tica pós-decrypt
         if not self._is_encrypt and self.check_extract.isChecked() and out_path.endswith(".zip"):
             if zipfile.is_zipfile(out_path):
                 dest_dir = Path(out_path).with_suffix("")
@@ -1080,7 +961,7 @@ class MainWindow(QWidget):
             except Exception as e:
                 self.status_bar.showMessage(f"Delete failed: {e}", 8000)
         
-        self.status_bar.showMessage("✔️ Done.", 8000)
+        self.status_bar.showMessage("Done.", 8000)
         
         # Limpa _operation_size
         if hasattr(self, "_operation_size"):
@@ -1120,12 +1001,12 @@ class MainWindow(QWidget):
         
         self._toggle(True)
     
-    # --- MOVIDO PARA CIMA & TORNADO NÃO BLOQUEANTE ---
+    # --- MOVIDO PARA CIMA & TORNADO NÃƒO BLOQUEANTE ---
     def _secretstream_preflight(self, silent: bool = False) -> tuple[bool, str]:
         """
         Verifica se a API crypto_secretstream_xchacha20poly1305_init_push tem a
-        assinatura esperada (1 arg: key). Em versões legadas pode exigir 2 args
-        (header, key) ou outra forma – não suportada pelo xchacha_stream atual.
+        assinatura esperada (1 arg: key). Em versÃµes legadas pode exigir 2 args
+        (header, key) ou outra forma â€“ não suportada pelo xchacha_stream atual.
         Retorna (ok, mensagem_de_erro_ou_vazia).
         """
         try:
@@ -1135,7 +1016,7 @@ class MainWindow(QWidget):
             sig = inspect.signature(func)
             # Assinatura moderna: (key: bytes) -> (state, header)
             if len(sig.parameters) == 1:
-                # Teste rápido
+                # Teste rÃ¡pido
                 try:
                     func(b"\x00" * 32)
                 except Exception:
@@ -1155,7 +1036,7 @@ class MainWindow(QWidget):
             return False, f"SecretStream preflight failed: {e}"
 
     def _open_vault(self):
-        """Abre (ou cria) o Vault e mostra o diálogo de seleção de arquivo."""
+        """Abre (ou cria) o Vault e mostra o diÃ¡logo de seleção de arquivo."""
         while True:
             pw, ok = QInputDialog.getText(
                 self,
@@ -1171,6 +1052,15 @@ class MainWindow(QWidget):
                     vault_path.unlink()
                 exists = vault_path.exists()
                 if not exists:
+                    # Confirmar criação explícita para evitar criar com senha errada por engano
+                    if QMessageBox.question(
+                        self,
+                        "Criar Vault",
+                        f"Nenhum vault encontrado em:\n{vault_path}\n\nDeseja criar um novo?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    ) != QMessageBox.Yes:
+                        return
                     if USING_V2:
                         vm = VaultManager(AtomicStorageBackend(vault_path))
                     else:
@@ -1183,17 +1073,23 @@ class MainWindow(QWidget):
                             def load(self) -> bytes:
                                 return self.path.read_bytes() if self.path.exists() else b""
                         vm = VaultManager(storage=SimpleBackend(vault_path))
-                    vm.create(SecureMemory(pw))
+                    vm.create(pw)
                     self.vm = vm
                     self.status_bar.showMessage("Novo Vault criado com sucesso.", 8000)
                 else:
-                    self.vm = open_or_init_vault(pw, vault_path)
+                    # Abre vault existente (não cria automaticamente aqui)
+                    if USING_V2:
+                        vm = VaultManager(AtomicStorageBackend(vault_path))
+                        vm.open(pw)
+                        self.vm = vm
+                    else:
+                        self.vm = open_or_init_vault(pw, vault_path)
                     self.status_bar.showMessage("Vault aberto com sucesso.", 8000)
             except CorruptVault:
                 if QMessageBox.question(
                     self,
                     "Vault corrompido",
-                    "O arquivo vault3.dat parece corrompido.\nDeseja sobrescrevê-lo?",
+                    "O arquivo vault3.dat parece corrompido.\nDeseja sobrescrevÃª-lo?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,
                 ) == QMessageBox.Yes:
@@ -1201,7 +1097,11 @@ class MainWindow(QWidget):
                     continue
                 else:
                     return
-            except WrongPassword:
+            except WrongPassword as e:
+                logger.vault_error("open", "CryptGuard", e, {
+                    "vault_path": str(vault_path),
+                    "ui_context": "main_app_open_vault"
+                })
                 QMessageBox.warning(self, "Vault", "Senha do Vault incorreta. Tente novamente.")
                 continue
             except VaultLocked as e:
@@ -1257,17 +1157,20 @@ class MainWindow(QWidget):
             return
         
         try:
-            self.vm.change_password(SecureMemory(old_pw), SecureMemory(new_pw))
+            # Passa strings; o Vault converte de forma segura internamente
+            self.vm.change_password(old_pw, new_pw)
             QMessageBox.information(self, "Sucesso", "Senha do Vault alterada com sucesso.")
         except WrongPassword:
+            logger.warning("Vault: tentativa de troca com senha atual incorreta")
             QMessageBox.critical(self, "Senha incorreta", "A senha atual está incorreta.")
         except Exception as e:
+            logger.exception("Vault: erro ao trocar senha: %s", e)
             QMessageBox.critical(self, "Erro", str(e))
         finally:
             old_pw = new_pw = confirm = ""
     
     def _show_settings(self):
-        """Mostra diálogo de configurações (paridade com main_app.py)."""
+        """Mostra diÃ¡logo de configuraçÃµes (paridade com main_app.py)."""
         QMessageBox.information(self, "Settings", "Settings dialog not yet implemented.")
 
 
@@ -1310,10 +1213,10 @@ class MainWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Log",
-                f"Não foi possível abrir o log:\n{e}\n\nCaminho: {LOG_PATH}"
+                f"Não foi possÃ­vel abrir o log:\n{e}\n\nCaminho: {LOG_PATH}"
             )
     def _show_about(self):
-        """Mostra diálogo Sobre (paridade com main_app.py)."""
+        """Mostra diÃ¡logo Sobre (paridade com main_app.py)."""
         ver = getattr(self, "APP_VERSION", "3.0")
         QMessageBox.about(
             self,
@@ -1321,19 +1224,19 @@ class MainWindow(QWidget):
             (
                 "<h3>CryptGuardv2</h3>"
                 f"<p>Versão {ver}</p>"
-                "<p>Criptografia de arquivos e pastas com arquitetura moderna e auditável.</p>"
+                "<p>Criptografia de arquivos e pastas com arquitetura moderna e auditÃ¡vel.</p>"
                 "<p><b>Destaques:</b></p>"
                 "<ul>"
-                "<li><b>Container v5</b> com AAD ligada ao cabeçalho e JSON canônico</li>"
+                "<li><b>Container v5</b> com AAD ligada ao cabeçalho e JSON canÃ´nico</li>"
                 "<li>Streaming <b>XChaCha20-Poly1305</b> (libsodium SecretStream)</li>"
                 "<li><b>Argon2id</b> com perfis por alvo de tempo</li>"
-                "<li>Escrita atômica e segura contra panes (tmp + fsync no diretório)</li>"
+                "<li>Escrita atÃ´mica e segura contra panes (tmp + fsync no diretório)</li>"
                 "<li><b>Padding</b> opcional para ofuscar tamanhos</li>"
                 "<li>Suporte a <b>senha + keyfile</b></li>"
                 "<li><b>Vault</b> para gerenciar itens criptografados</li>"
                 "<li>Logs com redação; verificação sem deixar plaintext</li>"
                 "</ul>"
-                "<p>© 2024–2025 CryptGuard Team</p>"
+                "<p>Â© 2024â€“2025 CryptGuard Team</p>"
             ),
         )
 
@@ -1373,51 +1276,316 @@ class MainWindow(QWidget):
             ),
         )
 
-    def _secretstream_preflight(self, silent: bool = False) -> tuple[bool, str]:
-        """
-        Verifica se a API crypto_secretstream_xchacha20poly1305_init_push tem a
-        assinatura esperada (1 arg: key). Em versões legadas pode exigir 2 args
-        (header, key) ou outra forma – não suportada pelo xchacha_stream atual.
-        Retorna (ok, mensagem_de_erro_ou_vazia).
-        """
+    def _compact(self, layout, spacing=4):
+        """Remove margens padrão e reduz o espaço entre itens do layout."""
         try:
-            import inspect, nacl
-            from nacl import bindings as nb
-            func = nb.crypto_secretstream_xchacha20poly1305_init_push
-            sig = inspect.signature(func)
-            # Assinatura moderna: (key: bytes) -> (state, header)
-            if len(sig.parameters) == 1:
-                # Teste rápido
-                try:
-                    func(b"\x00" * 32)
-                except Exception:
-                    # Pode falhar por key não aleatória, ignoramos se TypeError não ocorre.
-                    pass
-                return True, ""
-            # Assinatura legada ou inesperada
-            msg = (
-                f"Incompatible SecretStream API (expected 1 param, got {len(sig.parameters)}). "
-                f"PyNaCl version: {getattr(nacl, '__version__', '?')}. "
-                "Upgrade with: pip install -U --force-reinstall 'pynacl>=1.5.0'"
-            )
-            if not silent:
-                QMessageBox.critical(self, "SecretStream API", msg)
-            return False, msg
-        except Exception as e:
-            return False, f"SecretStream preflight failed: {e}"
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(spacing)
+        except Exception:
+            pass
 
-# ════════════════════════════════════════════════════════════════════════════
+    # Builder compatível com a UI clássica (sem mudar layout/nomes de widgets).
+    # Se existir um builder legado, usamos ele; do contrário, montamos a UI
+    # mínima com os mesmos ids que o restante do código espera.
+    def _build_ui(self) -> None:
+        for name in ("build_ui", "_build_main_ui", "_build_ui_v2", "_build_ui_old"):
+            if hasattr(self, name):
+                getattr(self, name)()
+                return
+
+        # --------- Fallback: monta a UI esperada pelo restante do código ---------
+        root = QVBoxLayout(self)
+        # Leve aumento de margens e espaçamento global para "respirar" melhor
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
+
+        # Área central que o KeyGuard anexa (usada em _ensure_keyguard)
+        self.body_layout = QHBoxLayout()
+        # Um pouco mais de espaço entre painel esquerdo e o KeyGuard (direita)
+        self.body_layout.setSpacing(12)
+        root.addLayout(self.body_layout, 1)
+
+        # Painel esquerdo (controles principais)
+        left = QFrame(self)
+        left.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)  # ocupa altura total
+        lv = QVBoxLayout(left)
+        # Margens e espaçamento maiores para distribuir melhor os controles
+        lv.setContentsMargins(10, 12, 10, 12)
+        lv.setSpacing(10)
+
+        # Linha: arquivo + Select…
+        self.file_input = QLineEdit(self)
+        self.file_input.setPlaceholderText("Drop a file or click Select…")
+        self.btn_select = QPushButton("Select…", self)
+        self.btn_select.clicked.connect(self._browse_file)
+        row = QHBoxLayout(); self._compact(row, 8)
+        row.addWidget(self.file_input, 1)
+        row.addWidget(self.btn_select)
+        lv.addLayout(row)
+        # respiro entre seletor de arquivo e seção seguinte
+        lv.addSpacing(6)
+
+        # Algorithm (label estático, como na UI clássica)
+        alg_label = QLabel("Algorithm    XChaCha20-Poly1305 (SecretStream)", self)
+        alg_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        lv.addWidget(alg_label)
+        lv.addSpacing(6)
+
+        # KDF profile - modernizado
+        kdf_row = QHBoxLayout(); self._compact(kdf_row, 8)
+        kdf_label = QLabel("KDF profile", self)
+        kdf_label.setStyleSheet("font-weight: 600; color: #e6eaf0;")
+        kdf_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        kdf_row.addWidget(kdf_label)
+        self.combo_profile = QComboBox(self)
+        self.combo_profile.addItems(["Interactive", "Sensitive"])
+        self.combo_profile.setMaximumWidth(160)
+        self.combo_profile.setStyleSheet("""
+            QComboBox {
+                background: #37474F; color: #e6eaf0;
+                border: 1px solid #546e7a; border-radius: 6px;
+                padding: 4px 8px; font-weight: 500;
+                selection-background-color: #536dfe;
+            }
+            QComboBox:hover {
+                border: 1px solid #536dfe;
+                background: #3a4b57;
+            }
+            QComboBox::drop-down {
+                border: none; width: 18px;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+            }
+            QComboBox::down-arrow {
+                width: 10px; height: 10px;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTMgNUw2IDhMOSA1IiBzdHJva2U9IiNlNmVhZjAiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+);
+            }
+            QComboBox QAbstractItemView {
+                background: #37474F; color: #e6eaf0;
+                border: 1px solid #546e7a; border-radius: 6px;
+                selection-background-color: #536dfe;
+                outline: none;
+            }
+        """)
+        kdf_row.addWidget(self.combo_profile)
+        kdf_row.addStretch(1)
+        lv.addLayout(kdf_row)
+        lv.addSpacing(4)
+
+        # Pad size - modernizado
+        pad_row = QHBoxLayout(); self._compact(pad_row, 8)
+        pad_label = QLabel("Pad size", self)
+        pad_label.setStyleSheet("font-weight: 600; color: #e6eaf0;")
+        pad_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        pad_row.addWidget(pad_label)
+        self.combo_padding = QComboBox(self)
+        self.combo_padding.addItems(["Off", "4 KB", "16 KB"])  # mapeia para 4k/16k no start_operation
+        self.combo_padding.setMaximumWidth(120)
+        self.combo_padding.setStyleSheet("""
+            QComboBox {
+                background: #37474F; color: #e6eaf0;
+                border: 1px solid #546e7a; border-radius: 6px;
+                padding: 4px 8px; font-weight: 500;
+                selection-background-color: #536dfe;
+            }
+            QComboBox:hover {
+                border: 1px solid #536dfe;
+                background: #3a4b57;
+            }
+            QComboBox::drop-down {
+                border: none; width: 18px;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+            }
+            QComboBox::down-arrow {
+                width: 10px; height: 10px;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTMgNUw2IDhMOSA1IiBzdHJva2U9IiNlNmVhZjAiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+);
+            }
+            QComboBox QAbstractItemView {
+                background: #37474F; color: #e6eaf0;
+                border: 1px solid #546e7a; border-radius: 6px;
+                selection-background-color: #536dfe;
+                outline: none;
+            }
+        """)
+        pad_row.addWidget(self.combo_padding)
+        pad_row.addStretch(1)
+        lv.addLayout(pad_row)
+        lv.addSpacing(4)
+
+        # Expiration date
+        exp_row = QHBoxLayout(); self._compact(exp_row, 8)
+        exp_date_label = QLabel("Expiration date", self)
+        exp_date_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        exp_row.addWidget(exp_date_label)
+        self.date_expiration = ClickableDateEdit(self)
+        self.date_expiration.setDate(QDate.currentDate())
+        self.date_expiration.setCalendarPopup(True)
+        exp_row.addWidget(self.date_expiration)
+        self.check_expiration = QCheckBox("Enable expiration date", self)
+        exp_row.addWidget(self.check_expiration)
+        exp_row.addStretch(1)
+        lv.addLayout(exp_row)
+        lv.addSpacing(6)
+
+        # Password + Show
+        p_row = QHBoxLayout(); self._compact(p_row, 8)
+        self.password_input = QLineEdit(self)
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setPlaceholderText("Password…")
+        p_row.addWidget(self.password_input, 1)
+        self.btn_show_password = QPushButton("Show", self)
+        self.btn_show_password.setCheckable(True)
+        self.btn_show_password.toggled.connect(self._toggle_password_visibility)
+        p_row.addWidget(self.btn_show_password)
+        lv.addLayout(p_row)
+        
+        # Password strength bar
+        self.strength_bar = QProgressBar(self)
+        self.strength_bar.setRange(0, 100)
+        self.strength_bar.setValue(0)
+        self.strength_bar.setVisible(True)
+        lv.addWidget(self.strength_bar)
+        lv.addSpacing(6)
+        
+        # Connect password input to strength update
+        self.password_input.textChanged.connect(self._update_password_strength)
+
+        # Keyfile
+        kf_row = QHBoxLayout(); self._compact(kf_row, 8)
+        self.check_keyfile = QCheckBox("Use keyfile", self)
+        kf_row.addWidget(self.check_keyfile)
+        self.keyfile_input = QLineEdit(self)
+        self.keyfile_input.setPlaceholderText("Pick a keyfile…")
+        kf_row.addWidget(self.keyfile_input, 1)
+        self.btn_pick_keyfile = QPushButton("Pick", self)
+        self.btn_pick_keyfile.clicked.connect(self._browse_keyfile)
+        kf_row.addWidget(self.btn_pick_keyfile)
+        lv.addLayout(kf_row)
+        lv.addSpacing(4)
+
+        # Opções (mesmos nomes usados no restante do código)
+        self.check_hide_filename = QCheckBox("Hide filename (restore only extension)", self)
+        self.check_delete = QCheckBox("Secure-delete input after operation", self)
+        self.check_archive = QCheckBox("Archive folder before encrypt (ZIP)", self)
+        self.check_vault = QCheckBox("Store encrypted file in Vault", self)
+        self.check_extract = QCheckBox("Auto-extract ZIP after decrypt", self)
+        for cb in (self.check_hide_filename, self.check_delete, self.check_archive, self.check_vault, self.check_extract):
+            lv.addWidget(cb)
+        # dá mais corpo à coluna de opções antes dos botões
+        lv.addSpacing(6)
+
+        # Botões de ação (sem alterar rótulos)
+        btn_row = QHBoxLayout(); self._compact(btn_row, 10)
+        self.btn_encrypt = QPushButton("Encrypt", self)
+        self.btn_decrypt = QPushButton("Decrypt", self)
+        self.btn_verify  = QPushButton("Verify", self)
+        self.btn_cancel  = QPushButton("Cancel", self)
+        self.btn_encrypt.clicked.connect(lambda: self._start_operation("encrypt"))
+        self.btn_decrypt.clicked.connect(lambda: self._start_operation("decrypt"))
+        self.btn_verify.clicked.connect(self._verify_file)
+        self.btn_cancel.clicked.connect(self._cancel_operation)
+        for b in (self.btn_encrypt, self.btn_decrypt, self.btn_verify, self.btn_cancel):
+            btn_row.addWidget(b)
+        lv.addLayout(btn_row)
+
+        # Progresso + velocidade
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setValue(0)
+        lv.addWidget(self.progress_bar)
+        self.label_speed = QLabel("Speed: - MB/s", self)
+        lv.addWidget(self.label_speed)
+        # Em vez de um grande "vazio" empurrando o rodapé, usamos um espaçamento leve
+        lv.addSpacing(8)
+
+        # --- Rodapé: botões à direita (como na UI antiga) ---
+        footer = QHBoxLayout(); self._compact(footer, 10)
+        footer.addStretch(1)  # empurra tudo para a direita
+        self.btn_log = QPushButton("Log", self)
+        self.btn_log.clicked.connect(self._open_log)
+        footer.addWidget(self.btn_log)
+
+        self.btn_change_pw = QPushButton("Change Password", self)
+        self.btn_change_pw.clicked.connect(self._change_vault_password)
+        footer.addWidget(self.btn_change_pw)
+
+        self.btn_vault = QPushButton("Vault", self)
+        self.btn_vault.clicked.connect(self._open_vault)
+        footer.addWidget(self.btn_vault)
+
+        self.btn_settings = QPushButton("Settings", self)
+        self.btn_settings.clicked.connect(self._show_settings)
+        footer.addWidget(self.btn_settings)
+
+        lv.addLayout(footer)
+
+        # Widgets "de linha" com altura fixa
+        for w in (
+            kdf_label, self.combo_profile,
+            pad_label, self.combo_padding,
+            self.date_expiration, self.check_expiration,
+            self.password_input, self.btn_show_password,
+            self.check_keyfile, self.keyfile_input, self.btn_pick_keyfile,
+            self.check_hide_filename, self.check_delete, self.check_archive,
+            self.check_vault, self.check_extract,
+        ):
+            w.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        
+        # Campos e combos não devem crescer na vertical
+        for w in (self.file_input, self.password_input, self.keyfile_input,
+                  self.combo_profile, self.combo_padding, self.date_expiration):
+            w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # Progress bar um pouco mais baixa (coerente com o CSS acima)
+        self.progress_bar.setFixedHeight(14)
+
+        # Botões com altura mínima menor
+        for b in (self.btn_encrypt, self.btn_decrypt, self.btn_verify, self.btn_cancel,
+                  self.btn_log, self.btn_change_pw, self.btn_vault, self.btn_settings):
+            b.setMinimumHeight(28)
+
+        # Anexa painel esquerdo e reserva espaço à direita p/ KeyGuard
+        self.body_layout.addWidget(left, 1)                # fixa ao topo
+        # (KeyGuard entra depois pelo _ensure_keyguard)
+
+        # Status bar
+        self.status_bar = QStatusBar(self)
+        root.addWidget(self.status_bar)
+
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                              MAIN ENTRY POINT
-# ════════════════════════════════════════════════════════════════════════════
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 
 if __name__ == "__main__":
-    # Best-effort process hardening
+    # P1.4: Early process hardening and initialization (bootstrap)
     try:
+        from crypto_core.paths import ensure_base_dir
+        from crypto_core.config import enable_process_hardening
         from crypto_core.memharden import harden_process_best_effort
-
+        
+        # Inicializar diretório base com permissões seguras
+        ensure_base_dir()
+        
+        # Ativar proteções de processo
+        enable_process_hardening()
+        
+        # Aplicar hardening de memória
         harden_process_best_effort()
+        
     except Exception:
+        # Best-effort - não deve quebrar a aplicação por falhas de hardening
         pass
+    
+    # Handler global de exceções para capturar todos os erros
+    def global_exception_handler(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        # Registra com traceback completo
+        logger.error("Exceção não tratada", exc_info=(exc_type, exc_value, exc_traceback))
+    
+    sys.excepthook = global_exception_handler
+    
     app = QApplication(sys.argv)
     # i18n hook: load ./i18n/cryptguard_<locale>.qm if available
     try:
