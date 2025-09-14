@@ -191,7 +191,7 @@ class XChaChaStream:
             key32 = hkdf.derive(key32 + kpep)
             kb = None
         
-        # InicializaÃ§Ã£o compatÃ­vel do SecretStream
+        # Inicialização compatÃ­vel do SecretStream
         if _secret_bytes is not None:
             with _secret_bytes(initial=key32) as _kmv:
                 state, ss_header = ss_init_push_compat(bytes(_kmv))
@@ -262,7 +262,7 @@ class XChaChaStream:
             key32 = hkdf.derive(key32 + kpep)
             kb = None
 
-        # InicializaÃ§Ã£o compatÃ­vel do lado de leitura
+        # Inicialização compatÃ­vel do lado de leitura
         if _secret_bytes is not None:
             with _secret_bytes(initial=key32) as _kmv:
                 state = ss_init_pull_compat(hdr.ss_header, bytes(_kmv))

@@ -13,12 +13,19 @@ class NoLocalsFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
         if record.exc_info:
-            etype, evalue, _tb = record.exc_info
+            etype, evalue, tb = record.exc_info
             try:
-                record.msg = f"{record.msg} | {etype.__name__}: {evalue}"
+                # Mantém o traceback mas remove locals se existirem
+                if tb and hasattr(tb, 'tb_frame'):
+                    # Remove locals dos frames do traceback
+                    frame = tb
+                    while frame:
+                        if hasattr(frame, 'tb_frame') and hasattr(frame.tb_frame, 'f_locals'):
+                            frame.tb_frame.f_locals.clear()
+                        frame = frame.tb_next
+                # Não remove o exc_info, mantém o traceback completo
             except Exception:
                 pass
-            record.exc_info = None
         return True
 
 

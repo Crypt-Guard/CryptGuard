@@ -12,7 +12,9 @@ Compat de kwargs:
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from typing import Any, Optional, Union
+from venv import logger
 
 from .config import SecurityProfile, LOG_PATH  # reexport
 # Substituímos o uso indireto de .factories aqui por wrappers diretos do core cg2.
@@ -110,3 +112,10 @@ def decrypt(cg2_path: str,
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     res = _decrypt_factory(cg2_path, pwd, out_path=dst, verify_only=verify_only)
     return None if verify_only else (res or dst)
+
+try:
+    from modules.keyguard.integrate import attach_keyguard_sidebar
+    if os.environ.get("CG_ENABLE_TK_KEYGUARD") == "1":
+        attach_keyguard_sidebar(None)  # tenta descobrir o root e o self.vault
+except Exception as e:
+    logger.warning("KeyGuard sidebar indisponível: %s", e)
