@@ -17,7 +17,8 @@ Version **3.0** introduces a simplified, auditable core that writes a single, ne
 | 6 | **Robust verify & integrity**                           | Bit-flips in header, data frames, or trailing garbage are detected; decryption fails cleanly with a clear error.                                                                      |
 | 7 | **Polished GUI**                                        | Drag-and-drop, progress and speed readouts, **Verify** button, selectable KDF profile, **Pad size** selector, expiration field, logging.                                              |
 | 8 | **Built-in Vault**                                      | Optional passphrase-protected store for your **already-encrypted** files; now also binds its header via AAD and uses secure logging.                                                  |
-| 9 | **Safe defaults & sane pins**                           | SecretStream via PyNaCl/libsodium; modern `cryptography` where applicable; defensive file I/O and best-effort OS hardening.                                                           |
+| 9 | **Integrated KeyGuard**                                 | Built-in secure password generator with entropy calculation, multiple character sets, and its own vault for storing password entries. Features a sidebar UI for easy access.          |
+| 10| **Safe defaults & sane pins**                           | SecretStream via PyNaCl/libsodium; modern `cryptography` where applicable; defensive file I/O and best-effort OS hardening.                                                           |
 
 ---
 
@@ -40,6 +41,14 @@ Version **3.0** introduces a simplified, auditable core that writes a single, ne
 
 * 🔐 Vault writes/opens binding the header via AAD; logging uses **SecureFormatter** (masks secrets).
 * 🧱 Robustness tweaks (atomic I/O, better SQLite PRAGMAs where applicable).
+
+**KeyGuard Integration**
+
+* 🔑 **Integrated password generator**: cryptographically secure password generation with entropy calculation.
+* 📊 **Multiple character sets**: numbers, letters, alphanumeric, and full punctuation support.
+* 💾 **KeyGuard Vault**: dedicated vault for storing password entries with atomic storage and compression.
+* 🎯 **Sidebar UI**: non-intrusive side panel that attaches to the main window for easy access.
+* ⚡ **Rate limiting**: built-in protection against brute-force attempts on the KeyGuard vault.
 
 **Compatibility**
 
@@ -113,6 +122,47 @@ pyinstaller --onefile --windowed --name "CryptGuard" --icon .\cryptguard.ico mai
    * The file is saved with its original name/ext. If a conflict exists, `name(1).ext` is created.
 6. **Verify** checks integrity without writing output to disk.
 7. **Vault**: tick **Store encrypted file in Vault** when encrypting to move it to the Vault; use the **Vault** button to list/export.
+8. **KeyGuard**: use the integrated password generator in the side panel to create secure passwords with customizable length and character sets. Generated passwords can be stored in the KeyGuard vault for later retrieval.
+
+---
+
+## 🔑 KeyGuard Password Generator
+
+CryptGuard v3.0 includes **KeyGuard**, an integrated secure password generator that appears as a sidebar in the main interface. This feature provides:
+
+### Core Features
+
+* **Cryptographically secure generation**: Uses Python's `secrets` module for strong randomness
+* **Entropy calculation**: Real-time entropy estimation to ensure password strength
+* **Multiple character sets**:
+  * **Numbers**: 0-9 (10 characters)
+  * **Letters**: a-z, A-Z (52 characters)  
+  * **Alphanumeric**: Letters + Numbers (62 characters)
+  * **Full**: Letters + Numbers + Punctuation (94 characters)
+* **Customizable length**: Generate passwords from 1 to 128+ characters
+* **Pattern rejection**: Automatically rejects weak patterns during generation
+
+### KeyGuard Vault
+
+* **Secure storage**: Dedicated vault for storing generated passwords and entries
+* **Atomic operations**: Safe file operations with automatic backup recovery
+* **Compression**: Transparent gzip compression before encryption
+* **Rate limiting**: Built-in protection against brute-force attempts
+* **Entry management**: Add, edit, delete, and reorder password entries
+
+### Integration
+
+* **Non-intrusive UI**: Appears as a collapsible sidebar panel
+* **Qt and Tk support**: Works with both PySide6 and tkinter interfaces
+* **Dynamic loading**: Graceful fallback if KeyGuard modules are unavailable
+* **Vault synchronization**: Can integrate with the main CryptGuard vault system
+
+### Usage Tips
+
+* Use **Full** character set for maximum security when possible
+* Aim for passwords with **50+ bits** of entropy (shown in real-time)
+* Store frequently used passwords in the KeyGuard vault for convenience
+* Use longer passwords (12+ characters) rather than shorter complex ones
 
 ---
 
@@ -132,10 +182,12 @@ pyinstaller --onefile --windowed --name "CryptGuard" --icon .\cryptguard.ico mai
 
 ## 🔍 Troubleshooting
 
-* “InvalidTag / authentication failed”: corrupted file (header, frame, or final).
+* "InvalidTag / authentication failed": corrupted file (header, frame, or final).
 * No extension after decrypt: in 3.0 this is restored automatically; if you choose an `out_path` with a different extension, it will be honored.
 * Drag-and-drop doesn't work: do not run as Admin (UAC).
 * Huge PyInstaller build: avoid `--collect-all`; make a slim build.
+* KeyGuard sidebar not appearing: check that the KeyGuard modules are present in `modules/keyguard/`. The app will show a status message if import fails.
+* KeyGuard vault locked/corrupted: use the vault recovery options or recreate the KeyGuard vault if needed.
 
 ---
 
@@ -145,6 +197,8 @@ pyinstaller --onefile --windowed --name "CryptGuard" --icon .\cryptguard.ico mai
 * **Sensitive** is more resistant to brute-force; use it when you can tolerate higher latency.
 * Do not decrypt sensitive content on possibly compromised machines.
 * **Backups**: if you lose both the Vault and the passphrase, the content is unrecoverable.
+* **KeyGuard passwords**: use the integrated generator for creating strong passphrases for your encrypted files.
+* **Multiple vaults**: KeyGuard vault and main CryptGuard vault are separate - back up both if you use them.
 
 ---
 
@@ -200,4 +254,3 @@ Do not export or re-export to sanctioned jurisdictions/users.
 * `PySide6 / Qt` (LGPL-3.0; additional Qt terms may apply)
 * `zxcvbn-python` (MIT)
 * `PyNaCl` (ISC) — optional fallback for XChaCha20-Poly1305
-
