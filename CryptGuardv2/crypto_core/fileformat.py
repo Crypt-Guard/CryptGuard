@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+"""
+LEGACY CG2 header (v1–v4) — READ-ONLY
+-------------------------------------
+Este módulo dá suporte **apenas à leitura** de arquivos antigos (v1–v4),
+com mapeamento de algoritmos, nonce e KDF JSON do cabeçalho legado.
+Para o formato atual (v5 SecretStream), use `crypto_core.fileformat_v5`.
+"""
 
 import json
 import struct

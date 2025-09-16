@@ -7,7 +7,7 @@ import sys
 def harden_process_best_effort():
     """Reduce memory leakage avenues: disable core dumps, etc. Best-effort."""
     try:
-        if sys.platform.startswith("linux"):
+        if sys.platform.startswith("linux") or sys.platform == "darwin":
             try:
                 import resource  # type: ignore
 

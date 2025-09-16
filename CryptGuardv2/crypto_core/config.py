@@ -1,5 +1,6 @@
 """
-Constantes e parâmetros (podem ser calibrados durante a execução).
+Parâmetros centrais do CryptGuard v3.0 (writer único: v5 SecretStream).
+Inclui perfis de KDF (com calibração/override via arquivo) e caminhos.
 """
 
 from __future__ import annotations
@@ -21,26 +22,8 @@ class SecurityProfile(Enum):
     SECURE = auto()
 
 
-ALGORITHMS = {
-    "AES-GCM": {
-        "module": "file_crypto_aes_gcm",
-        "encrypt": "encrypt_file",
-        "decrypt": "decrypt_file",
-        "nonce": 16,
-    },
-    "ChaCha20-Poly1305": {
-        "module": "file_crypto_chacha",
-        "encrypt": "encrypt_file",
-        "decrypt": "decrypt_file",
-        "nonce": 12,
-    },
-    "XChaCha20-Poly1305": {
-        "module": "file_crypto_xchacha",
-        "encrypt": "encrypt_file",
-        "decrypt": "decrypt_file",
-        "stream": False,
-    },
-}
+# Writer único (v5):
+WRITE_FORMAT = "v5-secretstream"
 
 # Custos Argon2 pré-calibrados (serão ajustados se existir cache)
 ARGON_PRESETS = {
@@ -72,16 +55,12 @@ DEFAULT_ARGON_PARAMS = ARGON_PARAMS[SecurityProfile.BALANCED]
 
 STREAMING_THRESHOLD = 100 * 1024 * 1024
 CHUNK_SIZE = 8 * 1024 * 1024
-SINGLE_SHOT_SUBCHUNK_SIZE = 1 * 1024 * 1024
 
-USE_RS = True
-RS_PARITY_BYTES = 32
-SIGN_METADATA = True
+# Parâmetros legados foram removidos daqui para evitar confusão.
+# Caso haja leitura v1–v4 em crypto_core/legacy, deixe os valores
+# específicos **apenas** lá.
 
-# ───── extensões / mágica de header ─────────────────────────────────────
-MAGIC = b"CGv2"
 CG2_EXT = ".cg2"
-ENC_EXT = ".cg2"  # alias unificado
 META_SALT_SIZE = 16
 
 # Compat legada governada por flag (default: aceita formatos legados)
@@ -91,6 +70,7 @@ READ_LEGACY_FORMATS = True
 # Centralizamos em BASE_DIR (crypto_core.paths) e não sobrescrevemos LOG_PATH aqui.
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 CALIB_PATH = BASE_DIR / "argon_calib.json"
+SETTINGS_PATH = BASE_DIR / "settings.json"
 
 # ───── calibração automática (primeira execução) ───────────────────────
 def _map_flat_presets(p: dict) -> dict:
@@ -139,13 +119,16 @@ def enable_process_hardening():
 
 __all__ = [
     "SecurityProfile",
+    "ARGON_PRESETS",
     "ARGON_PARAMS",
+    "DEFAULT_ARGON_PARAMS",
     "READ_LEGACY_FORMATS",
     "STREAMING_THRESHOLD",
     "CG2_EXT",
-    "ENC_EXT",
     "enable_process_hardening",
     "LOG_PATH",
     "BASE_DIR",
     "CALIB_PATH",
+    "WRITE_FORMAT",
+    "SETTINGS_PATH",
 ]

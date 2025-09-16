@@ -18,7 +18,7 @@ from .fileformat_v5 import (
     canonical_json_bytes,
     read_v5_header,
 )
-from .kdf_v5 import derive_key_from_params_json, derive_key_v5
+from .kdf import derive_key_from_params_json, derive_key_v5
 try:  # optional best-effort secure memory
     from .securemem import secret_bytes as _secret_bytes
 except Exception:  # pragma: no cover - optional

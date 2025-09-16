@@ -22,7 +22,7 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from .config import META_SALT_SIZE
-from .kdf import derive_meta_key  # Argon2id → chave
+from .kdf import derive_key_sb as _derive_meta_key_sb  # Argon2id → chave
 from .secure_bytes import SecureBytes
 from .utils import write_atomic_secure
 from .fileformat_v5 import canonical_json_bytes
@@ -60,10 +60,11 @@ def encrypt_meta_json(
         meta["exp"] = int(expires_at)
 
     salt = secrets.token_bytes(META_SALT_SIZE)
-    key = derive_meta_key(pwd_sb, salt)  # → SecureBytes
+    params = {"salt": salt}
+    key = _derive_meta_key_sb(pwd_sb, params)  # → SecureBytes
     nonce = secrets.token_bytes(META_NONCE_SIZE)
 
-    cipher = ChaCha20Poly1305(key.to_bytes())
+    cipher = ChaCha20Poly1305(bytes(key.view()))
     blob = salt + nonce + cipher.encrypt(nonce, _pack(meta), AAD_META)
 
     write_atomic_secure(meta_path, blob)
@@ -84,8 +85,9 @@ def decrypt_meta_json(meta_path: Path, pwd_sb: SecureBytes) -> dict[str, Any]:
     nonce = blob[META_SALT_SIZE : META_SALT_SIZE + META_NONCE_SIZE]
     ct = blob[META_SALT_SIZE + META_NONCE_SIZE :]
 
-    key = derive_meta_key(pwd_sb, salt)
-    cipher = ChaCha20Poly1305(key.to_bytes())
+    params = {"salt": salt}
+    key = _derive_meta_key_sb(pwd_sb, params)
+    cipher = ChaCha20Poly1305(bytes(key.view()))
     try:
         data = cipher.decrypt(nonce, ct, AAD_META)
     except Exception:
