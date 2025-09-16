@@ -1,8 +1,8 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CryptGuardv2 - secure GUI
-Versao com interface classica e core refatorado compativel com vault_v2.py e cg2_ops_v2.py
+CryptGuardv2 - secure GUI (v5 SecretStream)
+Interface clássica com painel KeyGuard (Qt) e pipeline único de criptografia (v5).
 """
 
 from __future__ import annotations
@@ -22,50 +22,13 @@ from typing import Optional, Any
 import warnings
 
 # --------------------------------------------------------------- PySide6 / Qt ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-from PySide6.QtCore import (
-    QDate,
-    QEasingCurve,
-    QEvent,
-    QPoint,
-    QPropertyAnimation,
-    Qt,
-    QThread,
-    QTimer,
-    QUrl,
-    Signal,
-    QSize,  # added
-)
-from PySide6.QtGui import (
-    QBrush,
-    QColor,
-    QDesktopServices,
-    QDragEnterEvent,
-    QDropEvent,
-    QFont,
-    QLinearGradient,
-    QPainter,
-    QPalette,
-)
+from PySide6.QtCore import QDate, Qt, QThread, QTimer, QUrl, Signal, QSize
+from PySide6.QtGui import QColor, QDesktopServices, QDragEnterEvent, QDropEvent, QPalette
 from PySide6.QtWidgets import (
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QDateEdit,
-    QFileDialog,
-    QFrame,
-    QHBoxLayout,
-    QInputDialog,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QStatusBar,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
+    QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+    QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QStatusBar,
+    QToolButton, QVBoxLayout, QWidget
 )
 
 # --------------------------------------------------------------- Configuração de warnings e encoding ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -92,7 +55,6 @@ try:
     from vault import (
         Config,
         CorruptVault,
-        SecureMemory,
         VaultDialog,
         VaultManager,
         WrongPassword,
@@ -121,7 +83,6 @@ except ImportError as e:
     from vault import (
         Config,
         CorruptVault,
-        SecureMemory,
         VaultDialog,
         VaultManager,
         WrongPassword,
@@ -135,7 +96,8 @@ except ImportError as e:
             pass
 
 from crypto_core import LOG_PATH
-from crypto_core.fileformat import is_cg2_file, read_header
+from crypto_core.config import SETTINGS_PATH
+from crypto_core.fileformat_v5 import read_header_version_any
 from crypto_core.logger import logger
 from crypto_core.utils import secure_delete, archive_folder
 from crypto_core.verify_integrity import verify_integrity
@@ -165,16 +127,7 @@ except Exception:
     except Exception:
         attach_keyguard_qt = None
 
-# --------------------------------------------------------------- Detecção de algoritmos disponiveis ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
-ALGOS = ["AES-256-GCM", "AES-256-CTR", "ChaCha20-Poly1305"]
-
-# Detecta XChaCha20
-try:
-    from cryptography.hazmat.primitives.ciphers.aead import XChaCha20Poly1305
-    XCHACHA20_AVAILABLE = True
-    ALGOS.append("XChaCha20-Poly1305")
-except ImportError:
-    XCHACHA20_AVAILABLE = False  # Legacy detection not used in v5 UI
+# (removido) Detecção de algoritmos legados — o app escreve apenas v5 SecretStream
 
 # ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                              UI HELPERS (Estilo Antigo)
@@ -204,55 +157,7 @@ class ClickableDateEdit(QDateEdit):
                     break
         super().mousePressEvent(event)
 
-class AccentButton(QPushButton):
-    """Botão azul com animação de hover (estilo antigo)."""
-    
-    def __init__(self, text: str):
-        super().__init__(text)
-        self.setCursor(Qt.PointingHandCursor)
-        self._base = "#536dfe"
-        self._hover = "#7c9dff"
-        self._radius = 9
-        self._update_css(self._base)
-        self._anim = QPropertyAnimation(self, b"geometry", self)
-        self._anim.setDuration(150)
-        self._anim.setEasingCurve(QEasingCurve.OutQuad)
-    
-    def _update_css(self, color: str):
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background:{color}; color:white; border:none;
-                border-radius:{self._radius}px; padding:9px 24px;
-                font-weight:600; letter-spacing:0.3px;
-            }}
-            QPushButton:disabled {{background:#4e586e;}}
-        """)
-    
-    def enterEvent(self, _: QEvent):
-        self._update_css(self._hover)
-        r = self.geometry()
-        r.adjust(-2, -2, 2, 2)
-        self._animate(r)
-    
-    def leaveEvent(self, _: QEvent):
-        self._update_css(self._base)
-        r = self.geometry().adjusted(2, 2, -2, -2)
-        self._animate(r)
-    
-    def _animate(self, rect):
-        self._anim.stop()
-        self._anim.setStartValue(self.geometry())
-        self._anim.setEndValue(rect)
-        self._anim.start()
-
-class GradientHeader(QFrame):
-    """Header com gradiente (visual antigo)."""
-    def paintEvent(self, evt):
-        painter = QPainter(self)
-        g = QLinearGradient(QPoint(0, 0), QPoint(self.width(), 0))
-        g.setColorAt(0, QColor("#667eea"))
-        g.setColorAt(1, QColor("#764ba2"))
-        painter.fillRect(self.rect(), QBrush(g))
+# (removidas) classes antigas não utilizadas: AccentButton, GradientHeader
 
 # ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                           WORKER THREAD (Core mantido)
@@ -327,14 +232,15 @@ class CryptoWorker(QThread):
         try:
             return Path(cg_encrypt(
                 in_path=str(src),
-                password=bytes(password_secure.view()),
-                algo="XC20",  # ignored; v5 fixed
                 out_path=str(out_path),
+                password=bytes(password_secure.view()),
+                algo="SecretStream",  # ignorado mas necessário para compatibilidade
                 progress_cb=progress_cb,
                 kdf_profile=self.extra_params.get("kdf_profile", "INTERACTIVE"),
-                padding=self.extra_params.get("padding", "off"),
+                pad_block=self.extra_params.get("pad_block", 0),
                 keyfile=self.extra_params.get("keyfile"),
                 hide_filename=self.extra_params.get("hide_filename", False),
+                expires_at=self.extra_params.get("exp_ts"),
             ))
         except TypeError as e:
             # Erro comum quando a instalação do PyNaCl/libsodium estÃ¡ quebrada ou
@@ -358,8 +264,8 @@ class CryptoWorker(QThread):
         
         result = cg_decrypt(
             in_path=str(src),
-            password=bytes(password_secure.view()),
             out_path=str(out_path),
+            password=bytes(password_secure.view()),
             verify_only=False,
             progress_cb=progress_cb,
             keyfile=self.extra_params.get("keyfile"),
@@ -393,6 +299,8 @@ class MainWindow(QWidget):
         self._temp_files: list[Path] = []
         self._original_path = ""
         self._tmp_zip = None
+        self._settings = self._load_settings()
+        self._clipboard_token: str | None = None
         self._forced_out = ""
         self._is_encrypt = False
         # Simple rate limiting (per file path)
@@ -544,31 +452,34 @@ class MainWindow(QWidget):
         """Allow KeyGuard pane to paste password into main module."""
         try:
             self.password_input.setText(pwd)
+            # Também envia para o clipboard e agenda limpeza se configurado
+            self._copy_password_to_clipboard_and_maybe_clear(pwd)
         except Exception:
             pass
     
-    def _field(self, label: str, widget):
-        """Helper da UI antiga para alinhar label + widget."""
-        lab = QLabel(label)
-        lab.setFont(QFont("Inter", 10, QFont.Bold))
-        lay = QHBoxLayout()
-        lay.addWidget(lab)
-        lay.addWidget(widget)
-        lay.addStretch()
-        return lay
+    # (removidos) helpers antigos não utilizados: _field, _combo
     
-    def _combo(self, items):
-        """Helper para criar combo estilizado."""
-        cmb = QComboBox()
-        cmb.addItems(items)
-        cmb.setMaximumWidth(280)
-        cmb.setStyleSheet(
-            "QComboBox{background:#37474F;color:#ECEFF1;border:1px solid #455A64;"
-            "border-radius:5px;padding:5px 10px;}"
-            "QComboBox::drop-down{border:none;}"
-            "QComboBox QAbstractItemView{background:#37474F;selection-background-color:#546E7A;color:white;}"
-        )
-        return cmb
+    # ───────────────────────────── Clipboard helpers ─────────────────────────────
+    def _copy_password_to_clipboard_and_maybe_clear(self, pwd: str) -> None:
+        """Copia a senha para o clipboard e, se habilitado, agenda limpeza em 30s."""
+        try:
+            cb = QApplication.clipboard()
+            cb.setText(pwd)
+            # guarda token para não apagar se o usuário colar outra coisa
+            self._clipboard_token = pwd
+            if bool(self._settings.get("clipboard_autoclear", False)):
+                QTimer.singleShot(30_000, self._clear_clipboard_if_unchanged)
+        except Exception:
+            pass
+
+    def _clear_clipboard_if_unchanged(self) -> None:
+        try:
+            cb = QApplication.clipboard()
+            # só limpa se ainda for a mesma senha
+            if self._clipboard_token and cb.text() == self._clipboard_token:
+                cb.clear()
+        finally:
+            self._clipboard_token = None
     
     def _update_password_strength(self, txt: str):
         """Atualiza indicador de força da senha."""
@@ -614,7 +525,11 @@ class MainWindow(QWidget):
                 if not self.check_archive.isChecked():
                     self.check_archive.setChecked(True)
             else:
-                file_type = "CG2" if is_cg2_file(path) else "file"
+                try:
+                    ver = read_header_version_any(path)
+                    file_type = "CG2 v5" if ver >= 5 else "CG2 (legacy)"
+                except Exception:
+                    file_type = "file"
                 self.status_bar.showMessage(f"{file_type} loaded via drag & drop: {path.name}")
     
     def _detect_algo(self, path: str):
@@ -623,7 +538,6 @@ class MainWindow(QWidget):
             src = Path(path)
             if not src.exists() or src.is_dir():
                 return
-            from crypto_core.fileformat_v5 import read_header_version_any
             try:
                 ver = read_header_version_any(src)
             except Exception:
@@ -742,7 +656,6 @@ class MainWindow(QWidget):
                 self.status_bar.showMessage(f"Encrypting with {alg_name}")
             else:
                 try:
-                    from crypto_core.fileformat_v5 import read_header_version_any
                     ver = read_header_version_any(src)
                     self.status_bar.showMessage(
                         "Decrypting CG2 v5 (SecretStream)" if ver >= 5 else "Decrypting legacy CG2"
@@ -763,18 +676,49 @@ class MainWindow(QWidget):
                 if exp_dt.date() < datetime.now(UTC).date():
                     self.status_bar.showMessage("Expiration date cannot be in the past.")
                     return
-                extra["expires_at"] = int(exp_dt.timestamp())
+                # padroniza nome do parâmetro com factories
+                extra["exp_ts"] = int(exp_dt.timestamp())
 
             if self._is_encrypt:
+                # mapeia para tamanho numérico (0/4096/16384) usado pelo writer
                 pad_name = self.combo_padding.currentText().lower().replace(" ", "")
-                pad_map = {"off": "off", "4kb": "4k", "16kb": "16k"}
-                extra["padding"] = pad_map.get(pad_name, "off")
+                pad_map = {"off": 0, "4kb": 4096, "16kb": 16384}
+                extra["pad_block"] = pad_map.get(pad_name, 0)
                 extra["kdf_profile"] = kdf_profile
-                extra["out_path"] = self._forced_out or str(Path(src).with_suffix(".cg2"))
+                # destino: pasta fixa se habilitada; caso contrário ao lado do arquivo
+                if self._forced_out:
+                    extra["out_path"] = self._forced_out
+                else:
+                    dest_name = Path(src).with_suffix(".cg2").name
+                    if bool(self._settings.get("fixed_out_enabled", False)):
+                        base = Path(str(self._settings.get("fixed_out_dir", "") or "")).expanduser()
+                        try:
+                            base.mkdir(parents=True, exist_ok=True)
+                            extra["out_path"] = str(base / dest_name)
+                        except Exception:
+                            # fallback para pasta do arquivo
+                            extra["out_path"] = str(Path(src).with_suffix(".cg2"))
+                    else:
+                        extra["out_path"] = str(Path(src).with_suffix(".cg2"))
                 extra["hide_filename"] = self.check_hide_filename.isChecked()
 
             if not hasattr(self, "_operation_size"):
                 self._operation_size = src_size
+
+            # Bloqueio anti-bruteforce (se criptografia NÃO; apenas antes de decrypt)
+            if (not self._is_encrypt) and path in self._lockout_until:
+                if time.time() < self._lockout_until[path]:
+                    wait_s = int(self._lockout_until[path] - time.time())
+                    self.status_bar.showMessage(f"Temporariamente bloqueado por tentativas falhas. Tente novamente em {wait_s}s.")
+                    return
+
+            # Pré-cheque da API SecretStream (fail-fast em ambientes com PyNaCl inconsistente)
+            if self._is_encrypt:
+                ok, msg = self._secretstream_preflight(silent=True)
+                if not ok:
+                    self.status_bar.showMessage(msg or "SecretStream preflight failed.")
+                    QMessageBox.critical(self, "SecretStream", msg or "SecretStream preflight failed.")
+                    return
 
             # Disable UI & prepare progress
             self._toggle(False)
@@ -1014,18 +958,25 @@ class MainWindow(QWidget):
             from nacl import bindings as nb
             func = nb.crypto_secretstream_xchacha20poly1305_init_push
             sig = inspect.signature(func)
-            # Assinatura moderna: (key: bytes) -> (state, header)
-            if len(sig.parameters) == 1:
-                # Teste rÃ¡pido
+            # Assinatura moderna (1 param) ou estilo C (2 params) - ambas suportadas
+            if len(sig.parameters) in (1, 2):
+                # Teste básico da função (ambas as assinaturas são compatíveis)
                 try:
-                    func(b"\x00" * 32)
+                    if len(sig.parameters) == 1:
+                        # API moderna: init_push(key) -> (state, header)
+                        func(b"\x00" * 32)
+                    else:
+                        # API estilo C: init_push(state, key) -> header
+                        from nacl.bindings import crypto_secretstream_xchacha20poly1305_state
+                        state = crypto_secretstream_xchacha20poly1305_state()
+                        func(state, b"\x00" * 32)
                 except Exception:
-                    # Pode falhar por key não aleatória, ignoramos se TypeError não ocorre.
+                    # Pode falhar por key não aleatória ou outros motivos, mas TypeError seria problema real
                     pass
                 return True, ""
-            # Assinatura legada ou inesperada
+            # Assinatura inesperada
             msg = (
-                f"Incompatible SecretStream API (expected 1 param, got {len(sig.parameters)}). "
+                f"Incompatible SecretStream API (expected 1 or 2 params, got {len(sig.parameters)}). "
                 f"PyNaCl version: {getattr(nacl, '__version__', '?')}. "
                 "Upgrade with: pip install -U --force-reinstall 'pynacl>=1.5.0'"
             )
@@ -1169,9 +1120,34 @@ class MainWindow(QWidget):
         finally:
             old_pw = new_pw = confirm = ""
     
-    def _show_settings(self):
-        """Mostra diÃ¡logo de configuraçÃµes (paridade com main_app.py)."""
-        QMessageBox.information(self, "Settings", "Settings dialog not yet implemented.")
+    # ───────────────────────────── Settings (UI + persistência) ─────────────────────────────
+    def _load_settings(self) -> dict:
+        try:
+            import json
+            if SETTINGS_PATH.exists():
+                return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        # defaults
+        return {
+            "clipboard_autoclear": True,     # limpa em 30s
+            "fixed_out_enabled": False,      # usar diretório fixo?
+            "fixed_out_dir": "",             # caminho do diretório
+        }
+
+    def _save_settings(self, data: dict) -> None:
+        try:
+            import json
+            SETTINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            self.status_bar.showMessage(f"Could not save settings: {e}", 8000)
+
+    def open_settings(self):
+        dlg = SettingsDialog(self, self._settings)
+        if dlg.exec() == QDialog.Accepted:
+            self._settings = dlg.result_settings
+            self._save_settings(self._settings)
+            self.status_bar.showMessage("Settings saved.", 5000)
 
 
     def _open_log(self):
@@ -1514,7 +1490,7 @@ class MainWindow(QWidget):
         footer.addWidget(self.btn_vault)
 
         self.btn_settings = QPushButton("Settings", self)
-        self.btn_settings.clicked.connect(self._show_settings)
+        self.btn_settings.clicked.connect(self.open_settings)
         footer.addWidget(self.btn_settings)
 
         lv.addLayout(footer)
@@ -1576,25 +1552,101 @@ if __name__ == "__main__":
         # Best-effort - não deve quebrar a aplicação por falhas de hardening
         pass
     
-    # Handler global de exceções para capturar todos os erros
-    def global_exception_handler(exc_type, exc_value, exc_traceback):
-        if issubclass(exc_type, KeyboardInterrupt):
-            sys.__excepthook__(exc_type, exc_value, exc_traceback)
-            return
-        # Registra com traceback completo
-        logger.error("Exceção não tratada", exc_info=(exc_type, exc_value, exc_traceback))
     
-    sys.excepthook = global_exception_handler
-    
-    app = QApplication(sys.argv)
-    # i18n hook: load ./i18n/cryptguard_<locale>.qm if available
-    try:
-        from PySide6.QtCore import QLocale, QTranslator
-        _tr = QTranslator()
-        if _tr.load(QLocale.system(), "cryptguard", "_", "i18n"):
-            app.installTranslator(_tr)
-    except Exception:
-        pass
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec())
+
+class SettingsDialog(QDialog):
+    """Diálogo de configurações: clipboard e pasta fixa de saída (.cg2)."""
+    def __init__(self, parent: QWidget | None, initial: dict):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(480)
+        self.result_settings = dict(initial)
+
+        lay = QVBoxLayout(self)
+
+        # Grupo: Segurança / Clipboard
+        grp_clip = QGroupBox("Clipboard")
+        form_clip = QFormLayout(grp_clip)
+        self.chk_autoclear = QCheckBox("Auto-clear passwords from clipboard after 30 seconds", self)
+        self.chk_autoclear.setChecked(bool(initial.get("clipboard_autoclear", True)))
+        form_clip.addRow(self.chk_autoclear)
+        lay.addWidget(grp_clip)
+
+        # Grupo: Saída fixa
+        grp_out = QGroupBox("Encrypted output (.cg2)")
+        form_out = QFormLayout(grp_out)
+        self.chk_fixed = QCheckBox("Save all .cg2 files to a fixed folder", self)
+        self.chk_fixed.setChecked(bool(initial.get("fixed_out_enabled", False)))
+        row = QHBoxLayout()
+        self.ed_dir = QLineEdit(self)
+        self.ed_dir.setPlaceholderText("Choose a folder…")
+        self.ed_dir.setText(str(initial.get("fixed_out_dir", "")))
+        self.btn_browse = QPushButton("Browse…", self)
+        self.btn_browse.clicked.connect(self._pick_folder)
+        row.addWidget(self.ed_dir, 1)
+        row.addWidget(self.btn_browse)
+        form_out.addRow(self.chk_fixed)
+        form_out.addRow("Folder:", row)
+        lay.addWidget(grp_out)
+
+        # Botões OK/Cancel
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+        # habilita/desabilita linha da pasta conforme checkbox
+        self._sync_out_enabled()
+        self.chk_fixed.toggled.connect(self._sync_out_enabled)
+
+    def _sync_out_enabled(self):
+        enabled = self.chk_fixed.isChecked()
+        self.ed_dir.setEnabled(enabled)
+        self.btn_browse.setEnabled(enabled)
+
+    def _pick_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Choose folder")
+        if d:
+            self.ed_dir.setText(d)
+
+    def _accept(self):
+        # valida se preciso
+        enabled = self.chk_fixed.isChecked()
+        path = self.ed_dir.text().strip()
+        if enabled:
+            try:
+                p = Path(path).expanduser()
+                p.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                QMessageBox.warning(self, "Settings", f"Invalid folder:\n{e}")
+                return
+        self.result_settings = {
+            "clipboard_autoclear": bool(self.chk_autoclear.isChecked()),
+            "fixed_out_enabled": enabled,
+            "fixed_out_dir": path if enabled else "",
+        }
+        self.accept()
+
+
+# Handler global de exceções para capturar todos os erros
+def global_exception_handler(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    # Registra com traceback completo
+    logger.error("Exceção não tratada", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = global_exception_handler
+
+app = QApplication(sys.argv)
+# i18n hook: load ./i18n/cryptguard_<locale>.qm if available
+try:
+    from PySide6.QtCore import QLocale, QTranslator
+    _tr = QTranslator()
+    if _tr.load(QLocale.system(), "cryptguard", "_", "i18n"):
+        app.installTranslator(_tr)
+except Exception:
+    pass
+win = MainWindow()
+win.show()
+sys.exit(app.exec())
