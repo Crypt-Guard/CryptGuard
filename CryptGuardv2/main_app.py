@@ -223,27 +223,68 @@ class CryptoWorker(QThread):
             except Exception:
                 pass
     
+
+    def _resolve_keyfile(self) -> Optional[str]:
+        """Return a validated keyfile path or None."""
+        keyfile = self.extra_params.get("keyfile")
+        if not keyfile:
+            return None
+        key_path = Path(keyfile)
+        if not key_path.exists():
+            raise FileNotFoundError(f"Keyfile not found: {key_path}")
+        return str(key_path)
+
     def _encrypt(self, progress_cb: Callable, password_secure: SecureBytes) -> Path:
         """Executa criptografia."""
         src = Path(self.src_path)
         out_path = self.extra_params.get("out_path", src.with_suffix(".cg2"))
         # Route via v5 factories; fixed algorithm, pass kdf profile and padding
 
+        result_path: Optional[str] = None
+
         try:
-            return Path(cg_encrypt(
-                in_path=str(src),
-                out_path=str(out_path),
-                password=bytes(password_secure.view()),
-                algo="SecretStream",  # ignorado mas necessário para compatibilidade
-                progress_cb=progress_cb,
-                kdf_profile=self.extra_params.get("kdf_profile", "INTERACTIVE"),
-                pad_block=self.extra_params.get("pad_block", 0),
-                keyfile=self.extra_params.get("keyfile"),
-                hide_filename=self.extra_params.get("hide_filename", False),
-                expires_at=self.extra_params.get("exp_ts"),
-            ))
+            keyfile_path = self._resolve_keyfile()
+            if hasattr(password_secure, "with_bytes"):
+                def _run_encrypt(pwd: bytes) -> None:
+                    nonlocal result_path
+                    result_path = cg_encrypt(
+                        in_path=str(src),
+                        out_path=str(out_path),
+                        password=pwd,
+                        algo="SecretStream",  # ignorado mas necessário para compatibilidade
+                        progress_cb=progress_cb,
+                        kdf_profile=self.extra_params.get("kdf_profile", "INTERACTIVE"),
+                        pad_block=self.extra_params.get("pad_block", 0),
+                        keyfile=keyfile_path,
+                        hide_filename=self.extra_params.get("hide_filename", False),
+                        expires_at=self.extra_params.get("exp_ts"),
+                    )
+
+                password_secure.with_bytes(_run_encrypt)
+            else:
+                mv = password_secure.view()
+                try:
+                    result_path = cg_encrypt(
+                        in_path=str(src),
+                        out_path=str(out_path),
+                        password=bytes(mv),
+                        algo="SecretStream",
+                        progress_cb=progress_cb,
+                        kdf_profile=self.extra_params.get("kdf_profile", "INTERACTIVE"),
+                        pad_block=self.extra_params.get("pad_block", 0),
+                        keyfile=keyfile_path,
+                        hide_filename=self.extra_params.get("hide_filename", False),
+                        expires_at=self.extra_params.get("exp_ts"),
+                    )
+                finally:
+                    with contextlib.suppress(Exception):
+                        mv.release()
+
+            if result_path is None:
+                raise RuntimeError("Encryption did not produce an output path")
+            return Path(result_path)
         except TypeError as e:
-            # Erro comum quando a instalação do PyNaCl/libsodium estÃ¡ quebrada ou
+            # Erro comum quando a instalação do PyNaCl/libsodium está quebrada ou
             # houve mudança de assinatura inesperada.
             msg = str(e)
             if (
@@ -256,23 +297,46 @@ class CryptoWorker(QThread):
                     "If on Windows, ensure a recent libsodium is available."
                 ) from e
             raise
-    
+
     def _decrypt(self, progress_cb: Callable, password_secure: SecureBytes) -> Path:
         """Executa descriptografia."""
         src = Path(self.src_path)
         out_path = self.extra_params.get("out_path", src.with_suffix(""))
-        
-        result = cg_decrypt(
-            in_path=str(src),
-            out_path=str(out_path),
-            password=bytes(password_secure.view()),
-            verify_only=False,
-            progress_cb=progress_cb,
-            keyfile=self.extra_params.get("keyfile"),
-        )
-        
-        return Path(result) if result else Path("")
-    
+
+        result_path: Optional[str] = None
+
+        keyfile_path = self._resolve_keyfile()
+
+        if hasattr(password_secure, "with_bytes"):
+            def _run_decrypt(pwd: bytes) -> None:
+                nonlocal result_path
+                result_path = cg_decrypt(
+                    in_path=str(src),
+                    out_path=str(out_path),
+                    password=pwd,
+                    verify_only=False,
+                    progress_cb=progress_cb,
+                    keyfile=keyfile_path,
+                )
+
+            password_secure.with_bytes(_run_decrypt)
+        else:
+            mv = password_secure.view()
+            try:
+                result_path = cg_decrypt(
+                    in_path=str(src),
+                    out_path=str(out_path),
+                    password=bytes(mv),
+                    verify_only=False,
+                    progress_cb=progress_cb,
+                    keyfile=keyfile_path,
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    mv.release()
+
+        return Path(result_path) if result_path else Path("")
+
     def cancel(self):
         """Cancela operação."""
         self._cancelled = True
@@ -303,6 +367,7 @@ class MainWindow(QWidget):
         self._clipboard_token: str | None = None
         self._forced_out = ""
         self._is_encrypt = False
+        self._cancel_timer = None
         # Simple rate limiting (per file path)
         self._failed_attempts = {}
         self._lockout_until = {}
@@ -769,21 +834,25 @@ class MainWindow(QWidget):
         if hasattr(self, "worker") and self.worker and self.worker.isRunning():
             self.worker.cancel()
             if not self.worker.wait(5000):
-                timer = QTimer(self)
-                timer.timeout.connect(self.worker.quit)
-                timer.start(100)
+                self._cancel_timer = QTimer(self)
+                self._cancel_timer.timeout.connect(self.worker.quit)
+                self._cancel_timer.start(100)
                 self.worker.wait(1000)
-            
+
             self.status_bar.showMessage("Operation cancelled.", 5000)
             self.btn_cancel.setEnabled(False)
             self._toggle(True)
-            
+
             if self._tmp_zip:
                 with contextlib.suppress(Exception):
                     os.remove(self._tmp_zip)
-            
+
             # Worker handles cleanup internally; just signal finish
             self.worker.finished.emit("")
+            if self._cancel_timer:
+                with contextlib.suppress(Exception):
+                    self._cancel_timer.stop()
+                self._cancel_timer = None
     
     def _toggle(self, enabled: bool):
         """Habilita/desabilita controles."""
@@ -839,6 +908,10 @@ class MainWindow(QWidget):
             return
         
         self.progress_bar.setValue(100)
+        if self._cancel_timer:
+            with contextlib.suppress(Exception):
+                self._cancel_timer.stop()
+            self._cancel_timer = None
         
         # Limpa ZIP temporÃ¡rio
         if hasattr(self, "_tmp_zip") and self._tmp_zip:
@@ -905,6 +978,10 @@ class MainWindow(QWidget):
             except Exception as e:
                 self.status_bar.showMessage(f"Delete failed: {e}", 8000)
         
+        if not self._is_encrypt and self._original_path:
+            self._failed_attempts.pop(self._original_path, None)
+            self._lockout_until.pop(self._original_path, None)
+
         self.status_bar.showMessage("Done.", 8000)
         
         # Limpa _operation_size
@@ -915,6 +992,10 @@ class MainWindow(QWidget):
     
     def _operation_error(self, msg: str):
         """Erro na operação."""
+        if self._cancel_timer:
+            with contextlib.suppress(Exception):
+                self._cancel_timer.stop()
+            self._cancel_timer = None
         # Rate limiting tracking for failed decrypts
         try:
             if not self._is_encrypt:
@@ -931,8 +1012,14 @@ class MainWindow(QWidget):
         # Traduz erros comuns
         if "InvalidTag" in msg or "MAC check failed" in msg:
             msg = "Senha ou arquivo incorretos."
-        elif "expired" in msg.lower():
-            msg = "Arquivo expirado, não pode ser descriptografado."
+        else:
+            low = msg.lower()
+            if "expired" in low:
+                msg = "Arquivo expirado, não pode ser descriptografado."
+            elif "requires keyfile" in low:
+                msg = (
+                    "Este arquivo exige keyfile. Selecione o keyfile correto e tente novamente."
+                )
         if "PyNaCl/libsodium mismatch" in msg or "SecretStream init failed" in msg or "SecretStream API mismatch" in msg:
             msg += "\nSugestão: pip install -U --force-reinstall 'pynacl>=1.5.0'"
         
@@ -1199,20 +1286,20 @@ class MainWindow(QWidget):
             "Sobre o CryptGuardv2",
             (
                 "<h3>CryptGuardv2</h3>"
-                f"<p>Versão {ver}</p>"
-                "<p>Criptografia de arquivos e pastas com arquitetura moderna e auditÃ¡vel.</p>"
-                "<p><b>Destaques:</b></p>"
+                f"<p>Version {ver}</p>"
+                "<p>Modern, auditable file encryption with a unified v5 pipeline.</p>"
+                "<p><b>Highlights:</b></p>"
                 "<ul>"
-                "<li><b>Container v5</b> com AAD ligada ao cabeçalho e JSON canÃ´nico</li>"
+                "<li><b>Container v5</b> with header-bound AAD and canonical JSON</li>"
                 "<li>Streaming <b>XChaCha20-Poly1305</b> (libsodium SecretStream)</li>"
-                "<li><b>Argon2id</b> com perfis por alvo de tempo</li>"
-                "<li>Escrita atÃ´mica e segura contra panes (tmp + fsync no diretório)</li>"
-                "<li><b>Padding</b> opcional para ofuscar tamanhos</li>"
-                "<li>Suporte a <b>senha + keyfile</b></li>"
-                "<li><b>Vault</b> para gerenciar itens criptografados</li>"
-                "<li>Logs com redação; verificação sem deixar plaintext</li>"
+                "<li><b>Argon2id</b> profiles tuned by target time</li>"
+                "<li>Atomic writes and fsync for crash resilience</li>"
+                "<li>Optional <b>padding</b> to hide plaintext size</li>"
+                "<li>Support for <b>password + keyfile</b></li>"
+                "<li><b>Vault</b> integration for encrypted item management</li>"
+                "<li>Redacted logs; verify-only mode leaves no plaintext</li>"
                 "</ul>"
-                "<p>Â© 2024â€“2025 CryptGuard Team</p>"
+                "<p>&copy; 2024–2025 CryptGuard Team</p>"
             ),
         )
 
@@ -1532,28 +1619,6 @@ class MainWindow(QWidget):
 #                              MAIN ENTRY POINT
 # ------------------------------------------------------------------------------------------------------------------------------â•â•
 
-if __name__ == "__main__":
-    # P1.4: Early process hardening and initialization (bootstrap)
-    try:
-        from crypto_core.paths import ensure_base_dir
-        from crypto_core.config import enable_process_hardening
-        from crypto_core.memharden import harden_process_best_effort
-        
-        # Inicializar diretório base com permissões seguras
-        ensure_base_dir()
-        
-        # Ativar proteções de processo
-        enable_process_hardening()
-        
-        # Aplicar hardening de memória
-        harden_process_best_effort()
-        
-    except Exception:
-        # Best-effort - não deve quebrar a aplicação por falhas de hardening
-        pass
-    
-    
-
 class SettingsDialog(QDialog):
     """Diálogo de configurações: clipboard e pasta fixa de saída (.cg2)."""
     def __init__(self, parent: QWidget | None, initial: dict):
@@ -1638,15 +1703,39 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = global_exception_handler
 
-app = QApplication(sys.argv)
-# i18n hook: load ./i18n/cryptguard_<locale>.qm if available
-try:
-    from PySide6.QtCore import QLocale, QTranslator
-    _tr = QTranslator()
-    if _tr.load(QLocale.system(), "cryptguard", "_", "i18n"):
-        app.installTranslator(_tr)
-except Exception:
-    pass
-win = MainWindow()
-win.show()
-sys.exit(app.exec())
+
+def main() -> None:
+    """Entry-point for the legacy Qt UI."""
+    try:
+        from crypto_core.paths import ensure_base_dir
+        from crypto_core.config import enable_process_hardening
+        from crypto_core.memharden import harden_process_best_effort
+
+        ensure_base_dir()
+        enable_process_hardening()
+        harden_process_best_effort()
+    except Exception:
+        # best-effort hardening; ignore failures to keep UI usable
+        pass
+
+    app = QApplication(sys.argv)
+    try:
+        from PySide6.QtCore import QLocale, QTranslator
+        _tr = QTranslator()
+        if _tr.load(QLocale.system(), "cryptguard", "_", "i18n"):
+            app.installTranslator(_tr)
+    except Exception:
+        pass
+
+    win = MainWindow()
+    try:
+        app.aboutToQuit.connect(win._clear_clipboard_if_unchanged)
+    except Exception:
+        pass
+
+    win.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
