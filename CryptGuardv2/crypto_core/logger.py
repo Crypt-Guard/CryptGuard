@@ -27,22 +27,117 @@ from .redactlog import NoLocalsFilter, RedactingFormatter
 
 
 class SecureRotatingFileHandler(RotatingFileHandler):
-    """RotatingFileHandler com permissões de arquivo seguras (POSIX)"""
-    
-    def _open(self):
-        """Override para aplicar permissões seguras após criar arquivo"""
-        stream = super()._open()
-        # P1.3: Aplicar permissões restritivas logo após criar o arquivo
+    """RotatingFileHandler com permissões de arquivo seguras (POSIX)."""
+
+    def _set_secure_mode(self, path: str) -> None:
         if os.name != "nt":
             try:
-                os.chmod(self.baseFilename, 0o600)
+                os.chmod(path, 0o600)
             except Exception:
-                # best-effort, não deve quebrar o logging
                 pass
+
+    def _open(self):
+        """Override para aplicar permissões seguras após criar arquivo."""
+        stream = super()._open()
+        self._set_secure_mode(self.baseFilename)
         return stream
+
+    def doRollover(self) -> None:
+        super().doRollover()
+        if os.name == "nt":
+            return
+        self._set_secure_mode(self.baseFilename)
+        for idx in range(1, self.backupCount + 1):
+            candidate = self.rotation_filename(f"{self.baseFilename}.{idx}")
+            if os.path.exists(candidate):
+                self._set_secure_mode(candidate)
 
 _DEF_LEVEL = os.getenv("CRYPTGUARD_LOG_LEVEL", "INFO").upper()
 _LEVEL = getattr(logging, _DEF_LEVEL, logging.INFO)
+
+_DEBUG_LOCALS_FLAG = str(os.getenv("CRYPTGUARD_DEBUG_LOCALS", "0")).lower() in {"1", "true", "yes", "on"}
+_SENSITIVE_KEYS = {
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "key",
+    "passphrase",
+    "credential",
+    "auth",
+}
+_ALLOWED_LOCAL_KEYS = {
+    "path",
+    "filepath",
+    "filename",
+    "operation",
+    "status",
+    "code",
+    "reason",
+    "user",
+    "attempt",
+    "attempts",
+    "profile",
+    "mode",
+    "resource",
+}
+_MAX_CONTEXT_VALUE_LEN = 120
+
+
+def _should_include_locals(logger_obj: Logger) -> bool:
+    """Return True when locals may be logged (DEBUG level + opt-in env var)."""
+    return _DEBUG_LOCALS_FLAG and logger_obj.isEnabledFor(logging.DEBUG)
+
+
+def _truncate_value(value: Any, limit: int = _MAX_CONTEXT_VALUE_LEN) -> str:
+    """Safely render a value to a bounded ASCII representation."""
+    try:
+        rendered = repr(value)
+    except Exception:
+        rendered = f"<{type(value).__name__}>"
+    if len(rendered) > limit:
+        return rendered[:limit] + "..."
+    return rendered
+
+
+def _sanitize_mapping(mapping: Dict[str, Any], *, allowed_keys: Optional[set[str]] | None = None) -> Dict[str, str]:
+    """Collapse a mapping into a log-safe dictionary."""
+    safe: Dict[str, str] = {}
+    items = getattr(mapping, "items", None)
+    if callable(items):
+        iterator = items()
+    else:
+        try:
+            iterator = dict(mapping).items()
+        except Exception:
+            iterator = []
+    for raw_key, value in iterator:
+        key = str(raw_key)
+        lowered = key.lower()
+        if lowered.startswith("_") or callable(value):
+            continue
+        if lowered in _SENSITIVE_KEYS:
+            safe[key] = "[REDACTED]"
+            continue
+        if allowed_keys is not None and lowered not in allowed_keys:
+            safe[key] = "[hidden]"
+            continue
+        safe[key] = _truncate_value(value)
+    return safe
+
+
+def _ensure_iterable_mapping(obj: Any) -> Dict[str, Any]:
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    try:
+        return dict(obj)  # type: ignore[arg-type]
+    except Exception:
+        return {"value": obj}
 
 
 def _ensure_log_dir() -> None:
@@ -50,11 +145,9 @@ def _ensure_log_dir() -> None:
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         if os.name != "nt":
             os.chmod(LOG_PATH.parent, 0o700)
-            # P1.3: Garantir permissões restritivas no arquivo de log também
             if LOG_PATH.exists():
                 os.chmod(LOG_PATH, 0o600)
     except Exception:
-        # Avoid raising directory permission errors during logging setup
         pass
 
 
@@ -64,13 +157,12 @@ def _build_logger() -> Logger:
     lg.setLevel(_LEVEL)
     lg.propagate = False
 
-    # Avoid duplicate handlers on re-import
     if lg.handlers:
         return lg
 
     fh = SecureRotatingFileHandler(
         LOG_PATH,
-        maxBytes=5 * 1024 * 1024,  # 5 MiB
+        maxBytes=5 * 1024 * 1024,
         backupCount=3,
         encoding="utf-8",
         delay=True,
@@ -83,7 +175,6 @@ def _build_logger() -> Logger:
     fh.setFormatter(fmt)
     lg.addHandler(fh)
 
-    # Optional stderr handler when debugging
     if _LEVEL <= logging.DEBUG:
         sh = logging.StreamHandler(sys.stderr)
         sh.setFormatter(
@@ -95,10 +186,8 @@ def _build_logger() -> Logger:
         )
         lg.addHandler(sh)
 
-    # Filter out locals/tracebacks
     lg.addFilter(NoLocalsFilter())
 
-    # Optional Qt integration
     try:
         from PySide6.QtCore import qInstallMessageHandler, QtMsgType
 
@@ -114,7 +203,6 @@ def _build_logger() -> Logger:
 
         qInstallMessageHandler(_qt_handler)
     except Exception:
-        # PySide6 not available
         pass
 
     lg.info("=== CryptGuard iniciado ===")
@@ -133,59 +221,56 @@ class DetailedLogger:
         """Delegate standard logging methods to the base logger"""
         return getattr(self._logger, name)
     
-    def exception_with_context(self, msg: str, exc: Optional[Exception] = None, 
+    def exception_with_context(self, msg: str, exc: Optional[Exception] = None,
                              extra_context: Optional[Dict[str, Any]] = None) -> None:
         """
-        Log an exception with detailed context information.
-        
+        Log an exception with contextual data while respecting secrecy constraints.
+
         Args:
             msg: Base error message
             exc: Exception to log (uses current if None)
             extra_context: Additional context dictionary
         """
+        frame = inspect.currentframe()
+        caller_frame = frame.f_back if frame else None
         try:
-            # Get current frame info
-            frame = inspect.currentframe()
-            caller_frame = frame.f_back if frame else None
-            
             context_info = []
-            
-            # Add caller information
+
             if caller_frame:
                 caller_info = inspect.getframeinfo(caller_frame)
-                context_info.append(f"Caller: {caller_info.filename}:{caller_info.lineno} in {caller_info.function}")
-                
-                # Add local variables (safely)
-                try:
-                    local_vars = {k: str(v)[:100] + "..." if len(str(v)) > 100 else str(v) 
-                                for k, v in caller_frame.f_locals.items() 
-                                if not k.startswith('_') and not callable(v)}
-                    if local_vars:
-                        context_info.append(f"Local variables: {local_vars}")
-                except Exception:
-                    context_info.append("Local variables: <failed to capture>")
-            
-            # Add extra context
+                context_info.append(
+                    f"Caller: {caller_info.filename}:{caller_info.lineno} in {caller_info.function}"
+                )
+                if _should_include_locals(self._logger):
+                    safe_locals = _sanitize_mapping(caller_frame.f_locals, allowed_keys=_ALLOWED_LOCAL_KEYS)
+                    if safe_locals:
+                        context_info.append(f"Local variables: {safe_locals}")
+                elif _DEBUG_LOCALS_FLAG:
+                    context_info.append("Local variables: [suppressed]")
+
             if extra_context:
-                context_info.append(f"Extra context: {extra_context}")
-            
-            # Format the full message
-            full_msg = f"{msg}"
-            if context_info:
-                full_msg += f" | Context: {' | '.join(context_info)}"
-            
-            # Log with exception info
+                ctx = _ensure_iterable_mapping(extra_context)
+                safe_context = _sanitize_mapping(ctx, allowed_keys=_ALLOWED_LOCAL_KEYS)
+                if safe_context:
+                    context_info.append(f"Extra context: {safe_context}")
+
+            full_msg = msg if not context_info else f"{msg} | Context: {' | '.join(context_info)}"
+
             if exc:
                 self._logger.error(full_msg, exc_info=(type(exc), exc, exc.__traceback__))
             else:
                 self._logger.exception(full_msg)
-                
+
         except Exception as log_exc:
-            # Fallback if detailed logging fails
             self._logger.error(f"{msg} | Logging error: {log_exc}")
             if exc:
                 self._logger.exception("Original exception:")
-    
+        finally:
+            if caller_frame is not None:
+                del caller_frame
+            if frame is not None:
+                del frame
+
     def error_with_stack(self, msg: str, stack_limit: int = 10) -> None:
         """
         Log an error with current stack trace.

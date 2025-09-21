@@ -5,13 +5,14 @@ import secrets
 import time
 
 
-def consteq(a: bytes, b: bytes) -> bool:
-    return hmac.compare_digest(a, b)
+def consteq(a, b) -> bool:
+    # pequenos (e.g., 32B): conversão a bytes não causa pressão de heap
+    return hmac.compare_digest(bytes(a), bytes(b))
 
 
 class EphemeralToken:
     def __init__(self, ttl_s: int = 10):
-        self.v = secrets.token_bytes(32)
+        self.v = bytearray(secrets.token_bytes(32))
         self.exp = time.time() + ttl_s
 
     def verify(self, other: bytes) -> bool:
@@ -19,7 +20,9 @@ class EphemeralToken:
 
     def wipe(self):
         try:
-            self.v = b"\x00" * len(self.v)
+            for i in range(len(self.v)):
+                self.v[i] = 0
+            self.v.clear()
         except Exception:
             pass
 

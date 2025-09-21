@@ -11,8 +11,13 @@ Compat de kwargs:
 """
 from __future__ import annotations
 
+import os, sys
+if sys.platform == "win32":
+    dll_dir = os.environ.get("SODIUM_DLL_DIR", r"C:\libsodium\bin")
+    if dll_dir and os.path.isdir(dll_dir):
+        os.add_dll_directory(dll_dir)
+
 from pathlib import Path
-import os
 from typing import Any, Optional, Union
 from venv import logger
 
@@ -93,25 +98,70 @@ def decrypt(cg2_path: str,
 # Override wrappers to route via factories (v5 router)
 from .factories import encrypt as _encrypt_factory, decrypt as _decrypt_factory  # noqa: E402
 
-def encrypt(in_path: str,
+def encrypt(
+            in_path: str,
             password: Union[str, bytes],
             *, algo: str,
-            out_path: Optional[str] = None) -> str:  # type: ignore[no-redef]
+            out_path: Optional[str] = None,
+            padding: str | None = None,
+            hide_filename: bool = False,
+            keyfile_path: Optional[Union[str, os.PathLike[str]]] = None,
+            keyfile: Optional[Union[str, os.PathLike[str]]] = None,
+            profile: SecurityProfile | None = None,
+            expires_at: int | None = None,
+            exp_ts: int | None = None,
+            pad_block: int = 0,
+            kdf_profile: str | None = None,
+            progress_cb=None,
+            **kwargs) -> str:  # type: ignore[no-redef]
     pwd = password.encode() if isinstance(password, str) else password
-    dst = out_path or str(Path(in_path).with_suffix(".cg2"))
+    dst = out_path or str(Path(in_path).with_suffix('.cg2'))
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
-    return _encrypt_factory(in_path, pwd, algo=algo, out_path=dst)
+    effective_keyfile = keyfile_path if keyfile_path is not None else keyfile
+    return _encrypt_factory(
+        in_path,
+        pwd,
+        algo=algo,
+        out_path=dst,
+        padding=padding,
+        hide_filename=hide_filename,
+        keyfile=effective_keyfile,
+        profile=profile,
+        expires_at=expires_at,
+        exp_ts=exp_ts,
+        pad_block=pad_block,
+        kdf_profile=kdf_profile,
+        progress_cb=progress_cb,
+        **kwargs,
+    )
 
 
-def decrypt(cg2_path: str,
+def decrypt(
+            cg2_path: str,
             password: Union[str, bytes],
             *, out_path: Optional[str] = None,
-            verify_only: bool = False) -> Optional[str]:  # type: ignore[no-redef]
+            verify_only: bool = False,
+            keyfile_path: Optional[Union[str, os.PathLike[str]]] = None,
+            keyfile: Optional[Union[str, os.PathLike[str]]] = None,
+            progress_cb=None,
+            **kwargs) -> Optional[str]:  # type: ignore[no-redef]
     pwd = password.encode() if isinstance(password, str) else password
     dst = out_path or _guess_out_path(str(cg2_path))
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
-    res = _decrypt_factory(cg2_path, pwd, out_path=dst, verify_only=verify_only)
+    effective_keyfile = keyfile_path if keyfile_path is not None else keyfile
+    res = _decrypt_factory(
+        cg2_path,
+        pwd,
+        out_path=dst,
+        verify_only=verify_only,
+        keyfile=effective_keyfile,
+        progress_cb=progress_cb,
+        **kwargs,
+    )
     return None if verify_only else (res or dst)
+
+
+
 
 try:
     from modules.keyguard.integrate import attach_keyguard_sidebar

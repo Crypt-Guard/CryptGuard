@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import platform
 import sys
 import threading
 import warnings
 import weakref
+
+_log = logging.getLogger(__name__)
+_warned_zeroize = False
+
 from importlib import util as _imp_util
 from typing import Callable, Optional, Union, Final
 
@@ -34,9 +39,11 @@ def secure_memzero(buf: bytearray) -> None:
     """
     if not buf:
         return
-    
+
+    global _warned_zeroize
+    fallback_used = False
     n = len(buf)
-    
+
     try:
         # Prefer libsodium's sodium_memzero when available
         if _HAVE_SODIUM:
@@ -88,8 +95,13 @@ def secure_memzero(buf: bytearray) -> None:
             pass
             
     except Exception:
+        fallback_used = True
         pass  # Fall through to manual zeroing
     
+    if fallback_used and not _warned_zeroize:
+        _log.warning("Zeroization fallback: ctypes.memset failed; using bytearray loop.")
+        _warned_zeroize = True
+
     # Last resort: manual zeroing with forced memory access
     for i in range(n):
         buf[i] = 0
@@ -316,10 +328,11 @@ class SecureBytes:
         """
         Execute callback with a temporary bytes copy.
         Best-effort cleanup releases the reference immediately after use.
-        
-        Args:
-            callback: Function to call with bytes copy
-        
+
+        WARNING: this helper creates an immutable ytes copy that cannot be wiped.
+        The ytes object stays resident until the garbage collector runs. Use it only
+        for APIs that require a ytes instance; prefer iew() when possible.
+
         Raises:
             ValueError: If already cleared
         """
@@ -382,6 +395,10 @@ class SecureBytes:
                 # Clear the buffer and mark as cleared
                 self._buf.clear()
                 self._cleared = True
+    
+    def wipe(self) -> None:
+        """Compat: alias para clear()"""
+        self.clear()
     
     @property
     def cleared(self) -> bool:

@@ -1,12 +1,20 @@
 """
-Algoritmos suportados e utilitários de normalização.
-
-Fonte única de verdade para mapear códigos curtos <-> nomes humanos.
+DEPRECATED MODULE
+-----------------
+Maintained only for backward compatibility with v1-v4 containers.
+Runtime in v5 always uses the fixed XChaCha20-Poly1305 SecretStream.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import Dict
+
+warnings.warn(
+    "crypto_core.algorithms is deprecated; v5 uses a fixed XChaCha20-Poly1305 SecretStream.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 # Códigos curtos -> nomes humanos
 SHORT_TO_HUMAN: Dict[str, str] = {

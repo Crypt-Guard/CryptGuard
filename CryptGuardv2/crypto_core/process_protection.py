@@ -4,7 +4,7 @@ process_protection.py
 Harden opcional do processo em Windows:
 
 • Ativa DEP permanente
-• Desabilita criação de core-dumps
+• Suprime caixas de erro (não controla a política global de dumps)
 • Tenta detectar debugger (CheckRemoteDebuggerPresent)
 """
 
@@ -20,7 +20,16 @@ def _enable_dep():
     try:
         k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         # 0x1 = PROCESS_DEP_ENABLE  (docs: SetProcessDEPPolicy)
-        k32.SetProcessDEPPolicy(1)
+        ok = k32.SetProcessDEPPolicy(1)
+        if not ok:
+            warn("DEP não habilitado (política do sistema pode impedir).", sev="LOW")
+        else:
+            try:
+                getpol = k32.GetSystemDEPPolicy
+                state = getpol()
+                warn(f"DEP enabled; system policy={state}", sev="LOW")
+            except Exception:
+                pass
     except Exception as e:
         warn(f"Falha ao ativar DEP: {e}", sev="LOW")
 

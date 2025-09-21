@@ -3,6 +3,7 @@ from __future__ import annotations
 import stat
 import zipfile
 from collections.abc import Iterable
+import struct
 from pathlib import Path
 from typing import Iterable as _Iterable
 
@@ -86,6 +87,23 @@ def safe_extract_zip(zip_path: Path, dst_dir: Path) -> None:
                     dst.write(chunk)
 
 
+def pack_u32(value: int) -> bytes:
+    """Pack an unsigned 32-bit integer into big-endian bytes."""
+    if not isinstance(value, int):
+        raise TypeError("value must be an int")
+    if value < 0 or value > 0xFFFFFFFF:
+        raise ValueError("value out of range for u32")
+    return struct.pack(">I", value)
+
+
+
+def unpack_u32(data: bytes | bytearray | memoryview) -> int:
+    """Unpack a big-endian unsigned 32-bit integer from bytes."""
+    mv = memoryview(data)
+    if mv.nbytes != 4:
+        raise ValueError("data must be exactly 4 bytes")
+    return struct.unpack(">I", mv.tobytes())[0]
+
 def pack_enc_zip(
     inputs: Iterable[str | Path],
     out_zip: str | Path,
@@ -100,4 +118,4 @@ def pack_enc_zip(
     return _pack_enc_zip(inputs, out_zip, password, algo=algo, flatten=True)
 
 
-__all__ = ["pack_enc_zip", "make_zip_from_dir", "safe_extract_zip"]
+__all__ = ["pack_u32", "unpack_u32", "pack_enc_zip", "make_zip_from_dir", "safe_extract_zip"]

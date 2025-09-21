@@ -72,6 +72,9 @@ class KeyObfuscator:
         """
         Initialize key obfuscator with a SecureBytes key.
         
+        AVISO DE SEGURANÇA: KeyObfuscator fornece apenas OFUSCAÇÃO, não proteção 
+        criptográfica. Reduz varredura casual de memória, mas não resiste a atacante dedicado.
+        
         Args:
             key_sb: SecureBytes containing the key to obfuscate.
                    Will be cleared after extraction.
@@ -82,6 +85,12 @@ class KeyObfuscator:
             ValueError: If key is empty or less than MIN_KEY_SIZE bytes
             RuntimeError: If key_sb is already cleared
         """
+        # Aviso de segurança: isto é ofuscação, não proteção criptográfica.
+        # Reduz varredura casual de memória, mas não resiste a atacante dedicado.
+        warnings.warn(
+            "KeyObfuscator fornece apenas ofuscação; não é um cofre criptográfico.",
+            RuntimeWarning, stacklevel=2
+        )
         # Extract key bytes using callback pattern
         plain: Optional[bytearray] = None
         

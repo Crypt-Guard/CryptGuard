@@ -6,6 +6,7 @@ Used by KeyGuard and CryptGuard.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Optional
 
 # Prefer the project's SecureBytes, fallback to a simple zeroizable buffer
@@ -64,10 +65,18 @@ class ObfuscatedSecret:
     without touching any private attributes.
     """
     def __init__(self, sm):
+        # Aviso de segurança: ObfuscatedSecret pode não oferecer ofuscação real
+        warnings.warn(
+            "ObfuscatedSecret: nem sempre oferece ofuscação real - depende da disponibilidade do KeyObfuscator.",
+            RuntimeWarning, stacklevel=2
+        )
         # Guardar referência ao SecureMemory original
         self._sm = sm
-        # Não usar KeyObfuscator por enquanto - incompatível com o fluxo atual
-        self._ko = None
+        # Instanciar KeyObfuscator quando disponível
+        try:
+            self._ko = KeyObfuscator(self._sm)  # type: ignore
+        except Exception:
+            self._ko = None
 
     def _obfuscate(self) -> None:
         try:
@@ -77,18 +86,16 @@ class ObfuscatedSecret:
             pass
 
     def _deobfuscate(self) -> None:
-        try:
-            if self._ko and hasattr(self._ko, "deobfuscate"):
-                self._ko.deobfuscate()
-        except Exception:
-            pass
+        # Transformado em no-op: expose() já delega ao KeyObfuscator
+        pass
 
     def expose(self) -> TimedExposure:
         # Evita "SecureBytes already cleared" ao clonar via .to_bytes()
         def _getter():
-            # Simplesmente retorna a instância original, sem tentar copiar
-            # O KeyObfuscator já trabalha diretamente com o buffer interno
             return self._sm
+        if self._ko is not None and hasattr(self._ko, 'expose'):
+            # delega ao KeyObfuscator para exposição temporária do plaintext
+            return self._ko.expose()  # type: ignore
         return TimedExposure(_getter, self._deobfuscate, self._obfuscate)
 
     def clear(self) -> None:
@@ -148,7 +155,9 @@ def sm_get_bytes(sm) -> bytes:
         except Exception:
             pass
 
-    # Último recurso: construtor bytes()
+    # Último recurso: construtor bytes() — inseguro (cópia não zeroizável)
+    import warnings as _warn
+    _warn.warn('sm_get_bytes: gerando bytes() não-zeroizável (último recurso)', RuntimeWarning, stacklevel=2)
     try:
         return bytes(sm)
     except Exception:
