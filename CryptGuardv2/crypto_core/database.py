@@ -3,6 +3,7 @@ import sqlite3
 import threading
 from functools import wraps
 
+from .log_utils import log_best_effort
 from .paths import BASE_DIR
 
 _DB_LOCK = threading.RLock()
@@ -25,8 +26,8 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA synchronous=FULL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.execute("PRAGMA temp_store=MEMORY;")
-    except Exception:
-        pass
+    except Exception as exc:
+        log_best_effort(__name__, exc)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS tries (
@@ -41,10 +42,10 @@ def _configure_connection(conn: sqlite3.Connection) -> None:
 def _with_conn(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        with _DB_LOCK:
-            with _connect() as conn:
-                _configure_connection(conn)
-                return fn(conn, *args, **kwargs)
+        with _DB_LOCK, _connect() as conn:
+            _configure_connection(conn)
+            return fn(conn, *args, **kwargs)
+
     return wrapper
 
 
@@ -64,8 +65,8 @@ def init_db():
                     os.fsync(dir_fd)
                 finally:
                     os.close(dir_fd)
-        except Exception:
-            pass
+        except Exception as exc:
+            log_best_effort(__name__, exc)
 
 
 @_with_conn
@@ -83,10 +84,14 @@ def record_failed_attempt(conn: sqlite3.Connection, file_path: str):
 
 
 @_with_conn
-def check_password_attempts(conn: sqlite3.Connection, file_path: str, max_attempts: int = 3) -> bool:
+def check_password_attempts(
+    conn: sqlite3.Connection, file_path: str, max_attempts: int = 3
+) -> bool:
     """Return True when decrypt attempts remain for the given file."""
     try:
-        row = conn.execute("SELECT attempts FROM tries WHERE file_path = ?", (file_path,)).fetchone()
+        row = conn.execute(
+            "SELECT attempts FROM tries WHERE file_path = ?", (file_path,)
+        ).fetchone()
         if row is None:
             return True
         return int(row[0]) < max_attempts

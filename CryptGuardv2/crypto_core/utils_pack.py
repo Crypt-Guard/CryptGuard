@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import stat
+import struct
 import zipfile
 from collections.abc import Iterable
-import struct
+from collections.abc import Iterable as _Iterable
 from pathlib import Path
-from typing import Iterable as _Iterable
 
-from .utils import is_within_dir, pack_enc_zip as _pack_enc_zip
+from .utils import is_within_dir
+from .utils import pack_enc_zip as _pack_enc_zip
 
 _ZIP_TS = (2020, 1, 1, 0, 0, 0)  # canonical timestamp to reduce metadata leaks
 
@@ -96,13 +97,13 @@ def pack_u32(value: int) -> bytes:
     return struct.pack(">I", value)
 
 
-
 def unpack_u32(data: bytes | bytearray | memoryview) -> int:
     """Unpack a big-endian unsigned 32-bit integer from bytes."""
     mv = memoryview(data)
     if mv.nbytes != 4:
         raise ValueError("data must be exactly 4 bytes")
     return struct.unpack(">I", mv.tobytes())[0]
+
 
 def pack_enc_zip(
     inputs: Iterable[str | Path],
@@ -118,4 +119,10 @@ def pack_enc_zip(
     return _pack_enc_zip(inputs, out_zip, password, algo=algo, flatten=True)
 
 
-__all__ = ["pack_u32", "unpack_u32", "pack_enc_zip", "make_zip_from_dir", "safe_extract_zip"]
+__all__ = [
+    "pack_u32",
+    "unpack_u32",
+    "pack_enc_zip",
+    "make_zip_from_dir",
+    "safe_extract_zip",
+]

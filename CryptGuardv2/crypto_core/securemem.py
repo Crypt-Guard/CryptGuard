@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 _log = logging.getLogger(__name__)
 _warned_fallback = False
@@ -49,11 +49,9 @@ class LockedBuf:
                 raise MemoryError("sodium_malloc returned NULL")
             self._ptr = ptr
             # best-effort lock and set RW
-            try:
+            with suppress(Exception):
                 self._lib.sodium_mlock(ptr, self._size)
                 self._lib.sodium_mprotect_readwrite(ptr)
-            except Exception:
-                pass
             # Successfully initialized with libsodium
         except Exception:
             # Fallback: Python bytearray that we zero manually
@@ -81,7 +79,9 @@ class LockedBuf:
     def mv(self) -> memoryview:
         """Return uma janela 1-D de bytes sem sinal, apta a mv[:] = b"..."."""
         if self._ro:
-            raise RuntimeError("LockedBuf is protected (NOACCESS); acquire within an unprotected context")
+            raise RuntimeError(
+                "LockedBuf is protected (NOACCESS); acquire within an unprotected context"
+            )
         if self._lib and self._ptr:
             typ = ctypes.c_ubyte * self._size
             arr = typ.from_address(self._ptr)
@@ -92,85 +92,70 @@ class LockedBuf:
                 raise RuntimeError("LockedBuf not initialized (no ptr and no fallback buffer)")
             base = memoryview(self._buf)
         try:
-            mv = base.cast('B', shape=(base.nbytes,))
+            mv = base.cast("B", shape=(base.nbytes,))
         except TypeError:
-            mv = base.cast('B')
+            mv = base.cast("B")
         return mv
 
     def protect(self):
         if self._lib and self._ptr and not self._ro:
-            try:
+            with suppress(Exception):
                 self._lib.sodium_mprotect_noaccess(self._ptr)
                 self._ro = True
                 self._protected = True
-            except Exception:
-                pass
 
     def unprotect(self):
         if self._lib and self._ptr and self._ro:
-            try:
+            with suppress(Exception):
                 self._lib.sodium_mprotect_readwrite(self._ptr)
                 self._ro = False
                 self._protected = False
-            except Exception:
-                pass
 
     def wipe(self):
         try:
             if self._lib and self._ptr:
                 # ensure RW before wiping/unlocking
-                try:
+                with suppress(Exception):
                     self._lib.sodium_mprotect_readwrite(self._ptr)
                     # refletir estado RW internamente
                     self._ro = False
                     self._protected = False
-                except Exception:
-                    pass
                 # zero memory via ctypes.memset
                 try:
                     # declare ctypes prototypes for memset to be robust
                     ctypes.memset.restype = ctypes.c_void_p
-                    ctypes.memset.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_size_t)
+                    ctypes.memset.argtypes = (
+                        ctypes.c_void_p,
+                        ctypes.c_int,
+                        ctypes.c_size_t,
+                    )
                     ctypes.memset(self._ptr, 0, self._size)
                 except Exception:
                     # fallback to memoryview write
-                    try:
+                    with suppress(Exception):
                         mv = self.mv()
                         mv[:] = b"\x00" * self._size
-                        try:
+                        with suppress(Exception):
                             mv.release()
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
                 # unlock and free
-                try:
+                with suppress(Exception):
                     self._lib.sodium_munlock(self._ptr, self._size)
-                except Exception:
-                    pass
-                try:
+                with suppress(Exception):
                     self._lib.sodium_free(self._ptr)
-                except Exception:
-                    pass
                 # replenish fallback buffer for post-wipe inspection
                 self._buf = bytearray(self._size)
                 self._ptr = None
                 self._lib = None
             elif self._buf is not None:
-                try:
-                    mv = memoryview(self._buf).cast('B')
+                with suppress(Exception):
+                    mv = memoryview(self._buf).cast("B")
                     mv[:] = b"\x00" * self._size
-                    try:
+                    with suppress(Exception):
                         mv.release()
-                    except Exception:
-                        pass
-                except Exception:
-                    # brute-force zero
-                    try:
+                if self._buf is not None:
+                    with suppress(Exception):
                         for i in range(len(self._buf)):
                             self._buf[i] = 0
-                    except Exception:
-                        pass
         finally:
             # Clean up libsodium resources
             if self._lib and self._ptr:
@@ -179,11 +164,9 @@ class LockedBuf:
             # For fallback buffer, zero and recreate instead of destroying
             elif self._buf is not None:
                 # Zero the buffer securely before recreating
-                try:
+                with suppress(Exception):
                     for i in range(len(self._buf)):
                         self._buf[i] = 0
-                except Exception:
-                    pass
                 # Recreate the buffer for potential reuse
                 self._buf = bytearray(self._size)
             else:
@@ -199,10 +182,8 @@ class LockedBuf:
         self.protect()
 
     def __del__(self):
-        try:
+        with suppress(Exception):
             self.wipe()
-        except Exception:
-            pass
 
 
 @contextmanager
@@ -222,5 +203,3 @@ def secret_bytes(initial: bytes | None = None, size: int | None = None):
         yield mv
     finally:
         lb.wipe()
-
-

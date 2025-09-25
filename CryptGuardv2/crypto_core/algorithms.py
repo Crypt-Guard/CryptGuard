@@ -8,7 +8,6 @@ Runtime in v5 always uses the fixed XChaCha20-Poly1305 SecretStream.
 from __future__ import annotations
 
 import warnings
-from typing import Dict
 
 warnings.warn(
     "crypto_core.algorithms is deprecated; v5 uses a fixed XChaCha20-Poly1305 SecretStream.",
@@ -17,7 +16,7 @@ warnings.warn(
 )
 
 # Códigos curtos -> nomes humanos
-SHORT_TO_HUMAN: Dict[str, str] = {
+SHORT_TO_HUMAN: dict[str, str] = {
     "AESG": "AES-256-GCM",
     "ACTR": "AES-256-CTR",
     "XC20": "XChaCha20-Poly1305",
@@ -25,7 +24,7 @@ SHORT_TO_HUMAN: Dict[str, str] = {
 }
 
 # Nomes humanos -> códigos curtos
-HUMAN_TO_SHORT: Dict[str, str] = {v: k for k, v in SHORT_TO_HUMAN.items()}
+HUMAN_TO_SHORT: dict[str, str] = {v: k for k, v in SHORT_TO_HUMAN.items()}
 
 
 def normalize_algo(a: str) -> str:
@@ -48,4 +47,3 @@ def normalize_algo(a: str) -> str:
 
 
 __all__ = ["SHORT_TO_HUMAN", "HUMAN_TO_SHORT", "normalize_algo"]
-

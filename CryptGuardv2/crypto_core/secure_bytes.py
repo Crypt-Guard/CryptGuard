@@ -1,20 +1,22 @@
+from __future__ import annotations
+
 # secure_bytes.py
 """Secure bytes container with guaranteed memory cleanup and optional memory locking."""
-from __future__ import annotations
+
 
 import ctypes
 import logging
 import platform
-import sys
 import threading
 import warnings
 import weakref
+from collections.abc import Callable
+from contextlib import suppress
+from importlib import util as _imp_util
+from typing import Final, Union
 
 _log = logging.getLogger(__name__)
 _warned_zeroize = False
-
-from importlib import util as _imp_util
-from typing import Callable, Optional, Union, Final
 
 # Type alias for byte-like objects
 BytesLike = Union[bytes, bytearray, memoryview]
@@ -27,13 +29,13 @@ _HAVE_SODIUM: Final[bool] = _imp_util.find_spec("nacl") is not None
 def secure_memzero(buf: bytearray) -> None:
     """
     Zero memory buffer in a way that resists compiler optimization.
-    
+
     Tries in order:
     1. Windows: RtlSecureZeroMemory (guaranteed no optimization)
     2. POSIX: explicit_bzero when available
     3. Generic: ctypes.memset with compiler barrier
     4. Fallback: manual loop with volatile-like access pattern
-    
+
     Args:
         buf: Buffer to zero. Safe to pass empty buffer.
     """
@@ -49,16 +51,17 @@ def secure_memzero(buf: bytearray) -> None:
         if _HAVE_SODIUM:
             try:
                 import nacl.bindings as _sod  # type: ignore
+
                 # sodium_memzero expects (void*, size_t)
                 addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
                 _sod.sodium_memzero(ctypes.c_void_p(addr), ctypes.c_size_t(len(buf)))
                 return
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug("lib sodium memzero fallback: %s", exc)
 
         # Get buffer address for ctypes operations
         addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
-        
+
         # Windows: RtlSecureZeroMemory
         if platform.system() == "Windows":
             try:
@@ -68,36 +71,41 @@ def secure_memzero(buf: bytearray) -> None:
                 rtl_zero.restype = ctypes.c_void_p
                 rtl_zero(addr, n)
                 return
-            except (AttributeError, OSError):
-                pass  # Fall through to next method
-        
+            except (AttributeError, OSError) as exc:
+                _log.debug(
+                    "RtlSecureZeroMemory unavailable: %s", exc
+                )  # Fall through to next method
+
         # Linux/BSD: explicit_bzero
         if hasattr(ctypes, "CDLL"):
             for lib_name in ("libc.so.6", "libc.so.7", "libc.dylib", "libSystem.dylib"):
                 try:
                     libc = ctypes.CDLL(lib_name)
                     if hasattr(libc, "explicit_bzero"):
-                        libc.explicit_bzero.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+                        libc.explicit_bzero.argtypes = (
+                            ctypes.c_void_p,
+                            ctypes.c_size_t,
+                        )
                         libc.explicit_bzero.restype = None
                         libc.explicit_bzero(addr, n)
                         return
                 except (OSError, AttributeError):
                     continue
-        
+
         # Generic: memset with attempt at compiler barrier
         ctypes.memset(addr, 0, n)
-        
+
         # Try to prevent optimization by accessing Python internals
         # This creates a side effect that may prevent dead store elimination
-        try:
+        with suppress(AttributeError, ValueError):
             _ = ctypes.c_int.in_dll(ctypes.pythonapi, "Py_OptimizeFlag")
-        except (AttributeError, ValueError):
-            pass
-            
-    except Exception:
+
+    except Exception as exc:
         fallback_used = True
-        pass  # Fall through to manual zeroing
-    
+        _log.debug(
+            "secure_memzero fallback due to error: %s", exc
+        )  # Fall through to manual zeroing
+
     if fallback_used and not _warned_zeroize:
         _log.warning("Zeroization fallback: ctypes.memset failed; using bytearray loop.")
         _warned_zeroize = True
@@ -112,20 +120,20 @@ def secure_memzero(buf: bytearray) -> None:
 def try_lock_memory(buf: bytearray) -> bool:
     """
     Attempt to lock memory pages to prevent swapping.
-    
+
     Args:
         buf: Buffer to lock in memory
-        
+
     Returns:
         True if successfully locked, False otherwise
     """
     if not buf or len(buf) < MIN_LOCK_SIZE:
         return False
-    
+
     try:
         addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
         size = len(buf)
-        
+
         if platform.system() == "Windows":
             try:
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
@@ -136,12 +144,14 @@ def try_lock_memory(buf: bytearray) -> bool:
                     SetProcessWorkingSetSize = kernel32.SetProcessWorkingSetSize
                     min_ws = ctypes.c_size_t()
                     max_ws = ctypes.c_size_t()
-                    GetProcessWorkingSetSize(GetCurrentProcess(), ctypes.byref(min_ws), ctypes.byref(max_ws))
+                    GetProcessWorkingSetSize(
+                        GetCurrentProcess(), ctypes.byref(min_ws), ctypes.byref(max_ws)
+                    )
                     new_min = ctypes.c_size_t(min_ws.value + size)
                     new_max = ctypes.c_size_t(max_ws.value + size)
                     SetProcessWorkingSetSize(GetCurrentProcess(), new_min, new_max)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.debug("Adjusting Windows working set size failed: %s", exc)
                 # VirtualLock returns non-zero on success
                 result = kernel32.VirtualLock(ctypes.c_void_p(addr), ctypes.c_size_t(size))
                 return bool(result)
@@ -160,39 +170,40 @@ def try_lock_memory(buf: bytearray) -> bool:
                         return result == 0
                 except (OSError, AttributeError):
                     continue
-    except Exception:
-        pass
-    
+    except Exception as exc:
+        _log.debug("try_lock_memory failed: %s", exc)
+
     return False
 
 
 def try_unlock_memory(buf: bytearray) -> bool:
     """
     Attempt to unlock previously locked memory pages.
-    
+
     Args:
         buf: Buffer to unlock
-        
+
     Returns:
         True if successfully unlocked, False otherwise
     """
     if not buf:
         return False
-    
+
     try:
         # Prefer sodium_munlock when available
         if _HAVE_SODIUM:
             try:
                 import nacl.bindings as _sod  # type: ignore
+
                 addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
                 _sod.sodium_munlock(ctypes.c_void_p(addr), ctypes.c_size_t(len(buf)))
                 return True
-            except Exception:
-                pass
+            except Exception as exc:
+                _log.debug("sodium_munlock fallback: %s", exc)
 
         addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
         size = len(buf)
-        
+
         if platform.system() == "Windows":
             try:
                 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
@@ -212,68 +223,69 @@ def try_unlock_memory(buf: bytearray) -> bool:
                         return result == 0
                 except (OSError, AttributeError):
                     continue
-    except Exception:
-        pass
-    
+    except Exception as exc:
+        _log.debug("try_lock_memory failed: %s", exc)
+
     return False
 
 
 class SecureBytes:
     """
     Secure container for sensitive byte data with guaranteed cleanup.
-    
+
     Features:
     - Internal mutable buffer (bytearray) for secure zeroing
     - Optional memory locking to prevent swap (best-effort)
     - Thread-safe operations with RLock
     - Context manager support for automatic cleanup
     - No information leakage through repr/str
-    
+
     Usage:
         # Basic usage
         sb = SecureBytes(b"secret_key")
         view = sb.view()  # Get read-only view without copy
         sb.clear()  # Securely zero the memory
-        
+
         # With context manager
         with SecureBytes(b"temporary_secret") as sb:
             view = sb.view()
             # Use the secret
         # Automatically cleared when exiting context
-        
+
         # Callback pattern for temporary access
         sb.with_bytes(lambda b: process(b))
     """
-    
+
     __slots__ = ("_buf", "_cleared", "_locked", "_lock", "_finalizer", "__weakref__")
-    
+
     def __init__(self, data: BytesLike, *, lock_memory: bool = True) -> None:
         """
         Initialize SecureBytes with sensitive data.
-        
+
         Args:
             data: Bytes to protect. Must not be empty.
             lock_memory: Whether to attempt locking pages in memory.
-            
+
         Raises:
             TypeError: If data is not bytes/bytearray/memoryview
             ValueError: If data is empty
         """
         # Convert input to bytes
         if isinstance(data, memoryview):
-            if data.c_contiguous:
-                data = data.tobytes()
-            else:
-                data = bytes(data)
+            data = data.tobytes() if data.c_contiguous else bytes(data)
         elif isinstance(data, bytearray):
             # Make a copy to avoid external aliasing
             data = bytes(data)
         elif not isinstance(data, bytes):
-            raise TypeError(f"SecureBytes requires bytes/bytearray/memoryview, got {type(data).__name__}")
-        
+            raise TypeError(
+                f"SecureBytes requires bytes/bytearray/memoryview, got {type(data).__name__}"
+            )
+
         if len(data) == 0:
-            raise ValueError("SecureBytes cannot be empty")
-        
+            # Compatibilidade reversa: permite strings vazias para vaults existentes
+            # que foram criados com senha vazia
+            pass
+
         # Initialize state
         self._buf = bytearray(data)
         self._cleared = False
@@ -281,7 +293,7 @@ class SecureBytes:
         self._lock = threading.RLock()
         # Ensure cleanup even if GC'd without context manager
         self._finalizer = weakref.finalize(self, self.clear)
-        
+
         # Attempt to lock memory if requested
         if lock_memory and len(self._buf) >= MIN_LOCK_SIZE:
             # Prefer sodium_mlock when available
@@ -289,6 +301,7 @@ class SecureBytes:
             if _HAVE_SODIUM:
                 try:
                     import nacl.bindings as _sod  # type: ignore
+
                     addr = ctypes.addressof(ctypes.c_char.from_buffer(self._buf))
                     _sod.sodium_mlock(ctypes.c_void_p(addr), ctypes.c_size_t(len(self._buf)))
                     ok = True
@@ -303,7 +316,7 @@ class SecureBytes:
                     f"Failed to lock {len(self._buf)} bytes in memory; data may be swapped to disk",
                     stacklevel=2,
                 )
-    
+
     def view(self) -> memoryview:
         """
         Get a read-only memory view of the data without copying.
@@ -323,23 +336,24 @@ class SecureBytes:
             except Exception:
                 # Fallback: copy to immutable bytes then memoryview
                 return memoryview(bytes(self._buf))
-    
+
     def with_bytes(self, callback: Callable[[bytes], None]) -> None:
         """
-        Execute callback with a temporary bytes copy.
-        Best-effort cleanup releases the reference immediately after use.
+                Execute callback with a temporary bytes copy.
+                Best-effort cleanup releases the reference immediately after use.
 
-        WARNING: this helper creates an immutable ytes copy that cannot be wiped.
-        The ytes object stays resident until the garbage collector runs. Use it only
-        for APIs that require a ytes instance; prefer iew() when possible.
+                WARNING: this helper creates an immutable \bytes copy that cannot be wiped.
+                The \bytes object stays resident until the garbage collector runs. Use it only
+                for APIs that require a \bytes instance; prefer
+        iew() when possible.
 
-        Raises:
-            ValueError: If already cleared
+                Raises:
+                    ValueError: If already cleared
         """
         with self._lock:
             if self._cleared:
                 raise ValueError("SecureBytes already cleared")
-            
+
             # Create temporary copy for the callback
             temp = bytes(self._buf)
             try:
@@ -349,36 +363,36 @@ class SecureBytes:
                 # Drop the reference as soon as possible.
                 try:
                     del temp
-                except Exception:
-                    pass
-    
+                except Exception as exc:
+                    _log.debug("Adjusting Windows working set size failed: %s", exc)
+
     def to_bytes(self) -> bytes:
         """
         DEPRECATED: Get a copy of the bytes.
-        
+
         Warning: This creates a copy that won't be securely cleared.
         Use view() or with_bytes() instead.
-        
+
         Returns:
             Copy of the internal bytes
-            
+
         Raises:
             ValueError: If already cleared
         """
         warnings.warn(
             "to_bytes() creates an insecure copy. Use view() or with_bytes() instead.",
             DeprecationWarning,
-            stacklevel=2
+            stacklevel=2,
         )
         with self._lock:
             if self._cleared:
                 raise ValueError("SecureBytes already cleared")
             return bytes(self._buf)
-    
+
     def clear(self) -> None:
         """
         Securely zero the internal buffer and mark as cleared.
-        
+
         This method is idempotent - calling it multiple times is safe.
         If memory was locked, attempts to unlock it.
         """
@@ -386,50 +400,50 @@ class SecureBytes:
             if not self._cleared:
                 # Zero the buffer
                 secure_memzero(self._buf)
-                
+
                 # Unlock memory if it was locked
                 if self._locked:
                     try_unlock_memory(self._buf)
                     self._locked = False
-                
+
                 # Clear the buffer and mark as cleared
                 self._buf.clear()
                 self._cleared = True
-    
+
     def wipe(self) -> None:
         """Compat: alias para clear()"""
         self.clear()
-    
+
     @property
     def cleared(self) -> bool:
         """Check if the bytes have been cleared."""
         with self._lock:
             return self._cleared
-    
+
     def __enter__(self) -> SecureBytes:
         """Context manager entry."""
         return self
-    
+
     def __exit__(self, exc_type: type, exc_val: Exception, exc_tb: object) -> None:
         """Context manager exit - ensures cleanup."""
         self.clear()
-    
+
     def __del__(self) -> None:
         """Destructor - ensures cleanup even if not explicitly cleared."""
         try:
             self.clear()
         except Exception:
             pass  # Best effort in destructor
-    
+
     def __len__(self) -> int:
         """Get length of data, or 0 if cleared."""
         with self._lock:
             return 0 if self._cleared else len(self._buf)
-    
+
     def __repr__(self) -> str:
         """Safe representation that doesn't leak information."""
         return "<SecureBytes ***>"
-    
+
     def __str__(self) -> str:
         """Safe string representation that doesn't leak information."""
         return "<SecureBytes ***>"

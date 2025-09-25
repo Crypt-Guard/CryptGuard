@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import os
 from enum import Enum, auto
-from pathlib import Path
 
 from .argon_utils import calibrate_kdf
+from .log_utils import log_best_effort
 from .paths import BASE_DIR, LOG_PATH
 from .process_protection import enable_process_hardening as _apply_full_hardening
 
@@ -33,24 +33,24 @@ ARGON_PRESETS = {
 }
 
 ARGON_PARAMS = {
-    SecurityProfile.FAST: dict(
-        time_cost=ARGON_PRESETS[SecurityProfile.FAST]["time"],
-        memory_cost=ARGON_PRESETS[SecurityProfile.FAST]["mem"],
-        parallelism=ARGON_PRESETS[SecurityProfile.FAST]["par"],
-    ),
-    SecurityProfile.BALANCED: dict(
-        time_cost=ARGON_PRESETS[SecurityProfile.BALANCED]["time"],
-        memory_cost=ARGON_PRESETS[SecurityProfile.BALANCED]["mem"],
-        parallelism=ARGON_PRESETS[SecurityProfile.BALANCED]["par"],
-    ),
-    SecurityProfile.SECURE: dict(
-        time_cost=ARGON_PRESETS[SecurityProfile.SECURE]["time"],
-        memory_cost=ARGON_PRESETS[SecurityProfile.SECURE]["mem"],
-        parallelism=ARGON_PRESETS[SecurityProfile.SECURE]["par"],
-    ),
+    SecurityProfile.FAST: {
+        "time_cost": ARGON_PRESETS[SecurityProfile.FAST]["time"],
+        "memory_cost": ARGON_PRESETS[SecurityProfile.FAST]["mem"],
+        "parallelism": ARGON_PRESETS[SecurityProfile.FAST]["par"],
+    },
+    SecurityProfile.BALANCED: {
+        "time_cost": ARGON_PRESETS[SecurityProfile.BALANCED]["time"],
+        "memory_cost": ARGON_PRESETS[SecurityProfile.BALANCED]["mem"],
+        "parallelism": ARGON_PRESETS[SecurityProfile.BALANCED]["par"],
+    },
+    SecurityProfile.SECURE: {
+        "time_cost": ARGON_PRESETS[SecurityProfile.SECURE]["time"],
+        "memory_cost": ARGON_PRESETS[SecurityProfile.SECURE]["mem"],
+        "parallelism": ARGON_PRESETS[SecurityProfile.SECURE]["par"],
+    },
 }
 
-META_ARGON_PARAMS = dict(time_cost=2, memory_cost=32 * 1024, parallelism=2)
+META_ARGON_PARAMS = {"time_cost": 2, "memory_cost": 32 * 1024, "parallelism": 2}
 DEFAULT_ARGON_PARAMS = ARGON_PARAMS[SecurityProfile.BALANCED]
 
 STREAMING_THRESHOLD = 100 * 1024 * 1024
@@ -72,14 +72,28 @@ BASE_DIR.mkdir(parents=True, exist_ok=True)
 CALIB_PATH = BASE_DIR / "argon_calib.json"
 SETTINGS_PATH = BASE_DIR / "settings.json"
 
+
 # ───── calibração automática (primeira execução) ───────────────────────
 def _map_flat_presets(p: dict) -> dict:
     # converte {"time_cost":..,"memory_cost":..,"parallelism":..} para FAST/BALANCED/SECURE
     return {
-        "FAST": {"time": p["time_cost"], "mem": p["memory_cost"], "par": p["parallelism"]},
-        "BALANCED": {"time": p["time_cost"], "mem": p["memory_cost"], "par": p["parallelism"]},
-        "SECURE": {"time": p["time_cost"], "mem": p["memory_cost"], "par": p["parallelism"]},
+        "FAST": {
+            "time": p["time_cost"],
+            "mem": p["memory_cost"],
+            "par": p["parallelism"],
+        },
+        "BALANCED": {
+            "time": p["time_cost"],
+            "mem": p["memory_cost"],
+            "par": p["parallelism"],
+        },
+        "SECURE": {
+            "time": p["time_cost"],
+            "mem": p["memory_cost"],
+            "par": p["parallelism"],
+        },
     }
+
 
 if not CALIB_PATH.exists():
     presets = calibrate_kdf()
@@ -98,7 +112,11 @@ try:
         for prof_name, cfg in presets.items():
             prof = SecurityProfile[prof_name]
             ARGON_PRESETS[prof] = cfg
-            ARGON_PARAMS[prof] = dict(time_cost=cfg["time"], memory_cost=cfg["mem"], parallelism=cfg["par"])
+            ARGON_PARAMS[prof] = {
+                "time_cost": cfg["time"],
+                "memory_cost": cfg["mem"],
+                "parallelism": cfg["par"],
+            }
 except Exception:
     # melhor-esforço apenas
     pass
@@ -107,6 +125,7 @@ except Exception:
 DEFAULT_EXPIRATION_DAYS = 0
 MAX_CLOCK_SKEW_SEC = 31_536_000  # 365d
 
+
 # ───── proteção extra de processo (opcional) ───────────────────────────
 def enable_process_hardening():
     """Habilita proteções de processo quando possível (best effort)."""
@@ -114,8 +133,9 @@ def enable_process_hardening():
     if hasattr(os, "setpriority"):
         try:
             os.setpriority(os.PRIO_PROCESS, 0, 10)  # baixa prioridade
-        except Exception:
-            pass  # nosec B110 — best-effort, sem impacto de segurança
+        except Exception as exc:
+            log_best_effort(__name__, exc)  # nosec B110 — best-effort, sem impacto de segurança
+
 
 __all__ = [
     "SecurityProfile",

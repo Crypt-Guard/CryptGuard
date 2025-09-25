@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 metadata.py - JSON de metadados protegido por ChaCha20-Poly1305
 
@@ -22,10 +21,10 @@ from typing import Any
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
 from .config import META_SALT_SIZE
+from .fileformat_v5 import canonical_json_bytes
 from .kdf import derive_key_sb as _derive_meta_key_sb  # Argon2id → chave
 from .secure_bytes import SecureBytes
 from .utils import write_atomic_secure
-from .fileformat_v5 import canonical_json_bytes
 
 # Domain separation para o envelope de metadados
 AAD_META: bytes = b"CG2/v5 meta|v1"

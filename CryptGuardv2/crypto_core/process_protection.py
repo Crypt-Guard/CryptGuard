@@ -13,6 +13,7 @@ from __future__ import annotations
 import ctypes
 import platform
 
+from .log_utils import log_best_effort
 from .security_warning import warn
 
 
@@ -28,18 +29,20 @@ def _enable_dep():
                 getpol = k32.GetSystemDEPPolicy
                 state = getpol()
                 warn(f"DEP enabled; system policy={state}", sev="LOW")
-            except Exception:
-                pass
+            except Exception as exc:
+                log_best_effort(__name__, exc)
     except Exception as e:
         warn(f"Falha ao ativar DEP: {e}", sev="LOW")
+
 
 def _disable_core_dumps():
     try:
         # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
         SEM_FLAGS = 0x0001 | 0x0002 | 0x8000
         ctypes.windll.kernel32.SetErrorMode(SEM_FLAGS)  # type: ignore[attr-defined]
-    except Exception:
-        pass  # nosec B110 — best-effort, sem impacto de segurança
+    except Exception as exc:
+        log_best_effort(__name__, exc)  # nosec B110 — best-effort, sem impacto de segurança
+
 
 def _check_debugger():
     try:
@@ -48,8 +51,9 @@ def _check_debugger():
         k32.CheckRemoteDebuggerPresent(k32.GetCurrentProcess(), ctypes.byref(dbg_present))
         if dbg_present.value:
             warn("Debugger detectado! Hardening pode não ser efetivo.", sev="HIGH")
-    except Exception:
-        pass  # nosec B110 — best-effort, sem impacto de segurança
+    except Exception as exc:
+        log_best_effort(__name__, exc)  # nosec B110 — best-effort, sem impacto de segurança
+
 
 def enable_process_hardening():
     if platform.system() != "Windows":

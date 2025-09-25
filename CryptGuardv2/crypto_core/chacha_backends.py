@@ -1,26 +1,26 @@
-# nosec B413: # # import Crypto  # removido pela migração  # removed by migration legado — backends preferidos são cryptography/PyNaCl; mantido por compat.
-"""chacha_backends.py – ChaCha20‑Poly1305 (12 B) e XChaCha20‑Poly1305 (24 B).
-
-Versão corrigida: remove keyword inválido `rs_bytes` nas chamadas de
-`rs_encode_data` para ser compatível com implementações existentes.
-"""
-
 from __future__ import annotations
 
 import struct
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-try:
-    from crypto_core.compat_chacha import ChaCha20_Poly1305  # PyCryptodome
-except ImportError:
-    ChaCha20_Poly1305 = None  # type: ignore
-
 from crypto_core.logger import logger
 
 from .config import RS_PARITY_BYTES
 from .crypto_base import BaseCipher
 from .rs_codec import rs_decode_data, rs_encode_data
+
+try:
+    from crypto_core.compat_chacha import ChaCha20_Poly1305  # PyCryptodome
+except ImportError:
+    ChaCha20_Poly1305 = None  # type: ignore
+
+# nosec B413: # # import Crypto  # removido pela migração  # removed by migration legado — backends preferidos são cryptography/PyNaCl; mantido por compat.
+"""chacha_backends.py – ChaCha20‑Poly1305 (12 B) e XChaCha20‑Poly1305 (24 B).
+
+Versão corrigida: remove keyword inválido `rs_bytes` nas chamadas de
+`rs_encode_data` para ser compatível com implementações existentes.
+"""
 
 TAG_LEN = 16  # bytes
 
@@ -34,7 +34,12 @@ class ChaChaCipher(BaseCipher):
 
     @staticmethod
     def encode_chunk(
-        idx: int, plain: bytes, nonce: bytes, enc_key: bytes, rs_use: bool, header: bytes = b""
+        idx: int,
+        plain: bytes,
+        nonce: bytes,
+        enc_key: bytes,
+        rs_use: bool,
+        header: bytes = b"",
     ) -> tuple[int, bytes]:
         # Validate nonce length early to avoid backend ambiguity
         if len(nonce) != ChaChaCipher.nonce_size:
@@ -104,7 +109,12 @@ class XChaChaCipher(BaseCipher):
 
     @staticmethod
     def encode_chunk(
-        idx: int, plain: bytes, nonce: bytes, enc_key: bytes, rs_use: bool, header: bytes = b""
+        idx: int,
+        plain: bytes,
+        nonce: bytes,
+        enc_key: bytes,
+        rs_use: bool,
+        header: bytes = b"",
     ) -> tuple[int, bytes]:
         if ChaCha20_Poly1305 is None:
             raise RuntimeError("PyCryptodome não encontrado – XChaCha indisponível.")

@@ -10,13 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from typing import Union, Optional, Dict
 
 from .fileformat_v5 import canonical_json_bytes
 from .secure_bytes import SecureBytes
 
 
-def _as_bytes(data: Union[SecureBytes, bytes, bytearray, memoryview]) -> bytes:
+def _as_bytes(data: SecureBytes | bytes | bytearray | memoryview) -> bytes:
     if isinstance(data, SecureBytes):
         return bytes(data.view())
     if isinstance(data, memoryview):
@@ -27,7 +26,7 @@ def _as_bytes(data: Union[SecureBytes, bytes, bytearray, memoryview]) -> bytes:
 _HASH = hashlib.sha256
 
 
-def _hkdf_extract(salt: Optional[bytes], ikm: bytes) -> bytes:
+def _hkdf_extract(salt: bytes | None, ikm: bytes) -> bytes:
     if salt is None:
         salt = b"\x00" * _HASH().digest_size
     return hmac.new(salt, ikm, _HASH).digest()
@@ -47,7 +46,7 @@ def _hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
 
 
 def derive_keys(
-    master: Union[SecureBytes, bytes, bytearray, memoryview],
+    master: SecureBytes | bytes | bytearray | memoryview,
     *,
     info: bytes,
     salt: bytes | None,
@@ -63,8 +62,8 @@ def derive_subkey(
     master_key32: bytes,
     label: str,
     length: int = 32,
-    context: Optional[Dict] = None,
-    salt: Optional[bytes] = None,
+    context: dict | None = None,
+    salt: bytes | None = None,
 ) -> bytes:
     """
     RFC5869 HKDF-SHA256 with domain separation:
@@ -72,14 +71,11 @@ def derive_subkey(
     Typical:
       stream_key = derive_subkey(key32, "stream")
     """
-    if not isinstance(master_key32, (bytes, bytearray)) or len(master_key32) != 32:
+    if not isinstance(master_key32, bytes | bytearray) or len(master_key32) != 32:
         raise ValueError("master_key32 deve ter 32 bytes")
-    info = (
-        b"CG2/v5 hkdf|" + label.encode("utf-8") + b"|" + canonical_json_bytes(context or {})
-    )
+    info = b"CG2/v5 hkdf|" + label.encode("utf-8") + b"|" + canonical_json_bytes(context or {})
     prk = _hkdf_extract(salt, bytes(master_key32))
     return _hkdf_expand(prk, info, int(length))
 
 
 __all__ = ["derive_keys", "derive_subkey"]
-

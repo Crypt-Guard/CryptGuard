@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 cg2_ops.py — *compat shim* para a versão atual (v5 SecretStream)
 
@@ -13,12 +12,12 @@ Motivação:
 """
 
 from __future__ import annotations
-from pathlib import Path
-from collections.abc import Callable
-from typing import Union
 
-from .config import CG2_EXT, SecurityProfile
+from collections.abc import Callable
+from pathlib import Path
+
 from . import factories
+from .config import CG2_EXT, SecurityProfile
 
 # OBS: toda a lógica multi-algoritmo, footers (END0/NAM0/SIZ0/TAG0),
 # HKDF auxiliares e heurísticas de extensão foram removidas. Hoje
@@ -26,8 +25,8 @@ from . import factories
 
 
 def encrypt_to_cg2(
-    in_path: Union[str, Path],
-    out_path: Union[str, Path],
+    in_path: str | Path,
+    out_path: str | Path,
     password: bytes,
     alg: str = "SecretStream",
     profile: SecurityProfile = SecurityProfile.BALANCED,
@@ -44,12 +43,13 @@ def encrypt_to_cg2(
     out_path = Path(out_path)
     if out_path.suffix.lower() != CG2_EXT:
         out_path = out_path.with_suffix(CG2_EXT)
-    
+
     # Delegação para o writer v5 (SecretStream). Parâmetros padronizados.
     result = factories.encrypt(
-        input_path=in_path,
-        output_path=out_path,
+        in_path=in_path,
+        out_path=out_path,
         password=password,
+        algo=alg,
         profile=profile,
         exp_ts=exp_ts,
         pad_block=pad_block,
@@ -59,8 +59,8 @@ def encrypt_to_cg2(
 
 
 def decrypt_from_cg2(
-    in_path: Union[str, Path],
-    out_path: Union[str, Path],
+    in_path: str | Path,
+    out_path: str | Path,
     password: bytes,
     verify_only: bool = False,
     *,
@@ -70,13 +70,13 @@ def decrypt_from_cg2(
     Compat wrapper para **decrypt/verify** do pipeline atual.
     """
     result = factories.decrypt(
-        input_path=Path(in_path),
-        output_path=Path(out_path),
+        in_path=Path(in_path),
+        out_path=Path(out_path),
         password=password,
         verify_only=verify_only,
         progress_cb=progress_cb,
     )
-    
+
     if verify_only:
         return result is not None  # True se sucesso, False se falhou
     else:

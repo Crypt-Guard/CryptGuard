@@ -4,11 +4,11 @@ Verify integrity for CG2 files (legacy v1–v4 and v5) without decrypting plaint
 
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
-from .fileformat import is_cg2_file
 from .factories import decrypt as _decrypt
+from .fileformat import is_cg2_file
 
 
 def verify_integrity(

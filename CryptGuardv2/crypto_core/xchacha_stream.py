@@ -1,19 +1,18 @@
 from __future__ import annotations
-# -*- coding: utf-8 -*-
 
+import contextlib
 import hmac
 import json
+import logging
 import os
+import re
 import struct
 import time
-from pathlib import Path
-import logging
 import warnings
-import re
-import contextlib
-from typing import Optional
 from hashlib import blake2b
+from pathlib import Path
 
+from crypto_core.logger import logger
 
 from .fileformat_v5 import (
     SS_HEADER_BYTES,
@@ -21,8 +20,9 @@ from .fileformat_v5 import (
     canonical_json_bytes,
     read_v5_header,
 )
-from .kdf import derive_key_from_params_json, derive_key_v5
 from .hkdf_utils import derive_subkey
+from .kdf import derive_key_from_params_json, derive_key_v5
+
 try:  # optional best-effort secure memory
     from .securemem import secret_bytes as _secret_bytes
 except Exception:  # pragma: no cover - optional
@@ -68,7 +68,12 @@ TAG_FINAL = _SS["TAG_FINAL"]
 
 # --- Strict expiration (optional): corrupt the file when it expires -------------
 # Controlled via environment variable (default: ON).
-AUTO_CORRUPT_ON_EXPIRE = str(os.getenv("CG2_STRICT_EXPIRE", "1")).lower() not in ("0", "false", "no")
+AUTO_CORRUPT_ON_EXPIRE = str(os.getenv("CG2_STRICT_EXPIRE", "1")).lower() not in (
+    "0",
+    "false",
+    "no",
+)
+
 
 def _self_corrupt(path: Path) -> None:
     """Overwrite the start of the file to break the v5 header (irreversible for that copy)."""
@@ -78,8 +83,9 @@ def _self_corrupt(path: Path) -> None:
             f.write(os.urandom(128))
             f.flush()
             os.fsync(f.fileno())
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Suppressed exception in xchacha_stream: %s", exc)
+
 
 def _mix_with_keyfile(key32: bytes, keyfile_path: str | os.PathLike) -> bytes:
     """
@@ -102,6 +108,7 @@ def _get_rate_limit_hooks():
             record_failed_attempt,
             reset_failed_attempts,
         )
+
         return check_password_attempts, record_failed_attempt, reset_failed_attempts
     except Exception:
         warnings.warn(
@@ -116,8 +123,8 @@ def _get_rate_limit_hooks():
         )
 
 
-
 _log = logging.getLogger(__name__)
+
 
 @contextlib.contextmanager
 def _redact_meta_logs(enabled: bool):
@@ -136,14 +143,15 @@ def _redact_meta_logs(enabled: bool):
             try:
                 msg = record.getMessage()
                 # redact orig_name JSON and key=value variants
-                msg = patt_json.sub(r'\1[hidden]\3', msg)
-                msg = patt_kv_s.sub(r'\1[hidden]\3', msg)
-                msg = patt_kv_d.sub(r'\1[hidden]\3', msg)
+                msg = patt_json.sub(r"\1[hidden]\3", msg)
+                msg = patt_kv_s.sub(r"\1[hidden]\3", msg)
+                msg = patt_kv_d.sub(r"\1[hidden]\3", msg)
                 record.msg = msg
                 record.args = ()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
             return True
+
     f = _F()
     _log.addFilter(f)
     try:
@@ -154,11 +162,13 @@ def _redact_meta_logs(enabled: bool):
 
 class KeyfileRequiredError(PermissionError):
     """Raised when the file requires a keyfile and none was provided."""
+
     pass
 
 
 class ExpiredCG2Error(PermissionError):
     """Raised when the file is expired."""
+
     pass
 
 
@@ -200,16 +210,19 @@ class _MissingSecretStream(RuntimeError):
 def _require_secretstream():
     try:
         from nacl.bindings import (
-            crypto_secretstream_xchacha20poly1305_init_push,
-            crypto_secretstream_xchacha20poly1305_init_pull,
-            crypto_secretstream_xchacha20poly1305_push,
-            crypto_secretstream_xchacha20poly1305_pull,
-            crypto_secretstream_xchacha20poly1305_TAG_MESSAGE,
-            crypto_secretstream_xchacha20poly1305_TAG_FINAL,
             crypto_secretstream_xchacha20poly1305_HEADERBYTES,
+            crypto_secretstream_xchacha20poly1305_init_pull,
+            crypto_secretstream_xchacha20poly1305_init_push,
+            crypto_secretstream_xchacha20poly1305_pull,
+            crypto_secretstream_xchacha20poly1305_push,
             crypto_secretstream_xchacha20poly1305_STATEBYTES,
+            crypto_secretstream_xchacha20poly1305_TAG_FINAL,
+            crypto_secretstream_xchacha20poly1305_TAG_MESSAGE,
+        )
+        from nacl.bindings import (
             crypto_secretstream_xchacha20poly1305_state as SS_STATE_CLS,
         )
+
         # sanity
         if crypto_secretstream_xchacha20poly1305_HEADERBYTES != SS_HEADER_BYTES:
             raise RuntimeError("libsodium header size mismatch")
@@ -292,17 +305,17 @@ class XChaChaStream:
                 obj = json.loads(kdf_json.decode("utf-8"))
                 obj["exp"] = int(expires_at)
                 kdf_json = canonical_json_bytes(obj)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
         # Sinaliza que keyfile foi usado (exigido para abrir)
         if keyfile:
             try:
                 obj = json.loads(kdf_json.decode("utf-8"))
                 obj["kfile"] = True
                 kdf_json = canonical_json_bytes(obj)
-            except Exception:
-                pass
-        
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
+
         # SecretStream initialization compatibility layer
         if _secret_bytes is not None:
             with _secret_bytes(initial=key32) as _kmv:
@@ -312,7 +325,7 @@ class XChaChaStream:
             state, ss_header = ss_init_push_compat(bytes(_key_ba))
             for i in range(len(_key_ba)):
                 _key_ba[i] = 0
-        
+
         header = V5Header(kdf_params_json=kdf_json, ss_header=ss_header).pack()
         with _redact_meta_logs(hide_filename):
             _log.debug("v5 header ready; kdf_json_len=%d hide=%s", len(kdf_json), hide_filename)
@@ -357,8 +370,8 @@ class XChaChaStream:
         # best-effort: remover referAancia A  chave o quanto antes
         try:
             del key32
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed exception in xchacha_stream: %s", exc)
         return str(out_p.resolve())
 
     def decrypt_file(
@@ -369,13 +382,15 @@ class XChaChaStream:
         out_path: str | os.PathLike | None = None,
         verify_only: bool = False,
         keyfile: str | os.PathLike | None = None,
-    ) -> Optional[str]:
+    ) -> str | None:
         pwd = _coerce_pwd(password)
         src = Path(in_path)
         dst = Path(out_path) if out_path else Path(str(src.with_suffix("")))
         dst_dir = dst.parent
 
-        check_password_attempts, record_failed_attempt, reset_failed_attempts = _get_rate_limit_hooks()
+        check_password_attempts, record_failed_attempt, reset_failed_attempts = (
+            _get_rate_limit_hooks()
+        )
         src_identifier = str(src)
 
         if not check_password_attempts(src_identifier, max_attempts=3):
@@ -395,8 +410,8 @@ class XChaChaStream:
                 # Fail clearly if the file requires a keyfile and none was provided
                 if kdf_obj.get("kfile") is True and not keyfile:
                     raise KeyfileRequiredError("File requires keyfile")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
             key32 = derive_key_from_params_json(pwd, hdr.kdf_params_json)
             if keyfile:
                 key32 = _mix_with_keyfile(key32, keyfile)
@@ -413,6 +428,7 @@ class XChaChaStream:
 
             # Read framed messages: [len|4][ciphertext] ... until TAG_FINAL
             from .securetemp import SecureTempFile
+
             with src.open("rb") as f:
                 f.seek(off)
                 final_seen = False
@@ -472,8 +488,8 @@ class XChaChaStream:
                     if out is not None:
                         try:
                             out.flush()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Suppressed exception in xchacha_stream: %s", exc)
                     # tmp is closed/finalized later
 
                 if not final_seen:
@@ -482,8 +498,8 @@ class XChaChaStream:
             if verify_only:
                 try:
                     reset_failed_attempts(src_identifier)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Suppressed exception in xchacha_stream: %s", exc)
                 return None
 
             # Decide final filename usando metadata
@@ -494,8 +510,8 @@ class XChaChaStream:
                     if final_meta.get("padding") in ("4k", "16k") and expected_size >= 0:
                         out.flush()
                         out.truncate(expected_size)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Suppressed exception in xchacha_stream: %s", exc)
             final_dst = dst
             if isinstance(final_meta, dict):
                 orig_name = final_meta.get("orig_name")
@@ -543,21 +559,20 @@ class XChaChaStream:
             # best-effort: remover referencia a chave o quanto antes
             try:
                 del key32
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
 
             try:
                 reset_failed_attempts(src_identifier)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
             return str(final_dst.resolve())
         except Exception:
             try:
                 record_failed_attempt(src_identifier)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
             raise
-
 
 
 __all__ = [

@@ -15,6 +15,7 @@ else:  # Unix-like
 # Log file location
 LOG_PATH = BASE_DIR / "cryptguard.log"
 
+
 def ensure_base_dir() -> None:
     """Create the base directory with restricted permissions (best-effort)."""
     try:

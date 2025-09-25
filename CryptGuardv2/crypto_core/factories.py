@@ -1,16 +1,17 @@
-# ============================================================================
-# === Canonical API (v2.1.5c) -- single public face ==========================
 from __future__ import annotations
 
-from pathlib import Path as _Path
 import contextlib as _ctx
 import logging as _logging
 import os as _os
 import re as _re
+
+# ============================================================================
+# === Canonical API (v2.1.5c) -- single public face ==========================
+from pathlib import Path as _Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .config import SecurityProfile  # noqa: F401
+    from .config import SecurityProfile
 
 
 # Algorithm normalization kept for backward compatibility (unused in v5)
@@ -18,25 +19,24 @@ if TYPE_CHECKING:
 # New v5 routing utilities
 from .fileformat_v5 import read_header_version_any as _read_ver_any
 
+_LOGGER = _logging.getLogger(__name__)
+
+
 # Helpers: atomic write (+fsync) and log redaction
 def _fsync_file_and_dir(file_path: str | _Path) -> None:
     """Flush file contents and the containing directory entry to disk."""
     p = _Path(file_path)
-    try:
-        with open(p, "rb+") as fh:
-            fh.flush()
-            _os.fsync(fh.fileno())
-    except Exception:
-        pass
+    with _ctx.suppress(OSError), open(p, "rb+") as fh:
+        fh.flush()
+        _os.fsync(fh.fileno())
     # fsync directory entry (best-effort)
-    try:
+    with _ctx.suppress(OSError):
         dfd = _os.open(str(p.parent), _os.O_RDONLY)
         try:
             _os.fsync(dfd)
         finally:
             _os.close(dfd)
-    except Exception:
-        pass
+
 
 def _atomic_target(final_path: str | _Path) -> tuple[_Path, _Path]:
     """Return (tmp, final) paths in the same directory."""
@@ -44,6 +44,7 @@ def _atomic_target(final_path: str | _Path) -> tuple[_Path, _Path]:
     tmp = final.with_suffix(final.suffix + ".part")
     final.parent.mkdir(parents=True, exist_ok=True)
     return tmp, final
+
 
 @_ctx.contextmanager
 def _redact_logs_for_operation(*names_to_hide: str):
@@ -75,8 +76,8 @@ def _redact_logs_for_operation(*names_to_hide: str):
                         msg = pat.sub("[hidden]", msg)
                 record.msg = msg
                 record.args = ()
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.debug("Log redaction failed: %s", exc)
             return True
 
     filt = _RedactFilter()
@@ -85,6 +86,7 @@ def _redact_logs_for_operation(*names_to_hide: str):
         yield
     finally:
         root.removeFilter(filt)
+
 
 def encrypt(
     in_path: str | _Path,
@@ -139,8 +141,10 @@ def encrypt(
     # accept both names and normalise: expires_at has priority; otherwise exp_ts is used
     _exp_effective = None
     try:
-        _exp_effective = int(expires_at) if expires_at is not None else (
-            int(exp_ts) if exp_ts is not None else None
+        _exp_effective = (
+            int(expires_at)
+            if expires_at is not None
+            else (int(exp_ts) if exp_ts is not None else None)
         )
     except Exception:
         _exp_effective = None
@@ -164,6 +168,7 @@ def encrypt(
         _fsync_file_and_dir(final)
         return str(_Path(final).resolve())
 
+
 def decrypt(
     in_path: str | _Path,
     password: str | bytes,
@@ -186,6 +191,7 @@ def decrypt(
 
     if ver >= 5:
         from .xchacha_stream import XChaChaStream
+
         if verify_only:
             XChaChaStream().decrypt_file(
                 src,
@@ -209,6 +215,7 @@ def decrypt(
     else:
         # legacy v1-v4
         from .legacy.decrypt_legacy import decrypt_file as _dec_legacy
+
         if dst is None:
             dst = src.with_suffix(".tmp")
         res = _dec_legacy(src, password, out_path=str(dst), verify_only=verify_only)
@@ -224,13 +231,19 @@ def Encrypt(*args, **kwargs):
         kwargs["out_path"] = kwargs.pop("output")
     return encrypt(*args, **kwargs)
 
+
 def Decrypt(*args, **kwargs):
     if "out_path" not in kwargs and "output" in kwargs:
         kwargs["out_path"] = kwargs.pop("output")
     return decrypt(*args, **kwargs)
+
+
 # ===========================================================================
 
-def verify(in_path: str | _Path, password: str | bytes, *, keyfile: str | _Path | None = None) -> bool:
+
+def verify(
+    in_path: str | _Path, password: str | bytes, *, keyfile: str | _Path | None = None
+) -> bool:
     """Verify authentication without leaving artifacts on disk.
 
     Returns True if decryption/authentication succeeds, False otherwise.
@@ -240,6 +253,7 @@ def verify(in_path: str | _Path, password: str | bytes, *, keyfile: str | _Path 
         return True
     except Exception:
         return False
+
 
 # convenient aliases
 cg_encrypt = encrypt

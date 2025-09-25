@@ -1,9 +1,10 @@
 from __future__ import annotations
-# -*- coding: utf-8 -*-
 
 import logging
 import re
-from typing import Pattern
+from re import Pattern
+
+from .log_utils import log_best_effort
 
 
 class NoLocalsFilter(logging.Filter):
@@ -11,21 +12,21 @@ class NoLocalsFilter(logging.Filter):
     Avoid logging full tracebacks with locals; keep only type+message.
     """
 
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+    def filter(self, record: logging.LogRecord) -> bool:
         if record.exc_info:
             etype, evalue, tb = record.exc_info
             try:
                 # Mantém o traceback mas remove locals se existirem
-                if tb and hasattr(tb, 'tb_frame'):
+                if tb and hasattr(tb, "tb_frame"):
                     # Remove locals dos frames do traceback
                     frame = tb
                     while frame:
-                        if hasattr(frame, 'tb_frame') and hasattr(frame.tb_frame, 'f_locals'):
+                        if hasattr(frame, "tb_frame") and hasattr(frame.tb_frame, "f_locals"):
                             frame.tb_frame.f_locals.clear()
                         frame = frame.tb_next
                 # Não remove o exc_info, mantém o traceback completo
-            except Exception:
-                pass
+            except Exception as exc:
+                log_best_effort(__name__, exc)
         return True
 
 
@@ -69,6 +70,6 @@ class RedactingFormatter(logging.Formatter):
                     return f"\x1b[37m{out}\x1b[0m"
                 else:
                     return f"\x1b[90m{out}\x1b[0m"
-            except Exception:
-                pass
+            except Exception as exc:
+                log_best_effort(__name__, exc)
         return out

@@ -8,25 +8,25 @@ import json
 import logging
 import os
 import time
-from pathlib import Path
 from dataclasses import dataclass
-from typing import Literal
 from secrets import token_bytes
+from typing import Literal
 
 import psutil
 from argon2.low_level import Type, hash_secret_raw
 
+from .kdf import generate_key_from_password as _kdf_generate
 from .key_obfuscator import KeyObfuscator
+from .log_utils import log_best_effort
+from .paths import BASE_DIR
 from .secure_bytes import SecureBytes
 from .security_warning import warn
-from .paths import BASE_DIR
-from .kdf import generate_key_from_password as _kdf_generate
 
 logger = logging.getLogger("crypto_core")
 
 CALIB_PATH = BASE_DIR / "argon_calib.json"
 _KEY_LEN = 32
-_DEFAULT = dict(time_cost=3, memory_cost=128 * 1024, parallelism=4)
+_DEFAULT = {"time_cost": 3, "memory_cost": 128 * 1024, "parallelism": 4}
 
 # Safety bounds
 _MIN_SALT_LEN = 16
@@ -61,7 +61,11 @@ def _sanitize_params(p: dict) -> dict:
     if memory_cost < 8 * parallelism:
         parallelism = max(1, memory_cost // 8) or 1
 
-    return {"time_cost": time_cost, "memory_cost": memory_cost, "parallelism": parallelism}
+    return {
+        "time_cost": time_cost,
+        "memory_cost": memory_cost,
+        "parallelism": parallelism,
+    }
 
 
 def generate_key_from_password(
@@ -81,7 +85,7 @@ def generate_key_from_password(
         warn("Argon2 time_cost MUITO baixo (<2) — segurança reduzida", sev="MEDIUM")
 
     # Validate salt
-    if not isinstance(salt, (bytes, bytearray)) or len(salt) < _MIN_SALT_LEN:
+    if not isinstance(salt, bytes | bytearray) or len(salt) < _MIN_SALT_LEN:
         raise ValueError("salt must be at least 16 bytes")
 
     # Ajuste de memória/LANEs para caber no ambiente atual
@@ -154,9 +158,10 @@ def load_calibrated_params():
         if CALIB_PATH.exists():
             loaded = json.loads(CALIB_PATH.read_text())
             return _sanitize_params(loaded)
-    except Exception:
-        pass
+    except Exception as exc:
+        log_best_effort(__name__, exc)
     return None
+
 
 # ---------------------------------------------------------------------------
 # New v5-friendly Argon2 helpers with guardrails and deterministic calibration

@@ -4,6 +4,8 @@ import hmac
 import secrets
 import time
 
+from .log_utils import log_best_effort
+
 
 def consteq(a, b) -> bool:
     # pequenos (e.g., 32B): conversão a bytes não causa pressão de heap
@@ -23,6 +25,5 @@ class EphemeralToken:
             for i in range(len(self.v)):
                 self.v[i] = 0
             self.v.clear()
-        except Exception:
-            pass
-
+        except Exception as exc:
+            log_best_effort(__name__, exc)

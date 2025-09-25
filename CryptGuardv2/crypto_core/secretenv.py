@@ -35,4 +35,3 @@ def no_str_secrets(*secret_param_names: str):
         return wrapper
 
     return deco
-

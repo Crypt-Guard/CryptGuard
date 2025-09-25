@@ -4,7 +4,6 @@ import json
 import struct
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple
 
 # CG2 v5 header (all bytes are AAD)
 # MAGIC(4) | VERSION(1=0x05) | ALG_ID(1=0x01) | KDF_LEN(u16, BE) | KDF_JSON | SS_HEADER(24)
@@ -48,7 +47,7 @@ class V5Header:
         return ALG_ID
 
     def pack(self) -> bytes:
-        if not isinstance(self.kdf_params_json, (bytes, bytearray)):
+        if not isinstance(self.kdf_params_json, bytes | bytearray):
             raise TypeError("kdf_params_json must be bytes")
         if len(self.ss_header) != SS_HEADER_BYTES:
             raise ValueError("Bad SecretStream header size")
@@ -67,7 +66,7 @@ class V5Header:
         )
 
 
-def parse_header(buf: bytes) -> Tuple[V5Header, int]:
+def parse_header(buf: bytes) -> tuple[V5Header, int]:
     """
     Parse a v5 header from the given bytes buffer (must start at MAGIC).
     Returns (V5Header, offset_after_header).
@@ -114,7 +113,7 @@ def parse_header(buf: bytes) -> Tuple[V5Header, int]:
     return hdr, off
 
 
-def read_v5_header(path_or_file) -> Tuple[V5Header, bytes, int]:
+def read_v5_header(path_or_file) -> tuple[V5Header, bytes, int]:
     """
     Reads the v5 header from a file path or file-like object opened in binary mode.
     Returns (V5Header, header_bytes, offset_after_header).

@@ -1,15 +1,16 @@
 from __future__ import annotations
-import io
-import secrets
 
+import hashlib
+import io
 import os
+import secrets
+import tempfile
 import time
 import zipfile
-import tempfile
-import hashlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterator
+
+from .log_utils import log_best_effort
 
 try:
     from .factories import decrypt, encrypt  # password: str
@@ -46,6 +47,7 @@ def fsync_dir(path: Path) -> None:
         # Ignore: not all platforms or FS support this
         pass
 
+
 def pack_enc_zip(
     inputs: Iterable[str | Path],
     out_zip: str | Path,
@@ -75,10 +77,12 @@ def pack_enc_zip(
         encrypt(str(out_zip_p), password, algo=algo, out_path=str(cg2_path))
     else:
         from .cg2_ops import encrypt_to_cg2
+
         pwd = password.encode("utf-8") if isinstance(password, str) else password
         human = normalize_algo(algo)
         encrypt_to_cg2(str(out_zip_p), str(cg2_path), pwd, alg=human)
     return str(cg2_path)
+
 
 def _safe_extract(zf: zipfile.ZipFile, out_dir: Path) -> None:
     """Safely extract a ZIP, preventing zip-slip and skipping symlinks.
@@ -103,7 +107,7 @@ def _safe_extract(zf: zipfile.ZipFile, out_dir: Path) -> None:
         if is_symlink:
             continue
 
-        dest = (out_dir / name)
+        dest = out_dir / name
         dest_abs = dest.resolve()
         if not is_within_dir(base, dest_abs):
             raise ValueError(f"Tentativa de Zip Slip: {m.filename!r}")
@@ -117,6 +121,7 @@ def _safe_extract(zf: zipfile.ZipFile, out_dir: Path) -> None:
                 if not chunk:
                     break
                 dst.write(chunk)
+
 
 def unpack_enc_zip(
     cg2_path: str | Path,
@@ -133,6 +138,7 @@ def unpack_enc_zip(
         decrypt(str(cg2_p), password, out_path=str(tmp_zip))
     else:
         from .cg2_ops import decrypt_from_cg2
+
         pwd = password.encode("utf-8")
         decrypt_from_cg2(str(cg2_p), str(tmp_zip), pwd)
 
@@ -140,9 +146,10 @@ def unpack_enc_zip(
         _safe_extract(zf, out_dir_p)
     try:
         tmp_zip.unlink(missing_ok=True)
-    except Exception:
-        pass  # nosec B110 (fallback silencioso/Windows locks)
+    except Exception as exc:
+        log_best_effort(__name__, exc)  # nosec B110 (fallback silencioso/Windows locks)
     return str(out_dir_p)
+
 
 def write_atomic_secure(path: str | Path, data: bytes) -> None:
     """
@@ -157,8 +164,8 @@ def write_atomic_secure(path: str | Path, data: bytes) -> None:
             f.write(data)
             try:
                 os.fsync(f.fileno())
-            except Exception:
-                pass  # Best-effort on platforms without fsync
+            except Exception as exc:
+                log_best_effort(__name__, exc)  # Best-effort on platforms without fsync
         os.replace(tmp_path, p)
         # Ensure directory entry is durable
         fsync_dir(p.parent)
@@ -166,8 +173,9 @@ def write_atomic_secure(path: str | Path, data: bytes) -> None:
         try:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-        except Exception:
-            pass  # Windows locks, ignore
+        except Exception as exc:
+            log_best_effort(__name__, exc)  # Windows locks, ignore
+
 
 # ---------------------------------------------------------------------------
 # Optional helpers for chunked IO and hashing
@@ -186,6 +194,7 @@ def file_blake2s(path: Path, chunk_size: int = 1024 * 1024) -> str:
         for ch in read_chunks(f, chunk_size):
             h.update(ch)
     return h.hexdigest()
+
 
 # ---------------- extra GUI helpers (v2.1.5d) ----------------
 def archive_folder(folder: str | Path) -> str:
@@ -208,6 +217,7 @@ def archive_folder(folder: str | Path) -> str:
                 continue
     return str(out_zip)
 
+
 def secure_delete(path: str | Path, passes: int = 1, *, chunk_size: int = 1024 * 1024) -> None:
     """
     Best-effort secure delete of a file:
@@ -222,6 +232,7 @@ def secure_delete(path: str | Path, passes: int = 1, *, chunk_size: int = 1024 *
     if p.is_dir():
         # for directories, best-effort recursive delete
         import shutil
+
         shutil.rmtree(p, ignore_errors=True)
         return
 
@@ -242,20 +253,20 @@ def secure_delete(path: str | Path, passes: int = 1, *, chunk_size: int = 1024 *
                 f.flush()
                 try:
                     os.fsync(f.fileno())
-                except Exception:
-                    pass  # nosec B110 (fallback silencioso/Windows locks)
+                except Exception as exc:
+                    log_best_effort(__name__, exc)  # nosec B110 (fallback silencioso/Windows locks)
             try:
                 f.seek(0)
                 f.truncate(0)
-            except Exception:
-                pass  # nosec B110 (fallback silencioso/Windows locks)
+            except Exception as exc:
+                log_best_effort(__name__, exc)  # nosec B110 (fallback silencioso/Windows locks)
     except Exception:
         # If we couldn't open to overwrite (locked), try to rename as a fallback to break links.
         try:
             p.rename(p.with_suffix(p.suffix + ".to_delete"))
             p = p.with_suffix(p.suffix + ".to_delete")
-        except Exception:
-            pass  # nosec B110 (fallback silencioso/Windows locks)
+        except Exception as exc:
+            log_best_effort(__name__, exc)  # nosec B110 (fallback silencioso/Windows locks)
 
     # Final unlink
     try:
@@ -265,6 +276,8 @@ def secure_delete(path: str | Path, passes: int = 1, *, chunk_size: int = 1024 *
         try:
             marker = p.with_suffix(p.suffix + ".deleted")
             marker.write_text("pending-delete", encoding="utf-8")
-        except Exception:
-            pass  # nosec B110 (fallback silencioso/Windows locks)
+        except Exception as exc:
+            log_best_effort(__name__, exc)  # nosec B110 (fallback silencioso/Windows locks)
+
+
 # -------------------------------------------------------------

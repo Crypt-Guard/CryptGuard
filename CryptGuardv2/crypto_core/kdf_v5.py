@@ -1,14 +1,16 @@
 from __future__ import annotations
+
 # kdf_v5.py — compat shim
 import warnings
+
 from .kdf import (
-    derive_key_v5,
-    derive_key_from_params_json,
-    KDFProfile,
     INTERACTIVE,
     SENSITIVE,
+    KDFProfile,
     derive_key_and_params,
     derive_key_from_params,
+    derive_key_from_params_json,
+    derive_key_v5,
 )
 
 warnings.warn(

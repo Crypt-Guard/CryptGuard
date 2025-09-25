@@ -11,17 +11,18 @@ Public API: `logger`, `LOG_PATH`
 """
 
 from __future__ import annotations
-# -*- coding: utf-8 -*-
 
+import contextlib
+import inspect
 import logging
 import os
 import sys
 import traceback
-import inspect
-from typing import Any, Dict, Optional
 from logging import Logger
 from logging.handlers import RotatingFileHandler
+from typing import Any
 
+from .log_utils import log_best_effort
 from .paths import LOG_PATH
 from .redactlog import NoLocalsFilter, RedactingFormatter
 
@@ -31,10 +32,8 @@ class SecureRotatingFileHandler(RotatingFileHandler):
 
     def _set_secure_mode(self, path: str) -> None:
         if os.name != "nt":
-            try:
+            with contextlib.suppress(OSError):
                 os.chmod(path, 0o600)
-            except Exception:
-                pass
 
     def _open(self):
         """Override para aplicar permissões seguras após criar arquivo."""
@@ -52,10 +51,16 @@ class SecureRotatingFileHandler(RotatingFileHandler):
             if os.path.exists(candidate):
                 self._set_secure_mode(candidate)
 
+
 _DEF_LEVEL = os.getenv("CRYPTGUARD_LOG_LEVEL", "INFO").upper()
 _LEVEL = getattr(logging, _DEF_LEVEL, logging.INFO)
 
-_DEBUG_LOCALS_FLAG = str(os.getenv("CRYPTGUARD_DEBUG_LOCALS", "0")).lower() in {"1", "true", "yes", "on"}
+_DEBUG_LOCALS_FLAG = str(os.getenv("CRYPTGUARD_DEBUG_LOCALS", "0")).lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _SENSITIVE_KEYS = {
     "password",
     "passwd",
@@ -103,9 +108,11 @@ def _truncate_value(value: Any, limit: int = _MAX_CONTEXT_VALUE_LEN) -> str:
     return rendered
 
 
-def _sanitize_mapping(mapping: Dict[str, Any], *, allowed_keys: Optional[set[str]] | None = None) -> Dict[str, str]:
+def _sanitize_mapping(
+    mapping: dict[str, Any], *, allowed_keys: set[str] | None | None = None
+) -> dict[str, str]:
     """Collapse a mapping into a log-safe dictionary."""
-    safe: Dict[str, str] = {}
+    safe: dict[str, str] = {}
     items = getattr(mapping, "items", None)
     if callable(items):
         iterator = items()
@@ -129,7 +136,7 @@ def _sanitize_mapping(mapping: Dict[str, Any], *, allowed_keys: Optional[set[str
     return safe
 
 
-def _ensure_iterable_mapping(obj: Any) -> Dict[str, Any]:
+def _ensure_iterable_mapping(obj: Any) -> dict[str, Any]:
     if obj is None:
         return {}
     if isinstance(obj, dict):
@@ -141,14 +148,12 @@ def _ensure_iterable_mapping(obj: Any) -> Dict[str, Any]:
 
 
 def _ensure_log_dir() -> None:
-    try:
+    with contextlib.suppress(OSError):
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         if os.name != "nt":
             os.chmod(LOG_PATH.parent, 0o700)
             if LOG_PATH.exists():
                 os.chmod(LOG_PATH, 0o600)
-    except Exception:
-        pass
 
 
 def _build_logger() -> Logger:
@@ -189,7 +194,7 @@ def _build_logger() -> Logger:
     lg.addFilter(NoLocalsFilter())
 
     try:
-        from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+        from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 
         def _qt_handler(msg_type: int, context, message: str) -> None:  # type: ignore[override]
             if msg_type == QtMsgType.QtFatalMsg:
@@ -202,8 +207,8 @@ def _build_logger() -> Logger:
                 lg.info("QtInfo: %s", message)
 
         qInstallMessageHandler(_qt_handler)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Qt message handler setup failed: %s", exc)
 
     lg.info("=== CryptGuard iniciado ===")
     return lg
@@ -213,16 +218,20 @@ class DetailedLogger:
     """
     Enhanced logger wrapper that provides detailed error context and stack traces.
     """
-    
+
     def __init__(self, base_logger: Logger):
         self._logger = base_logger
-    
+
     def __getattr__(self, name):
         """Delegate standard logging methods to the base logger"""
         return getattr(self._logger, name)
-    
-    def exception_with_context(self, msg: str, exc: Optional[Exception] = None,
-                             extra_context: Optional[Dict[str, Any]] = None) -> None:
+
+    def exception_with_context(
+        self,
+        msg: str,
+        exc: Exception | None = None,
+        extra_context: dict[str, Any] | None = None,
+    ) -> None:
         """
         Log an exception with contextual data while respecting secrecy constraints.
 
@@ -242,7 +251,9 @@ class DetailedLogger:
                     f"Caller: {caller_info.filename}:{caller_info.lineno} in {caller_info.function}"
                 )
                 if _should_include_locals(self._logger):
-                    safe_locals = _sanitize_mapping(caller_frame.f_locals, allowed_keys=_ALLOWED_LOCAL_KEYS)
+                    safe_locals = _sanitize_mapping(
+                        caller_frame.f_locals, allowed_keys=_ALLOWED_LOCAL_KEYS
+                    )
                     if safe_locals:
                         context_info.append(f"Local variables: {safe_locals}")
                 elif _DEBUG_LOCALS_FLAG:
@@ -274,24 +285,29 @@ class DetailedLogger:
     def error_with_stack(self, msg: str, stack_limit: int = 10) -> None:
         """
         Log an error with current stack trace.
-        
+
         Args:
             msg: Error message
             stack_limit: Maximum number of stack frames to include
         """
         try:
             stack_trace = traceback.format_stack(limit=stack_limit)
-            stack_info = ''.join(stack_trace[-stack_limit:])  # Get last N frames
+            stack_info = "".join(stack_trace[-stack_limit:])  # Get last N frames
             full_msg = f"{msg} | Stack trace:\n{stack_info}"
             self._logger.error(full_msg)
         except Exception as log_exc:
             self._logger.error(f"{msg} | Stack trace failed: {log_exc}")
-    
-    def vault_error(self, operation: str, vault_type: str, error: Exception, 
-                   context: Optional[Dict[str, Any]] = None) -> None:
+
+    def vault_error(
+        self,
+        operation: str,
+        vault_type: str,
+        error: Exception,
+        context: dict[str, Any] | None = None,
+    ) -> None:
         """
         Specialized logging for vault-related errors.
-        
+
         Args:
             operation: Operation being performed (create, open, save, etc.)
             vault_type: Type of vault (KeyGuard, CryptGuard)
@@ -301,36 +317,40 @@ class DetailedLogger:
         try:
             error_type = type(error).__name__
             error_msg = str(error)
-            
+
             # Build context information
             context_parts = [
                 f"Operation: {operation}",
                 f"Vault type: {vault_type}",
                 f"Error type: {error_type}",
-                f"Error message: {error_msg}"
+                f"Error message: {error_msg}",
             ]
-            
+
             if context:
                 # Redact sensitive information
                 safe_context = {}
                 for k, v in context.items():
-                    if any(sensitive in k.lower() for sensitive in ['password', 'key', 'secret', 'token']):
+                    if any(
+                        sensitive in k.lower()
+                        for sensitive in ["password", "key", "secret", "token"]
+                    ):
                         safe_context[k] = "[REDACTED]"
                     else:
                         safe_context[k] = str(v)[:200] + "..." if len(str(v)) > 200 else str(v)
                 context_parts.append(f"Context: {safe_context}")
-            
+
             # Get stack trace for the error
-            if hasattr(error, '__traceback__') and error.__traceback__:
+            if hasattr(error, "__traceback__") and error.__traceback__:
                 tb_lines = traceback.format_tb(error.__traceback__)
                 context_parts.append(f"Stack trace:\n{''.join(tb_lines)}")
-            
+
             full_message = f"Vault {operation} failed | " + " | ".join(context_parts)
             self._logger.error(full_message)
-            
+
         except Exception as log_exc:
             # Fallback logging
             self._logger.error(f"Vault {operation} failed: {error} | Logging error: {log_exc}")
+
 
 # Create the enhanced logger instance
 _base_logger = _build_logger()
@@ -340,4 +360,4 @@ logger: DetailedLogger = DetailedLogger(_base_logger)
 SecureFormatter = RedactingFormatter
 
 # Re-export for convenience
-__all__ = ["logger", "LOG_PATH", "SecureFormatter"]
+__all__ = ["logger", "LOG_PATH", "SecureFormatter", "log_best_effort"]
