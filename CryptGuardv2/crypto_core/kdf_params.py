@@ -7,15 +7,16 @@ sub-chaves nomeadas usando HKDF-SHA256.
 
 import os
 import time
+import warnings
 
 from argon2 import low_level
 from argon2.low_level import Type as ArgonType
 
-# Parâmetros de fallback (conservadores)
+# Parâmetros de fallback (conservadores) - ALINHADO COM RFC 9106 (Second Recommended)
 FALLBACK_ARGON2_PARAMS = {
-    "time_cost": 3,  # 3 iterações
-    "memory_cost": 65536,  # 64 MiB
-    "parallelism": 4,  # 4 threads
+    "time_cost": 3,          # t=3
+    "memory_cost": 65536,    # 64 MiB
+    "parallelism": 4,        # p=4
 }
 
 # Limites de segurança
@@ -130,24 +131,38 @@ def derive_key_and_params(
     if key_label not in KEY_LABELS:
         raise ValueError(f"Key label desconhecido: {key_label}")
 
-    # Usa parâmetros calibrados se não fornecidos
+    # Usa parâmetros calibrados se não fornecidos ou se forem inseguros
     if argon_params is None:
-        argon_params = get_cached_params()
+        final_params = get_cached_params()
+    else:
+        # Valida os parâmetros fornecidos contra o piso de segurança
+        if (
+            argon_params.get("time_cost", 0) < FALLBACK_ARGON2_PARAMS["time_cost"]
+            or argon_params.get("memory_cost", 0) < FALLBACK_ARGON2_PARAMS["memory_cost"]
+        ):
+            warnings.warn(
+                "Os parâmetros Argon2id fornecidos são inseguros e foram ignorados. "
+                "Usando os padrões de segurança do sistema.",
+                UserWarning,
+            )
+            final_params = FALLBACK_ARGON2_PARAMS.copy()
+        else:
+            final_params = argon_params
 
     # Deriva chave mestre com Argon2id
     master_key = low_level.hash_secret_raw(
         secret=password,
         salt=salt,
-        time_cost=argon_params["time_cost"],
-        memory_cost=argon_params["memory_cost"],
-        parallelism=argon_params["parallelism"],
+        time_cost=final_params["time_cost"],
+        memory_cost=final_params["memory_cost"],
+        parallelism=final_params["parallelism"],
         hash_len=32,
         type=ArgonType.ID,
     )
 
     # Para compatibilidade com CG2, vaults usam a master_key diretamente sem HKDF
     if key_label == "vault_key":
-        return master_key, argon_params
+        return master_key, final_params
 
     # Deriva sub-chave específica com HKDF para outros usos
     hkdf_salt = hkdf_salt or os.urandom(16)
@@ -160,7 +175,7 @@ def derive_key_and_params(
 
     derived_key = hkdf.derive(master_key)
 
-    return derived_key, argon_params
+    return derived_key, final_params
 
 
 def generate_salt() -> bytes:
