@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 KeyGuard Vault Qt dialog.
 Features: search, drag-and-drop reordering, details (Show/Hide), copy,
 delete, and mass update.
 """
+
 from __future__ import annotations
 
-from typing import Optional
 import base64
-from PySide6.QtCore import Qt, QTimer
+
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QWidget, QMessageBox,
     QAbstractItemView,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .password_generator import PasswordGenerator
@@ -22,7 +30,7 @@ from .vault_backend import VaultManager
 
 
 class KeyGuardVaultDialog(QDialog):
-    def __init__(self, parent: Optional[QWidget], mgr: VaultManager):
+    def __init__(self, parent: QWidget | None, mgr: VaultManager):
         super().__init__(parent)
         self.setWindowTitle("KeyGuard Vault")
         self.setModal(True)
@@ -31,9 +39,11 @@ class KeyGuardVaultDialog(QDialog):
 
         root = QVBoxLayout(self)
         # search
-        top = QHBoxLayout(); root.addLayout(top)
+        top = QHBoxLayout()
+        root.addLayout(top)
         top.addWidget(QLabel("Search:"))
-        self.search = QLineEdit(); self.search.setPlaceholderText("Type to filter...")
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Type to filter...")
         self.search.textChanged.connect(self._refill)
         top.addWidget(self.search, 1)
 
@@ -55,13 +65,20 @@ class KeyGuardVaultDialog(QDialog):
         root.addWidget(self.table, 1)
 
         # buttons
-        bar = QHBoxLayout(); root.addLayout(bar)
+        bar = QHBoxLayout()
+        root.addLayout(bar)
         self.btn_details = QPushButton("Details")
         self.btn_copy = QPushButton("Copy")
         self.btn_delete = QPushButton("Delete")
         self.btn_update_all = QPushButton("Update all")
         self.btn_close = QPushButton("Close")
-        for b in (self.btn_details, self.btn_copy, self.btn_delete, self.btn_update_all, self.btn_close):
+        for b in (
+            self.btn_details,
+            self.btn_copy,
+            self.btn_delete,
+            self.btn_update_all,
+            self.btn_close,
+        ):
             bar.addWidget(b)
         bar.addStretch()
         self.btn_close.clicked.connect(self.accept)
@@ -81,6 +98,7 @@ class KeyGuardVaultDialog(QDialog):
             return b.decode("utf-8", errors="replace")
         except Exception:
             return ""
+
     def _refill(self) -> None:
         query = (self.search.text() or "").lower()
         items = []
@@ -95,7 +113,7 @@ class KeyGuardVaultDialog(QDialog):
             self.table.setItem(r, 1, QTableWidgetItem("********"))
 
     # ---- actions -------------------------------------------------------
-    def _selected_name(self) -> Optional[str]:
+    def _selected_name(self) -> str | None:
         r = self.table.currentRow()
         if r < 0:
             return None
@@ -110,25 +128,35 @@ class KeyGuardVaultDialog(QDialog):
             return
         pwd = self._entry_password(entry)
 
-        d = QDialog(self); d.setWindowTitle(name)
+        d = QDialog(self)
+        d.setWindowTitle(name)
         lay = QVBoxLayout(d)
         lay.addWidget(QLabel(f"Application: {name}"))
-        pwd_row = QHBoxLayout(); lay.addLayout(pwd_row)
-        le = QLineEdit("*" * min(16, len(pwd))); le.setReadOnly(True)
+        pwd_row = QHBoxLayout()
+        lay.addLayout(pwd_row)
+        le = QLineEdit("*" * min(16, len(pwd)))
+        le.setReadOnly(True)
         btn = QPushButton("Show")
+
         def toggle():
             if btn.text() == "Show":
-                le.setText(pwd); btn.setText("Hide")
+                le.setText(pwd)
+                btn.setText("Hide")
             else:
-                le.setText("*" * min(16, len(pwd))); btn.setText("Show")
+                le.setText("*" * min(16, len(pwd)))
+                btn.setText("Show")
+
         btn.clicked.connect(toggle)
-        pwd_row.addWidget(le, 1); pwd_row.addWidget(btn)
+        pwd_row.addWidget(le, 1)
+        pwd_row.addWidget(btn)
 
         def copy_and_close():
             QGuiApplication.clipboard().setText(pwd)
             QTimer.singleShot(15000, lambda: QGuiApplication.clipboard().clear())
             d.accept()
-        copy = QPushButton("Copy"); copy.clicked.connect(copy_and_close)
+
+        copy = QPushButton("Copy")
+        copy.clicked.connect(copy_and_close)
         lay.addWidget(copy)
         d.exec()
 
@@ -165,11 +193,14 @@ class KeyGuardVaultDialog(QDialog):
         if not self.mgr.entries:
             QMessageBox.information(self, "Info", "Vault is empty.")
             return
-        ok1 = QMessageBox.question(
-            self,
-            "Confirm",
-            "New passwords will be generated for all entries.\nThis cannot be undone.\nContinue?",
-        ) == QMessageBox.Yes
+        ok1 = (
+            QMessageBox.question(
+                self,
+                "Confirm",
+                "New passwords will be generated for all entries.\nThis cannot be undone.\nContinue?",
+            )
+            == QMessageBox.Yes
+        )
         if not ok1:
             return
         try:

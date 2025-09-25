@@ -8,23 +8,31 @@ This package provides:
 - qt_pane: PySide6 (Qt Widgets) sidebar and attach helper
 """
 
-from .password_generator import PasswordGenerator, CHARSETS, OPT_TO_KEY, MIN_TOTAL_BITS
+from .password_generator import CHARSETS, MIN_TOTAL_BITS, OPT_TO_KEY, PasswordGenerator
 
 # Tk variant (optional)
 try:
-    from .keyguard_widget import KeyGuardPane            # noqa: F401
-    from .integrate import attach_keyguard_sidebar       # noqa: F401
+    from .integrate import attach_keyguard_sidebar
+    from .keyguard_widget import KeyGuardPane
 except Exception:  # not required for Qt builds
-    KeyGuardPane = None                                  # type: ignore
-    attach_keyguard_sidebar = None                       # type: ignore
+    KeyGuardPane = None  # type: ignore
+    attach_keyguard_sidebar = None  # type: ignore
 
 # Qt variant
 from .qt_pane import KeyGuardPaneQt, attach_keyguard_qt
-from .vault_backend import VaultManager, VaultEntry
+from .vault_backend import VaultEntry, VaultManager
 from .vault_qt import KeyGuardVaultDialog
 
 __all__ = [
-    "PasswordGenerator", "CHARSETS", "OPT_TO_KEY", "MIN_TOTAL_BITS",
-    "KeyGuardPane", "attach_keyguard_sidebar", "KeyGuardPaneQt", "attach_keyguard_qt",
-    "VaultManager", "VaultEntry", "KeyGuardVaultDialog"
+    "PasswordGenerator",
+    "CHARSETS",
+    "OPT_TO_KEY",
+    "MIN_TOTAL_BITS",
+    "KeyGuardPane",
+    "attach_keyguard_sidebar",
+    "KeyGuardPaneQt",
+    "attach_keyguard_qt",
+    "VaultManager",
+    "VaultEntry",
+    "KeyGuardVaultDialog",
 ]

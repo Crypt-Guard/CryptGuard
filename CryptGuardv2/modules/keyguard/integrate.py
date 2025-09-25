@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from crypto_core.log_utils import log_best_effort
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -9,13 +13,13 @@ Usage (inside your main window class after building the main layout):
     from modules.keyguard.integrate import attach_keyguard_sidebar
     attach_keyguard_sidebar(self)
 """
-from __future__ import annotations
+
 
 import tkinter as tk
-from typing import Optional
 
 try:
     import ttkbootstrap as tb  # type: ignore
+
     TTK = tb
 except Exception:
     from tkinter import ttk as TTK  # type: ignore
@@ -25,12 +29,12 @@ from .keyguard_widget import KeyGuardPane
 
 def _resolve_root(app) -> tk.Misc:
     # heuristics to get a Tk root/container from different app styles
-    if isinstance(app, tk.Tk) or isinstance(app, tk.Toplevel) or isinstance(app, tk.Frame):
+    if isinstance(app, tk.Tk | tk.Toplevel | tk.Frame):
         return app
     for attr in ("root", "master", "frame", "container", "main"):
         if hasattr(app, attr):
             obj = getattr(app, attr)
-            if isinstance(obj, (tk.Tk, tk.Toplevel, tk.Frame)):
+            if isinstance(obj, tk.Tk | tk.Toplevel | tk.Frame):
                 return obj
     # fallback
     return app
@@ -54,7 +58,7 @@ def _find_right_container(root: tk.Misc) -> tk.Misc:
     return container
 
 
-def attach_keyguard_sidebar(app, vault: Optional[object] = None, width: int = 340):
+def attach_keyguard_sidebar(app, vault: object | None = None, width: int = 340):
     """
     Create and attach the KeyGuard sidebar to the main window.
     - `app`: the main application instance (or a Tk container)
@@ -77,9 +81,8 @@ def attach_keyguard_sidebar(app, vault: Optional[object] = None, width: int = 34
 
     # Optionally expose a reference on the app to allow later interactions
     try:
-        setattr(app, "keyguard_pane", pane)
-    except Exception:
-        pass
+        app.keyguard_pane = pane
+    except Exception as exc:
+        log_best_effort(__name__, exc)
 
     return pane
-

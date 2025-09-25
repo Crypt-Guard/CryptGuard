@@ -1,25 +1,28 @@
+from __future__ import annotations
+
+from crypto_core.log_utils import log_best_effort
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Tk/ttk sidebar widget that implements the KeyGuard password generator UI.
 Designed to be embedded to the right side of the CryptGuard main window.
 """
-from __future__ import annotations
 
+
+import string
 import tkinter as tk
 from tkinter import ttk
-import string
 
 try:
     import ttkbootstrap as tb  # optional (for dark themes like 'superhero')
+
     TTK = tb
 except Exception:  # fallback to std ttk
     tb = None
     TTK = ttk  # type: ignore
 
-from .password_generator import (
-    PasswordGenerator, CHARSETS, OPT_TO_KEY, MIN_TOTAL_BITS
-)
+from .password_generator import CHARSETS, MIN_TOTAL_BITS, OPT_TO_KEY, PasswordGenerator
 
 
 class KeyGuardPane(TTK.Frame):
@@ -78,8 +81,13 @@ class KeyGuardPane(TTK.Frame):
         out.columnconfigure(0, weight=1)
 
         self._pwd_var = tk.StringVar()
-        self._pwd_entry = TTK.Entry(out, textvariable=self._pwd_var, font=("Consolas", 12),
-                                    state="readonly", show="•")
+        self._pwd_entry = TTK.Entry(
+            out,
+            textvariable=self._pwd_var,
+            font=("Consolas", 12),
+            state="readonly",
+            show="•",
+        )
         self._pwd_entry.grid(row=0, column=0, sticky="we", ipadx=6, ipady=4)
 
         self._eye = TTK.Checkbutton(out, text="👁", command=self._toggle_eye, style="Toolbutton")
@@ -106,10 +114,10 @@ class KeyGuardPane(TTK.Frame):
         self._vault_btn.pack(side="left", padx=6)
 
         # Keyboard shortcuts
-        self.bind_all('<Control-g>', lambda *_: self._on_generate())
-        self.bind_all('<Control-c>', lambda *_: self._on_copy())
-        self.bind_all('<Control-l>', lambda *_: self._on_clear())
-        self.bind_all('<Escape>',    lambda *_: self._maybe_close())
+        self.bind_all("<Control-g>", lambda *_: self._on_generate())
+        self.bind_all("<Control-c>", lambda *_: self._on_copy())
+        self.bind_all("<Control-l>", lambda *_: self._on_clear())
+        self.bind_all("<Escape>", lambda *_: self._maybe_close())
 
         # Logic core
         self._gen = PasswordGenerator()
@@ -141,16 +149,17 @@ class KeyGuardPane(TTK.Frame):
 
         bits = PasswordGenerator.calculate_entropy(pwd, charset)
         self._pwd_var.set(pwd)
-        self._bar['value'] = min(bits, 120.0)
+        self._bar["value"] = min(bits, 120.0)
 
         msg = f"Entropia: {bits:.1f} bits"
         classes = {
-            'lower': any(c in string.ascii_lowercase for c in pwd),
-            'upper': any(c in string.ascii_uppercase for c in pwd),
-            'digit': any(c in string.digits for c in pwd),
-            'symbol': any(c in string.punctuation for c in pwd),
+            "lower": any(c in string.ascii_lowercase for c in pwd),
+            "upper": any(c in string.ascii_uppercase for c in pwd),
+            "digit": any(c in string.digits for c in pwd),
+            "symbol": any(c in string.punctuation for c in pwd),
         }
-        if bits < MIN_TOTAL_BITS or sum(classes.values()) < 2:
+        MIN_CLASS_TYPES = 2
+        if bits < MIN_TOTAL_BITS or sum(classes.values()) < MIN_CLASS_TYPES:
             msg += " ⚠️"
         self._lbl.config(text=msg)
 
@@ -161,8 +170,8 @@ class KeyGuardPane(TTK.Frame):
             except Exception:
                 try:
                     self._vault.update_entry(name, password=pwd)  # type: ignore
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log_best_effort(__name__, exc)
 
     def _on_copy(self, *_):
         s = self._pwd_var.get()
@@ -170,21 +179,21 @@ class KeyGuardPane(TTK.Frame):
             return
         try:
             self.clipboard_clear()
-        except Exception:
-            pass
+        except Exception as exc:
+            log_best_effort(__name__, exc)
         self.clipboard_append(s)
         self.after(self._clipboard_timeout_ms, self._safe_clip_clear)
 
     def _safe_clip_clear(self):
         try:
             self.clipboard_clear()
-        except Exception:
-            pass
+        except Exception as exc:
+            log_best_effort(__name__, exc)
 
     def _on_clear(self, *_):
         self._safe_clip_clear()
         self._pwd_var.set("")
-        self._bar['value'] = 0
+        self._bar["value"] = 0
         self._lbl.config(text="Entropia / força")
         if self._pwd_entry.cget("show") == "":
             self._pwd_entry.config(show="•")
@@ -194,8 +203,8 @@ class KeyGuardPane(TTK.Frame):
         try:
             if hasattr(self._vault, "open_ui"):
                 self._vault.open_ui()
-        except Exception:
-            pass
+        except Exception as exc:
+            log_best_effort(__name__, exc)
 
     def _maybe_close(self):
         # this is a sidebar; ESC shouldn't destroy parent window
@@ -205,4 +214,3 @@ class KeyGuardPane(TTK.Frame):
 def create_sidebar(parent, vault=None, width=340):
     pane = KeyGuardPane(parent, vault=vault, width=width)
     return pane
-
