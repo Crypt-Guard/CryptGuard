@@ -38,7 +38,6 @@ def _validate_argon2id_rfc9106(t: int, m_kib: int, p: int, salt_len: int) -> Non
 
     lib_version = getattr(_argon, "ARGON2_VERSION", None)
     if lib_version != ARGON2_VERSION:
-        # Usamos UserWarning em vez de RuntimeError para não quebrar a aplicação se a lib for atualizada.
         import warnings
         warnings.warn(f"Versão da biblioteca Argon2 (0x{lib_version:x}) não é a recomendada (0x{ARGON2_VERSION:x})", UserWarning)
 

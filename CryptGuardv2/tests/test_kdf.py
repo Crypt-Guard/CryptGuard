@@ -55,11 +55,6 @@ def test_validate_argon2_params_rfc9106_coverage():
     with pytest.raises(ValueError, match="parallelism .* fora da faixa"):
         _validate_argon2id_rfc9106(t=1, m_kib=65536, p=10, salt_len=16)
 
-    # A regra m_kib >= 8 * p é implicitamente coberta por MIN_M_KIB,
-    # uma vez que MIN_M_KIB (16384) > 8 * MAX_P (32).
-    # Portanto, um teste específico para essa regra não é necessário
-    # com as constantes atuais.
-
     # Teste de versão da lib
     try:
         _validate_argon2id_rfc9106(t=1, m_kib=65536, p=1, salt_len=16)
