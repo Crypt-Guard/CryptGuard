@@ -1,106 +1,58 @@
-# 🛡️ Security Policy — CryptGuard v2 (v3.0)
+# 🛡️ Security Policy - CryptGuard v3.x
 
-CryptGuard v2 is a file-encryption tool and CG2 file format focused on practical security.  
-This document explains what the software **does and does not** protect, safe-use guidance, and how to report vulnerabilities.
-
----
-
-## Scope & Threat Model
-
-**In scope**
-
-- **Confidentiality & integrity of file contents** at rest and in transit (when using the CG2 container).
-- **Tamper detection** (including end-truncation) and **parameter authenticity** (algorithm/KDF/nonce/expiry).
-- **Type privacy** of the original file (extension is not exposed in the header).
-- **Optional size obfuscation** via per-chunk padding.
-
-**Out of scope**
-
-- Compromised hosts (malware, keyloggers, root/admin, live memory scraping).
-- Side-channel and traffic analysis beyond optional padding.
-- OS and filesystem metadata (file names, directory paths, timestamps) **outside** the CG2 container.
-- Password strength chosen by the user.
-- Long-term cryptanalytic breakthroughs against the underlying primitives.
+CryptGuard entrega criptografia forte e autenticada para arquivos, Vaults e containers, mas nenhum software oferece seguranca absoluta. Este documento explica o que e protegido, o que nao e, e como relatar vulnerabilidades.
 
 ---
 
-## What CryptGuard Guarantees (v2.7.0)
-
-- **Chunked AEAD**: AES-256-GCM, ChaCha20-Poly1305, and XChaCha20-Poly1305 with **unique nonces per chunk** (random base + counter).
-- **Authenticated header (AAD)**: The CG2 header (algorithm, Argon2id parameters, nonce/IV, expiration) is **authenticated**. Any tampering/downgrade fails decryption.
-- **Anti-truncation for AEAD**: A signed footer **`END0`** authenticates `(chunk_count, total_plain_len)`. Cutting exactly on a chunk boundary is detected.
-- **CTR integrity**: AES-256-CTR uses **encrypt-then-MAC** (HMAC-SHA256) with keys split via HKDF, plus **`SIZ0`** for the real plaintext size.
-- **Encrypted original extension**: The footer includes **`NAM0`** (the original extension **encrypted**). Decrypt restores the true extension even if the `.cg2` file was renamed.
-- **Optional size padding**: Per-chunk zero-padding (Off / 4 KiB / 16 KiB / 64 KiB / 1 MiB). On decrypt, the output is **truncated** to the true size stored in the footer.
-- **KDF**: **Argon2id** with a fresh random **salt** per file; parameters are authenticated. Profiles: *Fast / Balanced / Hard*.
-
-> Memory-locking (mlock/VirtualLock) is **best-effort**; it reduces, but cannot eliminate, paging of sensitive data.
-
----
-
-## Known Limitations & Safe-Use Guidance
-
-1. **Choose strong passphrases**  
-   Use 12+ characters or 4–6 random words. Password strength dominates real-world security.
-
-2. **KDF profiles**  
-   Start with **Balanced**. Increase to **Hard** if your system has sufficient RAM/CPU. Avoid reducing Argon2id parameters unless you know the trade-offs.
-
-3. **Pad size** (privacy vs. size)  
-   - Default: **4 KiB** (good balance).  
-   - 16–64 KiB: stronger size obfuscation, larger `.cg2`.  
-   - Off: smallest `.cg2`, reveals exact size.  
-   Decrypt always restores the exact original size.
-
-4. **Algorithms**  
-   Prefer **AES-256-GCM** or **XChaCha20-Poly1305** when available. AES-CTR is supported **with HMAC** and `SIZ0` for integrity.
-
-5. **Expiration**  
-   Optional header field; it is authenticated and enforced prior to opening plaintext.
-
-6. **Environment hygiene**  
-   Keep OS and dependencies up to date. Avoid decrypting secrets on untrusted machines.
-
-7. **Backups**  
-   Keep redundant backups of `.cg2` files. Any corruption or tampering will make verification fail by design.
-
-8. **Windows/UAC**  
-   Do **not** run the GUI as Administrator if you need drag-and-drop (Windows blocks DnD into elevated apps).
+## 🎯 Scope & threat model
+- **In scope (v3.x)**  
+  - Formato v5 `.cg2`, Vault do CryptGuard, Vault do KeyGuard e containers `.vault`.  
+  - Atacantes offline sem a senha.  
+  - Detecao de corrupcao/adulteracao em cabecalho, quadros de streaming ou lixo anexado (falha de autenticacao limpa).
+- **Out of scope**  
+  - Maquinas comprometidas (malware, keylogger), hipervisor/OS malicioso, acesso root/admin.  
+  - Snapshots/backups do SO que capturam plaintext.  
+  - Vazamentos causados por ferramentas externas.  
+  - Nao existem hidden volumes ou decoy volumes na linha 3.x (qualquer referencia a isso e legado 1.x).
 
 ---
 
-## Version Compatibility
-
-- **CG2 v4 (current)**: authenticated header, `NAM0` encrypted extension, AEAD footer `END0`, CTR `SIZ0` + HMAC `TAG0`.  
-- **CG2 v3 (legacy)**: readable; decryption still works (legacy extension, if present, is honored).  
-- Very old CTR artifacts without HMAC are **not supported**; re-encrypt to the current format to gain full integrity protection.
-
-Supported lines:
-
-| Version | Status     | Notes                           |
-|--------:|------------|---------------------------------|
-| 2.3.x   | Supported  | Current feature & security fixes |
-| < 2.7   | Not supported | Please upgrade to ≥ 2.7.0     |
+## 🔐 Cryptographic design & guarantees
+- XChaCha20-Poly1305 via libsodium SecretStream; TAG_FINAL autentica fechamento e metadados.  
+- Argon2id com perfis **Interactive** (responsivo) e **Sensitive** (custo maior por tentativa); parametros calibrados por maquina e autenticados no cabecalho.  
+- Metadados privados (nome, extensao, tamanho real) cifrados/autenticados; Vault e containers armazenam apenas payload cifrado.  
+- Formatos:  
+  - `.cg2` (v5) sempre escrito com SecretStream; leitor aceita formatos anteriores.  
+  - Vault: guarda apenas arquivos cifrados, cabecalho vinculado como AAD.  
+  - `.vault`: containers com Argon2id + SecretStream em TLV (`cg_file`, `kg_secret`, `manifest`).  
 
 ---
 
-## Reporting a Vulnerability (Responsible Disclosure)
-
-- **Please do not open public issues** for security problems.
-- Contact: **cryptguard737@gmail.com**  
-  Include:
-  - A clear description of the issue and its impact
-  - Steps to reproduce, PoC inputs/outputs, and logs (if available)
-  - Your OS, CryptGuard version (e.g., 2.7.0), and environment details
+## 🧱 Hardening & best-effort protections
+- **Memoria e segredos:** secure memory via libsodium, `SecureBytes`, comparacoes em tempo constante (`secretcmp`), limpeza explicita de buffers, mascaramento de logs/variaveis (`secretenv`, obfuscadores).  
+- **Processo:** tentativas de bloquear core dump/ptrace em POSIX e ajustes de DEP/error-mode em Windows; falhas geram `SecurityWarning` mas nao interrompem o app.  
+- **Higiene de arquivos:** `cli/hygiene_cli.py` e `crypto_core/file_hygiene.py` para limpar temporarios e remocao segura best effort. Em SSD/NVMe, wear-leveling pode manter blocos antigos; combine com criptografia de disco completa para garantias fortes.  
 
 ---
 
-## Legal & Export Compliance
-
-- See **README** for export notes. Source code is publicly available encryption; binary releases are generally treated as **ECCN 5D002 / License Exception ENC**.  
-- Users are responsible for complying with all applicable laws and sanctions.  
-- CryptGuard is provided **“AS IS”**, without warranties of any kind (see `LICENSE.txt`).
+## ✅ Safe usage guidelines
+1) Use senhas fortes e unicas; prefira o perfil Sensitive quando possivel.  
+2) Mantenha backups separados de `.cg2`, Vault do CryptGuard, Vault do KeyGuard e containers `.vault`; perda de arquivo + senha = perda permanente.  
+3) Verifique integridade com **Verify** antes de abrir arquivos suspeitos; nao tente reparar dados autenticados corrompidos.  
+4) Proteja o ambiente: SO e libs atualizados, evite rodar em maquinas nao confiaveis, nao execute como admin sem necessidade.  
+5) Compartilhe containers com a senha enviada por canal separado e seguro.  
 
 ---
 
-Stay safe, use strong passphrases, and keep your system up to date.
+## 🚨 Reporting a vulnerability
+- Nao abra issue publica para assuntos de seguranca.  
+- Contato preferencial: `cryptguard737@gmail.com`.  
+- Inclua descricao clara, impacto esperado, passos de reproducao e (quando possivel) provas de conceito ou vetores de teste.  
+- O time reconhece o recebimento, investiga e publica correcoes; avisos publicos sao feitos quando apropriado (releases/notas de seguranca).  
+
+---
+
+## ⚖️ Legal & export
+- Software fornecido "no estado em que se encontra", sem garantias expressas ou implicitas.  
+- O usuario e responsavel por escolher senhas, perfis de KDF e politica de backup adequados ao seu modelo de ameaca.  
+- O uso deve obedecer leis locais de criptografia/exportacao (binarios podem se enquadrar em ECCN 5D002 / License Exception ENC).  
