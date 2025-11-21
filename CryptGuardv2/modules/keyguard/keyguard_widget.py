@@ -1,15 +1,5 @@
 from __future__ import annotations
 
-from crypto_core.log_utils import log_best_effort
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Tk/ttk sidebar widget that implements the KeyGuard password generator UI.
-Designed to be embedded to the right side of the CryptGuard main window.
-"""
-
-
 import string
 import tkinter as tk
 from tkinter import ttk
@@ -22,7 +12,16 @@ except Exception:  # fallback to std ttk
     tb = None
     TTK = ttk  # type: ignore
 
+from crypto_core.log_utils import log_best_effort
+
 from .password_generator import CHARSETS, MIN_TOTAL_BITS, OPT_TO_KEY, PasswordGenerator
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Tk/ttk sidebar widget that implements the KeyGuard password generator UI.
+Designed to be embedded to the right side of the CryptGuard main window.
+"""
 
 
 class KeyGuardPane(TTK.Frame):

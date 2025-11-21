@@ -29,8 +29,20 @@ from pathlib import Path
 
 from nacl import pwhash, secret, utils
 
+# --- logging bootstrap (ALWAYS define a logger symbol) ---
+import logging
+
+try:
+    from crypto_core.logger import logger as _core_logger  # type: ignore[attr-defined]
+except Exception:
+    _core_logger = None
+
+# Use the core logger directly to preserve DetailedLogger methods
+logger = _core_logger if _core_logger is not None else logging.getLogger("cryptguard.keyguard.vault")
+# --- end bootstrap ---
+
 from crypto_core.log_utils import log_best_effort
-from crypto_core.logger import logger
+from cg_platform.fs_paths import app_data_dir
 
 # Secure memory / obfuscator
 try:
@@ -284,6 +296,11 @@ class VaultManager:
                 len(self.entries),
             )
 
+        except FileNotFoundError as e:
+            # FileNotFoundError é esperado quando o vault ainda não existe
+            # (não é um erro, é comportamento normal - a UI pergunta se quer criar)
+            logger.debug("KeyGuard Vault não encontrado em %s (primeira execução ou vault não criado)", self.path)
+            raise
         except Exception as e:
             # conta falha para rate-limit em casos de senha/decifração
             try:
@@ -365,13 +382,10 @@ class VaultManager:
 
     # ---------- internos ----------
     def _default_path(self) -> str:
-        # Padronizado para ficar junto com o CryptGuard vault
-        base = os.environ.get("LOCALAPPDATA") or os.path.join(
-            os.path.expanduser("~"), "AppData", "Local"
-        )
-        vault_dir = os.path.join(base, "CryptGuard")
+        # Padronizado para ficar junto com o CryptGuard vault (pastas portáveis)
+        vault_dir = app_data_dir()
         os.makedirs(vault_dir, exist_ok=True)
-        return os.path.join(vault_dir, "vault-keyguard")
+        return str(vault_dir / "vault-keyguard")
 
     def _data(self) -> dict:
         return {
@@ -428,6 +442,7 @@ class VaultManager:
     # Cifra com salt embutido no arquivo (salt|header|ciphertext)
     # P0.2: Adicionado versionamento dos parâmetros pwhash
     def _encrypt_json_inline_salt(self, obj: dict, password: bytes):
+
         # P1.2: Usar SENSITIVE por padrão (em vez de MODERATE)
         opslimit = pwhash.argon2id.OPSLIMIT_SENSITIVE
         memlimit = pwhash.argon2id.MEMLIMIT_SENSITIVE

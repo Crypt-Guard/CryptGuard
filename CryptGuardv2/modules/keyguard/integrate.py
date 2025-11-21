@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+import tkinter as tk
+
+try:
+    import ttkbootstrap as tb  # type: ignore
+
+    TTK = tb
+except Exception:
+    from tkinter import ttk as TTK  # type: ignore
+
 from crypto_core.log_utils import log_best_effort
+
+from .keyguard_widget import KeyGuardPane
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -13,18 +24,6 @@ Usage (inside your main window class after building the main layout):
     from modules.keyguard.integrate import attach_keyguard_sidebar
     attach_keyguard_sidebar(self)
 """
-
-
-import tkinter as tk
-
-try:
-    import ttkbootstrap as tb  # type: ignore
-
-    TTK = tb
-except Exception:
-    from tkinter import ttk as TTK  # type: ignore
-
-from .keyguard_widget import KeyGuardPane
 
 
 def _resolve_root(app) -> tk.Misc:

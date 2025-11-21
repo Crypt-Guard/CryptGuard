@@ -1,26 +1,5 @@
 from __future__ import annotations
 
-from crypto_core.log_utils import log_best_effort
-from crypto_core.logger import logger
-from crypto_core.rate_limit import (
-    check_allowed,
-    get_lockout_remaining,
-    register_failure,
-    register_success,
-)
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Qt (PySide6) KeyGuard sidebar for CryptGuard.
-This pane mirrors the layout shown in the screenshot:
- - Right-aligned module containing a password generator
- - Length, charset options, save toggle and 'Application' field
- - Readonly password box with eye toggle, entropy bar, and actions
- - Buttons: Generate, Copy, Clear, Use in module, Vault
-"""
-
-
 from collections.abc import Callable
 from pathlib import Path
 
@@ -46,9 +25,31 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import qtawesome as qta
+
+from crypto_core.log_utils import log_best_effort
+from crypto_core.logger import logger
+from crypto_core.rate_limit import (
+    check_allowed,
+    get_lockout_remaining,
+    register_failure,
+    register_success,
+)
+
 from .password_generator import CHARSETS, MIN_TOTAL_BITS, PasswordGenerator
 from .vault_backend import VaultManager, WrongPassword
 from .vault_qt import KeyGuardVaultDialog
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Qt (PySide6) KeyGuard sidebar for CryptGuard.
+This pane mirrors the layout shown in the screenshot:
+ - Right-aligned module containing a password generator
+ - Length, charset options, save toggle and 'Application' field
+ - Readonly password box with eye toggle, entropy bar, and actions
+ - Buttons: Generate, Copy, Clear, Use in module, Vault
+"""
 
 
 class KeyGuardPaneQt(QFrame):
@@ -63,9 +64,132 @@ class KeyGuardPaneQt(QFrame):
         self.setObjectName("keyguard_pane")
         self.setFixedWidth(width)
         self.setMinimumHeight(400)  # Ensure minimum height
-        self.setStyleSheet(
-            "QFrame#keyguard_pane{background:#212733;border-left:1px solid #1b202a;}"
-        )
+        self.setStyleSheet("""
+            /* Fundo de vidro para o painel */
+            QFrame#keyguard_pane {
+                background: rgba(33, 39, 51, 0.85);
+                border-left: 1px solid rgba(27, 32, 42, 0.9);
+            }
+
+            QFrame#keyguard_pane * {
+                font-family: inherit;
+                background-color: transparent;
+            }
+
+            /* Botões do tipo pílula (radio buttons) */
+            QFrame#keyguard_pane QRadioButton {
+                color: #cfd8dc;
+                padding: 6px 10px;
+                margin: 2px;
+                background-color: rgba(42, 51, 66, 0.7);
+                border: 1px solid #3a4356;
+                border-radius: 8px;
+                spacing: 5px;
+                min-width: 60px;
+            }
+            QFrame#keyguard_pane QRadioButton:hover {
+                background-color: #3a4356;
+                border-color: #4a5568;
+            }
+            QFrame#keyguard_pane QRadioButton:checked {
+                background-color: #536dfe;
+                color: #ffffff;
+                border-color: #536dfe;
+            }
+
+            /* Botão Show/Hide */
+            QToolButton {
+                background: rgba(42, 51, 66, 0.8);
+                color: #cfd8dc;
+                border: 1px solid #3a4356;
+                border-radius: 6px;
+                padding: 6px 10px;
+            }
+            QToolButton:hover {
+                background: #3a4356;
+                border-color: #4a5568;
+            }
+            QToolButton:checked {
+                background: #536dfe;
+                border-color: #536dfe;
+                color: #ffffff;
+            }
+
+            QGroupBox {
+                background: rgba(43, 51, 69, 0.7);
+                border: 1px solid #2b3345;
+                border-radius: 4px;
+                margin-top: 10px;
+                padding-top: 10px;
+                color: #cfd8dc;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px 0 5px;
+                color: #cfd8dc;
+                background: transparent;
+            }
+
+            QLabel {
+                color: #cfd8dc;
+                background: transparent;
+            }
+
+            QProgressBar {
+                background: rgba(31, 38, 51, 0.8);
+                border: 1px solid #3a4356;
+                border-radius: 4px;
+                height: 14px;
+                text-align: center;
+                color: #cfd8dc;
+            }
+            QProgressBar::chunk {
+                background: #3a4356;
+                border-radius: 3px;
+            }
+
+            QLineEdit, QSpinBox {
+                background: rgba(45, 51, 67, 0.8);
+                color: #e0e6ee;
+                border: 1px solid #3b4258;
+                border-radius: 6px;
+                padding: 6px;
+            }
+            QLineEdit:hover, QSpinBox:hover {
+                border-color: #4a5568;
+            }
+            QLineEdit:focus, QSpinBox:focus {
+                border-color: #536dfe;
+            }
+
+            /* Botões do gerador */
+            QFrame#keyguard_pane QPushButton#genPrimary {
+                background-color: #536dfe;
+                color: #ffffff;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-weight: bold;
+            }
+            QFrame#keyguard_pane QPushButton#genPrimary:hover {
+                background-color: #6b7fff;
+            }
+
+            QFrame#keyguard_pane QPushButton#genSecondary {
+                background-color: transparent;
+                color: #cfd8dc;
+                border: 1px solid #4a5568;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-weight: normal;
+            }
+            QFrame#keyguard_pane QPushButton#genSecondary:hover {
+                background-color: #3a4356;
+                border-color: #5a6578;
+            }
+
+        """)
         self.setVisible(True)
         self.raise_()  # Bring to front
 
@@ -79,29 +203,25 @@ class KeyGuardPaneQt(QFrame):
         root.setSpacing(10)
 
         title = QLabel("KeyGuard - Generator")
-        title.setStyleSheet("color:#cfd8dc;font-weight:600;")
+        title.setStyleSheet("font-weight:600;")  # Apenas manter o negrito
         # Avoid forcing a specific font to prevent glyph/encoding issues
         root.addWidget(title)
 
         # â”€â”€ Parameters box ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
         box = QGroupBox()
-        box.setStyleSheet(
-            "QGroupBox{border:1px solid #2b3345;margin-top:8px;} QGroupBox:title{left:8px; padding:0 4px;}"
-        )
+        # Styles are now defined in the parent widget
         box.setTitle("Parameters")
         g = QGridLayout(box)
         g.setContentsMargins(8, 8, 8, 8)
         g.setHorizontalSpacing(8)
-        g.setVerticalSpacing(6)
+        g.setVerticalSpacing(12)
 
         # length
         g.addWidget(QLabel("Length:"), 0, 0, Qt.AlignRight)
         self.sp_length = QSpinBox()
         self.sp_length.setRange(4, 128)
         self.sp_length.setValue(16)
-        self.sp_length.setStyleSheet(
-            "QSpinBox{background:#2d3343;color:#e0e6ee;border:1px solid #3b4258;border-radius:4px;padding:4px;}"
-        )
+        # Styles are now defined in the parent widget
         g.addWidget(self.sp_length, 0, 1)
 
         # charset
@@ -110,8 +230,7 @@ class KeyGuardPaneQt(QFrame):
         self.rb_aln = QRadioButton("Letters+Numbers")
         self.rb_full = QRadioButton("All")
         self.rb_full.setChecked(True)
-        for rb in (self.rb_num, self.rb_let, self.rb_aln, self.rb_full):
-            rb.setStyleSheet("QRadioButton{color:#cfd8dc;}")
+        # Styles are now defined in the parent widget
         g.addWidget(self.rb_num, 1, 0)
         g.addWidget(self.rb_let, 1, 1)
         g.addWidget(self.rb_aln, 2, 0)
@@ -119,15 +238,13 @@ class KeyGuardPaneQt(QFrame):
 
         # save toggle + application
         self.chk_save = QCheckBox("Save in vault")
-        self.chk_save.setStyleSheet("QCheckBox{color:#cfd8dc;}")
+        # Styles are now defined in the parent widget
         g.addWidget(self.chk_save, 3, 0, 1, 2)
 
         g.addWidget(QLabel("Application:"), 4, 0, Qt.AlignRight)
         self.ed_app = QLineEdit()
         self.ed_app.setPlaceholderText("App / Site name")
-        self.ed_app.setStyleSheet(
-            "QLineEdit{background:#2d3343;color:#e0e6ee;border:1px solid #3b4258;border-radius:4px;padding:6px;}"
-        )
+        # Styles are now defined in the parent widget
         g.addWidget(self.ed_app, 4, 1)
 
         root.addWidget(box)
@@ -142,18 +259,14 @@ class KeyGuardPaneQt(QFrame):
         self.ed_pwd.setReadOnly(True)
         self.ed_pwd.setEchoMode(QLineEdit.Password)
         self.ed_pwd.setFont(QFont("Consolas", 11))
-        self.ed_pwd.setStyleSheet(
-            "QLineEdit{background:#2d3343;color:#e0e6ee;border:1px solid #3b4258;border-radius:4px;padding:8px;}"
-        )
+        # Styles are now defined in the parent widget
         hl.addWidget(self.ed_pwd, 1)
         self.btn_eye = QToolButton()
         self.btn_eye.setCheckable(True)
         # Avoid emoji to prevent mojibake on some systems
         self.btn_eye.setText("Show")
         self.btn_eye.clicked.connect(self._toggle_eye)
-        self.btn_eye.setStyleSheet(
-            "QToolButton{background:#37474F;color:#ECEFF1;border:1px solid #455A64;border-radius:6px;padding:6px;}"
-        )
+        # Styles are now defined in the parent widget
         hl.addWidget(self.btn_eye)
         out_lay.addLayout(hl)
 
@@ -177,11 +290,21 @@ class KeyGuardPaneQt(QFrame):
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
-        self.btn_gen = QPushButton("Generate")
-        self.btn_cpy = QPushButton("Copy")
-        self.btn_clr = QPushButton("Clear")
-        self.btn_entropy = QPushButton("Copy to path")
-        self.btn_vault = QPushButton("Vault")
+        self.btn_gen = QPushButton(" Generate")
+        self.btn_cpy = QPushButton(" Copy")
+        self.btn_clr = QPushButton(" Clear")
+        self.btn_entropy = QPushButton(" Copy to path")
+        self.btn_vault = QPushButton(" Vault")
+
+        self.btn_gen.setIcon(qta.icon("fa5s.sync-alt", color="#ffffff"))
+        self.btn_cpy.setIcon(qta.icon("fa5s.copy", color="#cfd8dc"))
+        self.btn_clr.setIcon(qta.icon("fa5s.trash-alt", color="#cfd8dc"))
+        self.btn_entropy.setIcon(qta.icon("fa5s.arrow-right", color="#cfd8dc"))
+        self.btn_vault.setIcon(qta.icon("fa5s.database", color="#cfd8dc"))
+
+        self.btn_gen.setObjectName("genPrimary")
+        for _btn in (self.btn_cpy, self.btn_clr, self.btn_entropy, self.btn_vault):
+            _btn.setObjectName("genSecondary")
         for b in (
             self.btn_gen,
             self.btn_cpy,
@@ -192,6 +315,7 @@ class KeyGuardPaneQt(QFrame):
             b.setCursor(Qt.PointingHandCursor)
             b.setMinimumHeight(40)
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            # herda estilos globais (sem overrides locais)
         # Linha 1 (3 botões)
         grid.addWidget(self.btn_gen, 0, 0)
         grid.addWidget(self.btn_cpy, 0, 1)
@@ -202,19 +326,22 @@ class KeyGuardPaneQt(QFrame):
         root.addLayout(grid)
         root.addStretch()
 
-        # Behaviors
+        # Behaviors (sem efeitos locais; feedback visual vem do tema global)
         self.btn_gen.clicked.connect(self._on_generate_and_maybe_save)
         self.btn_cpy.clicked.connect(self._on_copy)
         self.btn_clr.clicked.connect(self._on_clear)
         self.btn_entropy.clicked.connect(self._on_use_in_main)
         self.btn_vault.clicked.connect(self._open_keyguard_vault)
+        
 
         # clipboard auto-clear
         self._clip_timer = QTimer(self)
         self._clip_timer.setSingleShot(True)
         self._clip_timer.timeout.connect(self._clear_clipboard)
 
-    # â”€â”€ helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€â”€
+    # (sem helpers de efeito visual; usamos o pressed do tema global)
+
+    # â"€â"€ helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â"€â"€
     def _toggle_eye(self):
         # Check if ed_pwd is still valid before using it
         if not hasattr(self, "ed_pwd") or self.ed_pwd is None:
@@ -417,6 +544,7 @@ class KeyGuardPaneQt(QFrame):
                 f"Muitas tentativas incorretas. Tente novamente em {int(remaining)} segundos.",
             )
             return None
+
 
         mpw, ok = QInputDialog.getText(
             self, "KeyGuard Vault", "Master password:", echo=QLineEdit.Password
