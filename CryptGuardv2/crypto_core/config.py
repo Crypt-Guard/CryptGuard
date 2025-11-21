@@ -126,6 +126,17 @@ DEFAULT_EXPIRATION_DAYS = 0
 MAX_CLOCK_SKEW_SEC = 31_536_000  # 365d
 
 
+# ───── higiene de arquivos (secure delete e temporários) ─────────────────
+HYGIENE_TEMP_DIR = BASE_DIR / "temp"
+HYGIENE_DEFAULT_SETTINGS = {
+    "delete_original_after_encrypt": False,  # Opt-in para segurança
+    "clean_temp_on_startup": True,
+    "clean_temp_on_shutdown": True,
+    "secure_delete_passes": 3,  # 1-7 passes
+}
+
+
+
 # ───── proteção extra de processo (opcional) ───────────────────────────
 def enable_process_hardening():
     """Habilita proteções de processo quando possível (best effort)."""
@@ -151,4 +162,6 @@ __all__ = [
     "CALIB_PATH",
     "WRITE_FORMAT",
     "SETTINGS_PATH",
+    "HYGIENE_TEMP_DIR",
+    "HYGIENE_DEFAULT_SETTINGS",
 ]

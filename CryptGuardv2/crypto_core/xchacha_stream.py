@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
@@ -11,12 +12,14 @@ import time
 import warnings
 from hashlib import blake2b
 from pathlib import Path
+from typing import Any, Dict
 
 from crypto_core.logger import logger
 
 from .fileformat_v5 import (
     SS_HEADER_BYTES,
     V5Header,
+    VERSION,
     canonical_json_bytes,
     read_v5_header,
 )
@@ -124,6 +127,42 @@ def _get_rate_limit_hooks():
 
 
 _log = logging.getLogger(__name__)
+
+
+def _decode_kdf_json(kdf_json: bytes) -> Dict[str, Any]:
+    try:
+        return json.loads(kdf_json.decode("utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive, upstream should ensure canonical JSON
+        raise ValueError("KDF JSON inválido") from exc
+
+
+def _aad_bytes_from_obj(obj: Dict[str, Any]) -> bytes:
+    return canonical_json_bytes(obj)
+
+
+def _ensure_bytes_hex(hex_value: str, expected_len: int | None = None) -> bytes:
+    data = bytes.fromhex(hex_value)
+    if expected_len is not None and len(data) != expected_len:
+        raise ValueError("Comprimento inesperado de dado em hex")
+    return data
+
+
+def _binding_payload_bytes(kdf_obj: Dict[str, Any]) -> bytes:
+    payload = dict(kdf_obj)
+    payload.pop("binding_mac_hex", None)
+    return canonical_json_bytes(payload)
+
+
+def extract_aad_bytes_from_params(kdf_params_json: bytes) -> bytes | None:
+    """
+    Helper exposto para testes/integrações: retorna os bytes do AAD canônico
+    descrito no KDF JSON (se disponível), caso contrário `None`.
+    """
+    obj = _decode_kdf_json(kdf_params_json)
+    ctx = obj.get("aad_context")
+    if isinstance(ctx, dict):
+        return _aad_bytes_from_obj(ctx)
+    return None
 
 
 @contextlib.contextmanager
@@ -295,38 +334,85 @@ class XChaChaStream:
         in_p = Path(in_path)
         out_p = Path(out_path) if out_path else Path(in_path).with_suffix(".cg2")
 
-        key32, kdf_json = derive_key_v5(pwd, kdf_profile)
-        # keyfile como 2Ao fator (se fornecido)
-        if keyfile:
-            key32 = _mix_with_keyfile(key32, keyfile)
-        # Embed expiration in the KDF JSON header (AAD) when provided
-        if expires_at:
+        key32, base_kdf_json = derive_key_v5(pwd, kdf_profile)
+        kdf_obj = _decode_kdf_json(base_kdf_json)
+        if expires_at is not None:
             try:
-                obj = json.loads(kdf_json.decode("utf-8"))
-                obj["exp"] = int(expires_at)
-                kdf_json = canonical_json_bytes(obj)
+                kdf_obj["exp"] = int(expires_at)
             except Exception as exc:
                 logger.debug("Suppressed exception in xchacha_stream: %s", exc)
-        # Sinaliza que keyfile foi usado (exigido para abrir)
         if keyfile:
-            try:
-                obj = json.loads(kdf_json.decode("utf-8"))
-                obj["kfile"] = True
-                kdf_json = canonical_json_bytes(obj)
-            except Exception as exc:
-                logger.debug("Suppressed exception in xchacha_stream: %s", exc)
+            kdf_obj["kfile"] = True
 
-        # SecretStream initialization compatibility layer
+        master_key = key32
+        if keyfile:
+            master_key = _mix_with_keyfile(master_key, keyfile)
+
+        hkdf_salt = os.urandom(32)
+        hkdf_salt_hex = hkdf_salt.hex()
+        created_at = int(time.time())
+        logical_name = Path(in_p.name).name
+        aad_logical_path = "__hidden__" if hide_filename else logical_name
+        aad_context: Dict[str, Any] = {
+            "version": VERSION,
+            "purpose": "file",
+            "alg": "xchacha20-poly1305+secretstream",
+            "kdf": {
+                "algo": kdf_obj.get("algo", "argon2id"),
+                "t": int(kdf_obj.get("t", 0)),
+                "m": int(kdf_obj.get("m", 0)),
+                "p": int(kdf_obj.get("p", 0)),
+                "profile": kdf_obj.get("profile", "INTERACTIVE"),
+            },
+            "hkdf_salt_hex": hkdf_salt_hex,
+            "logical_path": aad_logical_path,
+            "created_at": created_at,
+        }
+        if expires_at is not None:
+            aad_context["expires_at"] = int(expires_at)
+        if keyfile:
+            aad_context["keyfile"] = True
+        if hide_filename:
+            aad_context["hide_filename"] = True
+
+        kdf_obj["hkdf_salt_hex"] = hkdf_salt_hex
+        kdf_obj["aad_context"] = aad_context
+
+        aad_bytes = _aad_bytes_from_obj(aad_context)
+        enc_key = derive_subkey(master_key, "CryptGuard/v5 enc", context=aad_context, salt=hkdf_salt)
+        bind_key = derive_subkey(master_key, "CryptGuard/v5 bind", context=aad_context, salt=hkdf_salt)
+
         if _secret_bytes is not None:
-            with _secret_bytes(initial=key32) as _kmv:
-                state, ss_header = ss_init_push_compat(bytes(_kmv))
+            with _secret_bytes(initial=enc_key) as _ekmv:
+                state, ss_header = ss_init_push_compat(bytes(_ekmv))
         else:
-            _key_ba = bytearray(key32)
-            state, ss_header = ss_init_push_compat(bytes(_key_ba))
-            for i in range(len(_key_ba)):
-                _key_ba[i] = 0
+            _enc_ba = bytearray(enc_key)
+            state, ss_header = ss_init_push_compat(bytes(_enc_ba))
+            for i in range(len(_enc_ba)):
+                _enc_ba[i] = 0
 
-        header = V5Header(kdf_params_json=kdf_json, ss_header=ss_header).pack()
+        binding_payload = _binding_payload_bytes(kdf_obj)
+        binding_mac = hmac.new(
+            bind_key, binding_payload + ss_header, hashlib.sha256
+        ).digest()
+        kdf_obj["binding_mac_hex"] = binding_mac.hex()
+
+        # Zeroizar chaves derivadas (melhor esforço) após uso direto
+        try:
+            _b = bytearray(enc_key)
+            for i in range(len(_b)):
+                _b[i] = 0
+        except Exception:
+            pass
+        try:
+            _b = bytearray(bind_key)
+            for i in range(len(_b)):
+                _b[i] = 0
+        except Exception:
+            pass
+
+        kdf_json = canonical_json_bytes(kdf_obj)
+        header_bytes = V5Header(kdf_params_json=kdf_json, ss_header=ss_header).pack()
         with _redact_meta_logs(hide_filename):
             _log.debug("v5 header ready; kdf_json_len=%d hide=%s", len(kdf_json), hide_filename)
 
@@ -336,7 +422,7 @@ class XChaChaStream:
 
         out_p.parent.mkdir(parents=True, exist_ok=True)
         with in_p.open("rb") as fin, out_p.open("wb") as fout:
-            fout.write(header)
+            fout.write(header_bytes)
 
             # Stream chunks with optional padding applied to the final chunk only
             read_size = 1024 * 1024  # 1 MiB read window
@@ -346,7 +432,7 @@ class XChaChaStream:
                 total_pt += len(chunk)
                 policy = padding if not next_chunk else "off"
                 chunk_to_encrypt = _pad_chunk(chunk, policy)
-                ct = ss_push(state, chunk_to_encrypt, header, TAG_MESSAGE)
+                ct = ss_push(state, chunk_to_encrypt, aad_bytes, TAG_MESSAGE)
                 fout.write(_u32(len(ct)))
                 fout.write(ct)
                 chunks += 1
@@ -362,8 +448,9 @@ class XChaChaStream:
             }
             if not hide_filename:
                 meta["orig_name"] = Path(in_p.name).name
+            meta["created_at"] = created_at
             meta_blob = canonical_json_bytes(meta)
-            final_ct = ss_push(state, meta_blob, header, TAG_FINAL)
+            final_ct = ss_push(state, meta_blob, aad_bytes, TAG_FINAL)
             fout.write(_u32(len(final_ct)))
             fout.write(final_ct)
 
@@ -399,9 +486,9 @@ class XChaChaStream:
         try:
             # Parse header and bind as AAD
             hdr, header_bytes, off = read_v5_header(src)
+            kdf_obj = _decode_kdf_json(hdr.kdf_params_json)
             # Fail-fast: expiration stored in the header (KDF_JSON) before streaming starts
             try:
-                kdf_obj = json.loads(hdr.kdf_params_json.decode("utf-8"))
                 exp = kdf_obj.get("exp")
                 if exp is not None and time.time() > int(exp):
                     if AUTO_CORRUPT_ON_EXPIRE:
@@ -410,21 +497,64 @@ class XChaChaStream:
                 # Fail clearly if the file requires a keyfile and none was provided
                 if kdf_obj.get("kfile") is True and not keyfile:
                     raise KeyfileRequiredError("File requires keyfile")
+            except (ExpiredCG2Error, KeyfileRequiredError):
+                # Propagate intentional authorization errors; they are part of the contract
+                raise
             except Exception as exc:
                 logger.debug("Suppressed exception in xchacha_stream: %s", exc)
             key32 = derive_key_from_params_json(pwd, hdr.kdf_params_json)
+            master_key = key32
             if keyfile:
-                key32 = _mix_with_keyfile(key32, keyfile)
+                master_key = _mix_with_keyfile(master_key, keyfile)
+
+            aad_bytes = header_bytes  # compat fallback (v5 legado)
+            hkdf_salt_hex = kdf_obj.get("hkdf_salt_hex")
+            aad_ctx_raw = kdf_obj.get("aad_context")
+            aad_context = aad_ctx_raw if isinstance(aad_ctx_raw, dict) else None
+            binding_mac_hex = kdf_obj.get("binding_mac_hex")
+            use_secretstream_hkdf = (aad_context is not None) and isinstance(hkdf_salt_hex, str)
+
+            enc_key = master_key
+            bind_key = None
+            if use_secretstream_hkdf:
+                hkdf_salt = _ensure_bytes_hex(str(hkdf_salt_hex), 32)
+                aad_bytes = _aad_bytes_from_obj(aad_context)
+                enc_key = derive_subkey(master_key, "CryptGuard/v5 enc", context=aad_context, salt=hkdf_salt)
+                bind_key = derive_subkey(master_key, "CryptGuard/v5 bind", context=aad_context, salt=hkdf_salt)
+                if not isinstance(binding_mac_hex, str):
+                    raise ValueError("Falha na autenticacao")
+                binding_payload = _binding_payload_bytes(kdf_obj)
+                expected_mac = hmac.new(
+                    bind_key, binding_payload + hdr.ss_header, hashlib.sha256
+                ).digest()
+                stored_mac = _ensure_bytes_hex(binding_mac_hex)
+                if not hmac.compare_digest(expected_mac, stored_mac):
+                    raise ValueError("Falha na autenticacao")
 
             # Inicializacao compativel do lado de leitura
             if _secret_bytes is not None:
-                with _secret_bytes(initial=key32) as _kmv:
+                with _secret_bytes(initial=enc_key) as _kmv:
                     state = ss_init_pull_compat(hdr.ss_header, bytes(_kmv))
+                try:
+                    _enc_scrub = bytearray(enc_key)
+                    for i in range(len(_enc_scrub)):
+                        _enc_scrub[i] = 0
+                except Exception:
+                    pass
             else:
-                _key_ba = bytearray(key32)
+                _key_ba = bytearray(enc_key)
                 state = ss_init_pull_compat(hdr.ss_header, bytes(_key_ba))
                 for i in range(len(_key_ba)):
                     _key_ba[i] = 0
+
+            if bind_key is not None:
+                try:
+                    _bind_scrub = bytearray(bind_key)
+                    for i in range(len(_bind_scrub)):
+                        _bind_scrub[i] = 0
+                except Exception:
+                    pass
+            master_key = b""
 
             # Read framed messages: [len|4][ciphertext] ... until TAG_FINAL
             from .securetemp import SecureTempFile
@@ -450,9 +580,9 @@ class XChaChaStream:
                             raise ValueError("Falha na autenticacao")
                         c = _read_exact(f, clen)
                         try:
-                            ret = ss_pull(state, c, header_bytes)
-                        except Exception:
-                            raise ValueError("Falha na autenticacao")
+                            ret = ss_pull(state, c, aad_bytes)
+                        except Exception as err:
+                            raise ValueError("Falha na autenticacao") from err
                         ad = b""
                         if isinstance(ret, tuple) and len(ret) == 2:
                             pt, tag = ret
@@ -577,4 +707,5 @@ class XChaChaStream:
 
 __all__ = [
     "XChaChaStream",
+    "extract_aad_bytes_from_params",
 ]

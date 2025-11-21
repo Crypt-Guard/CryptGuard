@@ -1,11 +1,5 @@
 from __future__ import annotations
 
-from .log_utils import log_best_effort
-
-# key_obfuscator.py
-"""Key obfuscation using XOR masking with automatic rotation."""
-
-
 import contextlib
 import secrets
 import threading
@@ -13,7 +7,12 @@ import time
 import warnings
 from typing import Final
 
+from .log_utils import log_best_effort
 from .secure_bytes import SecureBytes, secure_memzero
+
+# key_obfuscator.py
+"""Key obfuscation using XOR masking with automatic rotation."""
+
 
 # Constants
 DEFAULT_ROTATION_INTERVAL: Final[float] = 60.0  # seconds
@@ -178,11 +177,13 @@ class KeyObfuscator:
     def _rotate_and_reschedule(self) -> None:
         """Timer callback to rotate mask and reschedule."""
         with self._lock:
-            if not self._cleared:
-                self.obfuscate()
-                # Reset timer for next rotation
+            try:
+                if not self._cleared:
+                    self.obfuscate()
+            finally:
+                # Reset timer for next rotation regardless of obfuscate outcome
                 self._rotation_timer = None
-                if self._auto_rotate:
+                if self._auto_rotate and not self._cleared:
                     self._start_rotation_timer()
 
     @property

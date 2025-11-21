@@ -20,17 +20,20 @@ from .security_warning import warn
 def _enable_dep():
     try:
         k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-        # 0x1 = PROCESS_DEP_ENABLE  (docs: SetProcessDEPPolicy)
-        ok = k32.SetProcessDEPPolicy(1)
+        # Em processos 64-bit, DEP é gerenciado pelo sistema/hardware; SetProcessDEPPolicy não é suportado.
+        if ctypes.sizeof(ctypes.c_void_p) == 8:
+            return
+
+        PROCESS_DEP_ENABLE = 0x00000001
+        PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION = 0x00000002
+        flags = PROCESS_DEP_ENABLE | PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION
+
+        ok = k32.SetProcessDEPPolicy(flags)
         if not ok:
-            warn("DEP não habilitado (política do sistema pode impedir).", sev="LOW")
-        else:
-            try:
-                getpol = k32.GetSystemDEPPolicy
-                state = getpol()
-                warn(f"DEP enabled; system policy={state}", sev="LOW")
-            except Exception as exc:
-                log_best_effort(__name__, exc)
+            err = ctypes.GetLastError()
+            # 50 (ERROR_NOT_SUPPORTED) ou 5 (ACCESS_DENIED): política global ou sistema manda; não é necessariamente inseguro.
+            if err not in (5, 50):
+                warn(f"Falha ao configurar DEP (erro {err}).", sev="LOW")
     except Exception as e:
         warn(f"Falha ao ativar DEP: {e}", sev="LOW")
 

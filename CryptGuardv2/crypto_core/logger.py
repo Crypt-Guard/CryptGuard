@@ -224,6 +224,8 @@ class DetailedLogger:
 
     def __getattr__(self, name):
         """Delegate standard logging methods to the base logger"""
+        if name == "logger":
+            return self._logger
         return getattr(self._logger, name)
 
     def exception_with_context(
@@ -356,8 +358,8 @@ class DetailedLogger:
 _base_logger = _build_logger()
 logger: DetailedLogger = DetailedLogger(_base_logger)
 
-# Retrocompatibilidade: antigos chamavam SecureFormatter a partir deste módulo
+# Permitir acessos diretos (compatibilidade com código que importava atributos do logger base)
 SecureFormatter = RedactingFormatter
+logger.RedactingFormatter = RedactingFormatter
 
-# Re-export for convenience
-__all__ = ["logger", "LOG_PATH", "SecureFormatter", "log_best_effort"]
+__all__ = ["logger", "LOG_PATH", "SecureFormatter", "RedactingFormatter", "log_best_effort"]

@@ -1,8 +1,6 @@
+"""Secure byte buffer utilities."""
+
 from __future__ import annotations
-
-# secure_bytes.py
-"""Secure bytes container with guaranteed memory cleanup and optional memory locking."""
-
 
 import ctypes
 import logging
@@ -13,13 +11,19 @@ import weakref
 from collections.abc import Callable
 from contextlib import suppress
 from importlib import util as _imp_util
-from typing import Final, Union
+from typing import Final
 
 _log = logging.getLogger(__name__)
-_warned_zeroize = False
+_WARN_FLAGS = {"zeroize": False}
+
+try:
+    from nacl.bindings import sodium_memzero as _explicit_bzero
+except Exception:
+    def _explicit_bzero(buf: bytearray) -> None:
+        ctypes.memset(ctypes.addressof(ctypes.c_char.from_buffer(buf)), 0, len(buf))
 
 # Type alias for byte-like objects
-BytesLike = Union[bytes, bytearray, memoryview]
+BytesLike = bytes | bytearray | memoryview
 
 # Constants
 MIN_LOCK_SIZE: Final[int] = 4096  # Minimum size to attempt memory locking
@@ -42,79 +46,17 @@ def secure_memzero(buf: bytearray) -> None:
     if not buf:
         return
 
-    global _warned_zeroize
     fallback_used = False
     n = len(buf)
-
     try:
-        # Prefer libsodium's sodium_memzero when available
-        if _HAVE_SODIUM:
-            try:
-                import nacl.bindings as _sod  # type: ignore
-
-                # sodium_memzero expects (void*, size_t)
-                addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
-                _sod.sodium_memzero(ctypes.c_void_p(addr), ctypes.c_size_t(len(buf)))
-                return
-            except Exception as exc:
-                _log.debug("lib sodium memzero fallback: %s", exc)
-
-        # Get buffer address for ctypes operations
-        addr = ctypes.addressof(ctypes.c_char.from_buffer(buf))
-
-        # Windows: RtlSecureZeroMemory
-        if platform.system() == "Windows":
-            try:
-                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-                rtl_zero = kernel32.RtlSecureZeroMemory
-                rtl_zero.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
-                rtl_zero.restype = ctypes.c_void_p
-                rtl_zero(addr, n)
-                return
-            except (AttributeError, OSError) as exc:
-                _log.debug(
-                    "RtlSecureZeroMemory unavailable: %s", exc
-                )  # Fall through to next method
-
-        # Linux/BSD: explicit_bzero
-        if hasattr(ctypes, "CDLL"):
-            for lib_name in ("libc.so.6", "libc.so.7", "libc.dylib", "libSystem.dylib"):
-                try:
-                    libc = ctypes.CDLL(lib_name)
-                    if hasattr(libc, "explicit_bzero"):
-                        libc.explicit_bzero.argtypes = (
-                            ctypes.c_void_p,
-                            ctypes.c_size_t,
-                        )
-                        libc.explicit_bzero.restype = None
-                        libc.explicit_bzero(addr, n)
-                        return
-                except (OSError, AttributeError):
-                    continue
-
-        # Generic: memset with attempt at compiler barrier
-        ctypes.memset(addr, 0, n)
-
-        # Try to prevent optimization by accessing Python internals
-        # This creates a side effect that may prevent dead store elimination
-        with suppress(AttributeError, ValueError):
-            _ = ctypes.c_int.in_dll(ctypes.pythonapi, "Py_OptimizeFlag")
-
-    except Exception as exc:
+        _explicit_bzero(buf)
+    except Exception:
         fallback_used = True
-        _log.debug(
-            "secure_memzero fallback due to error: %s", exc
-        )  # Fall through to manual zeroing
-
-    if fallback_used and not _warned_zeroize:
-        _log.warning("Zeroization fallback: ctypes.memset failed; using bytearray loop.")
-        _warned_zeroize = True
-
-    # Last resort: manual zeroing with forced memory access
-    for i in range(n):
-        buf[i] = 0
-        # Force memory access to prevent optimization
-        _ = buf[i]
+        for i in range(n):
+            buf[i] = 0
+    if fallback_used and not _WARN_FLAGS["zeroize"]:
+        _log.warning("secure_memzero: fallback loop used; consider libsodium")
+        _WARN_FLAGS["zeroize"] = True
 
 
 def try_lock_memory(buf: bytearray) -> bool:
@@ -224,7 +166,7 @@ def try_unlock_memory(buf: bytearray) -> bool:
                 except (OSError, AttributeError):
                     continue
     except Exception as exc:
-        _log.debug("try_lock_memory failed: %s", exc)
+        _log.debug("try_unlock_memory failed: %s", exc)
 
     return False
 
@@ -282,9 +224,7 @@ class SecureBytes:
             )
 
         if len(data) == 0:
-            # Compatibilidade reversa: permite strings vazias para vaults existentes
-            # que foram criados com senha vazia
-            pass
+            raise ValueError("SecureBytes cannot be empty")
 
         # Initialize state
         self._buf = bytearray(data)
@@ -430,10 +370,8 @@ class SecureBytes:
 
     def __del__(self) -> None:
         """Destructor - ensures cleanup even if not explicitly cleared."""
-        try:
+        with suppress(Exception):
             self.clear()
-        except Exception:
-            pass  # Best effort in destructor
 
     def __len__(self) -> int:
         """Get length of data, or 0 if cleared."""

@@ -1,27 +1,31 @@
 """
 Path constants for CryptGuard - separate from config to avoid circular imports.
 """
-# -*- coding: utf-8 -*-
 
-import os
-from pathlib import Path
+from __future__ import annotations
 
-# Base directory for CryptGuard data
-if os.name == "nt":  # Windows
-    BASE_DIR = Path.home() / "AppData" / "Local" / "CryptGuard"
-else:  # Unix-like
-    BASE_DIR = Path.home() / ".cryptguard"
+import contextlib
+
+from cg_platform import IS_LINUX
+from cg_platform.fs_paths import app_data_dir, ensure_all_dirs, log_file_path
+
+# Base directory for CryptGuard data (QStandardPaths-backed).
+BASE_DIR = app_data_dir()
 
 # Log file location
-LOG_PATH = BASE_DIR / "cryptguard.log"
+LOG_PATH = log_file_path()
 
 
 def ensure_base_dir() -> None:
-    """Create the base directory with restricted permissions (best-effort)."""
+    """Create the base directory and tighten permissions where possible."""
     try:
-        BASE_DIR.mkdir(parents=True, exist_ok=True)
-        if os.name != "nt":
-            os.chmod(BASE_DIR, 0o700)
+        ensure_all_dirs()
+        if IS_LINUX:
+            with contextlib.suppress(OSError):
+                BASE_DIR.chmod(0o700)
+                LOG_PATH.parent.chmod(0o700)
+                if LOG_PATH.exists():
+                    LOG_PATH.chmod(0o600)
     except Exception:
         # Do not raise logging-related directory errors
         pass

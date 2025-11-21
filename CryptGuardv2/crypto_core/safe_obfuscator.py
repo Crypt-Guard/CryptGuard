@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import warnings
+from contextlib import suppress
+
 from .log_utils import log_best_effort
 
 #!/usr/bin/env python3
@@ -9,8 +12,6 @@ Safe wrapper to work with KeyObfuscator without relying on private attributes.
 Used by KeyGuard and CryptGuard.
 """
 
-
-import warnings
 
 # Prefer the project's SecureBytes, fallback to a simple zeroizable buffer
 try:
@@ -156,7 +157,11 @@ def sm_get_bytes(sm) -> bytes:
     if callable(view):
         try:
             mv = view()
-            return bytes(mv)
+            try:
+                return bytes(mv)
+            finally:
+                with suppress(Exception):
+                    mv.release()
         except Exception as exc:
             log_best_effort(__name__, exc)
 

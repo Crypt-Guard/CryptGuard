@@ -5,6 +5,8 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
+from .versioning import MIN_SUPPORTED_VERSION, UnsupportedFormatVersionError
+
 # CG2 v5 header (all bytes are AAD)
 # MAGIC(4) | VERSION(1=0x05) | ALG_ID(1=0x01) | KDF_LEN(u16, BE) | KDF_JSON | SS_HEADER(24)
 
@@ -71,6 +73,8 @@ def parse_header(buf: bytes) -> tuple[V5Header, int]:
     Parse a v5 header from the given bytes buffer (must start at MAGIC).
     Returns (V5Header, offset_after_header).
     """
+    if len(buf) < len(MAGIC):
+        raise ValueError("Truncated header (magic)")
 
     def need(n: int, what: str) -> None:
         if len(buf) < n:
@@ -84,6 +88,10 @@ def parse_header(buf: bytes) -> tuple[V5Header, int]:
     need(off + 1, "version")
     ver = struct.unpack_from(">B", buf, off)[0]
     off += 1
+    if ver < MIN_SUPPORTED_VERSION:
+        raise UnsupportedFormatVersionError(
+            f"Arquivo em formato muito antigo (v{ver}); min_supported={MIN_SUPPORTED_VERSION}. Atualize o arquivo/ferramenta."
+        )
     if ver != VERSION:
         raise ValueError(f"Unsupported CG2 v5 version byte: {ver}")
 
@@ -113,47 +121,74 @@ def parse_header(buf: bytes) -> tuple[V5Header, int]:
     return hdr, off
 
 
+def _read_v5_header_stream(fp) -> tuple[V5Header, bytes, int]:
+    def _read(src, n: int) -> bytes:
+        b = src.read(n)
+        if b is None or len(b) < n:
+            raise ValueError("Truncated header")
+        return b
+
+    prefix = _read(fp, 8)  # MAGIC + VER + ALG + KDF_LEN
+    if not prefix.startswith(MAGIC):
+        raise ValueError("Not a CG2 v5 file (bad magic)")
+    ver = prefix[4]
+    alg = prefix[5]
+    if ver < MIN_SUPPORTED_VERSION:
+        raise UnsupportedFormatVersionError(
+            f"Arquivo em formato muito antigo (v{ver}); min_supported={MIN_SUPPORTED_VERSION}. Atualize o arquivo/ferramenta."
+        )
+    if ver != VERSION:
+        raise ValueError(f"Unsupported CG2 v5 version byte: {ver}")
+    if alg != ALG_ID:
+        raise ValueError(f"Unsupported ALG_ID: {alg}")
+    kdf_len = struct.unpack_from(">H", prefix, 6)[0]
+    if kdf_len == 0 or kdf_len > 0xFFFF:
+        raise ValueError("Invalid KDF length")
+    rest_len = kdf_len + SS_HEADER_BYTES
+    if 8 + rest_len > MAX_HEADER_LEN:
+        raise ValueError("Header too large")
+    rest = _read(fp, rest_len)
+    header_bytes = prefix + rest
+    hdr, off = parse_header(header_bytes)
+    return hdr, header_bytes, off
+
+
 def read_v5_header(path_or_file) -> tuple[V5Header, bytes, int]:
     """
     Reads the v5 header from a file path or file-like object opened in binary mode.
     Returns (V5Header, header_bytes, offset_after_header).
     """
-
-    def _read(fp, n: int) -> bytes:
-        b = fp.read(n)
-        if b is None or len(b) < n:
-            raise ValueError("Truncated header")
-        return b
-
-    close_me = False
     if hasattr(path_or_file, "read"):
-        fp = path_or_file
-    else:
-        fp = open(Path(path_or_file), "rb")
-        close_me = True
-    try:
-        prefix = _read(fp, 8)  # MAGIC + VER + ALG + KDF_LEN
-        if not prefix.startswith(MAGIC):
-            raise ValueError("Not a CG2 v5 file (bad magic)")
-        ver = prefix[4]
-        alg = prefix[5]
-        if ver != VERSION:
-            raise ValueError(f"Unsupported CG2 v5 version byte: {ver}")
-        if alg != ALG_ID:
-            raise ValueError(f"Unsupported ALG_ID: {alg}")
-        kdf_len = struct.unpack_from(">H", prefix, 6)[0]
-        if kdf_len == 0 or kdf_len > 0xFFFF:
-            raise ValueError("Invalid KDF length")
-        rest_len = kdf_len + SS_HEADER_BYTES
-        if 8 + rest_len > MAX_HEADER_LEN:
-            raise ValueError("Header too large")
-        rest = _read(fp, rest_len)
-        header_bytes = prefix + rest
-        hdr, off = parse_header(header_bytes)
-        return hdr, header_bytes, off
-    finally:
-        if close_me:
-            fp.close()
+        return _read_v5_header_stream(path_or_file)
+    with open(Path(path_or_file), "rb") as fp:
+        return _read_v5_header_stream(fp)
+
+
+def _read_header_version_stream(fp) -> int:
+    magic = fp.read(4)
+    if len(magic) < 4:
+        raise ValueError("Truncated header")
+    if magic == MAGIC:
+        ver_b = fp.read(1)
+        if len(ver_b) != 1:
+            raise ValueError("Truncated header")
+        ver = ver_b[0]
+        if ver < MIN_SUPPORTED_VERSION:
+            raise UnsupportedFormatVersionError(
+                f"Arquivo em formato muito antigo (v{ver}); min_supported={MIN_SUPPORTED_VERSION}. Atualize o arquivo/ferramenta."
+            )
+        return ver
+    if magic == b"CG2\0":
+        ver_b = fp.read(1)  # legacy v1–v4
+        if len(ver_b) != 1:
+            raise ValueError("Truncated legacy header")
+        ver = ver_b[0]
+        if ver < MIN_SUPPORTED_VERSION:
+            raise UnsupportedFormatVersionError(
+                f"Arquivo em formato muito antigo (v{ver}); min_supported={MIN_SUPPORTED_VERSION}. Atualize o arquivo/ferramenta."
+            )
+        return ver
+    raise ValueError("Unknown file format (magic)")
 
 
 def read_header_version_any(path_or_file) -> int:
@@ -161,29 +196,10 @@ def read_header_version_any(path_or_file) -> int:
     Detect header version for CG2 files.
     Returns an int (e.g., 5 for v5). Raises if neither legacy nor v5.
     """
-    close_me = False
     if hasattr(path_or_file, "read"):
-        fp = path_or_file
-    else:
-        fp = open(Path(path_or_file), "rb")
-        close_me = True
-    try:
-        magic = fp.read(4)
-        if magic == MAGIC:
-            ver_b = fp.read(1)
-            if len(ver_b) != 1:
-                raise ValueError("Truncated header")
-            return ver_b[0]
-        elif magic == b"CG2\0":
-            ver_b = fp.read(1)  # legacy v1–v4
-            if len(ver_b) != 1:
-                raise ValueError("Truncated legacy header")
-            return ver_b[0]
-        else:
-            raise ValueError("Unknown file format (magic)")
-    finally:
-        if close_me:
-            fp.close()
+        return _read_header_version_stream(path_or_file)
+    with open(Path(path_or_file), "rb") as fp:
+        return _read_header_version_stream(fp)
 
 
 __all__ = [

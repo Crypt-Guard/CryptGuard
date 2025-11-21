@@ -221,7 +221,7 @@ def read_header(path: str | Path) -> tuple[CG2Header, bytes, int, str]:
                         raise
                     buf += more
                     if len(buf) > MAX_HEADER_LEN:
-                        raise ValueError("Header too large")
+                        raise ValueError("Header too large") from None
                     continue
                 raise
 
