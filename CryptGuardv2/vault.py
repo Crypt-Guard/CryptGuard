@@ -42,13 +42,7 @@ except Exception as e:  # pragma: no cover - fail early
 
 # Padroniza proteção em memória da senha mestra
 from crypto_core.logger import logger
-from crypto_core.safe_obfuscator import (
-    ObfuscatedSecret,
-    sm_get_bytes,
-)
-from crypto_core.safe_obfuscator import (
-    SecureMemory as CoreSecureMemory,
-)
+from crypto_core.safe_obfuscator import SecureMemory as CoreSecureMemory, sm_get_bytes
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -183,6 +177,30 @@ def _pw_bytes(pw) -> bytes:
         raise TypeError("Unsupported password type") from exc
 
 
+def password_whitespace_hint(password: str) -> str | None:
+    """
+    Verifica se a senha contém espaços em branco problemáticos.
+    
+    Retorna uma mensagem de aviso se a senha:
+    - Começa ou termina com espaços
+    - Contém quebras de linha ou tabs
+    
+    Retorna None se a senha não tem problemas.
+    """
+    if not isinstance(password, str):
+        return None
+    
+    # Verifica espaços no início ou fim
+    if password != password.strip():
+        return "A senha contém espaços no início ou no final"
+    
+    # Verifica quebras de linha ou tabs
+    if '\n' in password or '\r' in password or '\t' in password:
+        return "A senha contém caracteres de quebra de linha ou tabulação"
+    
+    return None
+
+
 def _sanitize(name: str) -> str:
     bad = ["../", "..\\", "/", "\\", ":", "*", "?", '"', "<", ">", "|", "\x00"]
     s = name
@@ -203,253 +221,16 @@ def _kdf_argon2id(password: bytes, salt: bytes) -> bytes:
 
 
 def _encrypt_json(payload: bytes, password: bytes, salt: bytes) -> bytes:
-    """
-    Criptografa payload JSON com formato novo (CG3).
-
-    Sempre usa o formato novo para novos arquivos.
-    """
-    from crypto_core.aead import encrypt_bytes
-    from crypto_core.format import create_default_params, serialize_header
-    from crypto_core.kdf_params import derive_key_and_params
-
-    # Deriva chave usando KDF novo
-    key, _ = derive_key_and_params(password, salt, "vault_key")
-
-    # Cria parâmetros e header
-    params = create_default_params()
-    header_bytes = serialize_header(params)
-
-    # Criptografa usando AEAD novo
-    aad = header_bytes
-    nonce, ciphertext, tag = encrypt_bytes(payload, key, aad)
-
-    # Monta blob: header + nonce + ciphertext + tag
-    blob = header_bytes + nonce + ciphertext + tag
-
-    return blob
+    key = _kdf_argon2id(password, salt)
+    box = secret.SecretBox(key)
+    # box.encrypt gera um nonce automaticamente e o inclui no resultado
+    return box.encrypt(payload)
 
 
 def _decrypt_json(blob: bytes, password: bytes, salt: bytes) -> bytes:
-    """
-    Descriptografa blob JSON com compatibilidade reversa.
-
-    Primeiro tenta formato antigo (CG2) porque os vaults existentes
-    foram criados com ele. Só tenta CG3 se for um header CG3 válido.
-    """
-    # Debug prints diretos para console (bypass logger)
-    print(
-        f"[DEBUG] VAULT_DECRYPT: Blob size={len(blob)}, Password={len(password)}, Salt={len(salt)}"
-    )
-    print(f"[DEBUG] VAULT_DECRYPT: Is CG3: {_is_cg3_blob(blob)}")
-
-    # Estratégia 1: CG2 com parâmetros originais (PyNaCl padrão)
-    print("[DEBUG] VAULT_DECRYPT: Tentando CG2_PyNaCl...")
-    try:
-        result = _decrypt_json_cg2(blob, password, salt)
-        print("[DEBUG] VAULT_DECRYPT: CG2_PyNaCl funcionou!")
-        return result
-    except Exception as e:
-        print(f"[DEBUG] VAULT_DECRYPT: CG2_PyNaCl falhou: {type(e).__name__}: {e}")
-
-    # Estratégia 2: CG2 com parâmetros calibrados
-    print("[DEBUG] VAULT_DECRYPT: Tentando CG2_Calibrated...")
-    try:
-        result = _decrypt_json_cg2_calibrated(blob, password, salt)
-        print("[DEBUG] VAULT_DECRYPT: CG2_Calibrated funcionou!")
-        return result
-    except Exception as e:
-        print(f"[DEBUG] VAULT_DECRYPT: CG2_Calibrated falhou: {type(e).__name__}: {e}")
-
-    # Estratégia 3: CG3 (formato novo) - só tenta se for realmente um header CG3
-    if _is_cg3_blob(blob):
-        print("[DEBUG] VAULT_DECRYPT: Tentando CG3...")
-        try:
-            result = _decrypt_json_cg3(blob, password, salt)
-            print("[DEBUG] VAULT_DECRYPT: CG3 funcionou!")
-            return result
-        except Exception as e:
-            print(f"[DEBUG] VAULT_DECRYPT: CG3 falhou: {type(e).__name__}: {e}")
-    else:
-        print("[DEBUG] VAULT_DECRYPT: Blob não é CG3 - pulando CG3")
-
-    # Estratégia 4: Tenta CG2 com parâmetros diferentes (fallback final)
-    print("[DEBUG] VAULT_DECRYPT: Tentando CG2_Fallback...")
-    try:
-        result = _decrypt_json_cg2_fallback(blob, password, salt)
-        print("[DEBUG] VAULT_DECRYPT: CG2_Fallback funcionou!")
-        return result
-    except Exception as e:
-        print(f"[DEBUG] VAULT_DECRYPT: CG2_Fallback falhou: {type(e).__name__}: {e}")
-
-    # Se todas as estratégias falharam
-    print(f"[DEBUG] VAULT_DECRYPT: TODAS AS ESTRATÉGIAS FALHARAM! blob_size={len(blob)}")
-
-    # Tenta uma última abordagem: analisa o blob para entender sua estrutura
-    print("\n[DEBUG] ANÁLISE DO BLOB:")
-    print(f"[DEBUG] Tamanho total: {len(blob)} bytes")
-    print(f"[DEBUG] Primeiro byte: {blob[0] if len(blob) > 0 else 'N/A':02x}")
-    print(f"[DEBUG] Último byte: {blob[-1] if len(blob) > 0 else 'N/A':02x}")
-
-    # Verifica se parece ser um blob CG2 (começa com JSON)
-    if len(blob) > 10:
-        print(f"[DEBUG] Primeiros 50 bytes: {blob[:50]}")
-        try:
-            # Tenta decodificar como string para ver se é JSON
-            potential_json = blob[:200].decode("utf-8", errors="replace")
-            print(f"[DEBUG] Potencial JSON: {potential_json[:100]}...")
-        except Exception as e:
-            print(f"[DEBUG] Erro ao decodificar: {e}")
-
-    raise ValueError("Todas as estratégias de descriptografia falharam")
-
-
-def _decrypt_json_cg3(blob: bytes, password: bytes, salt: bytes) -> bytes:
-    """Descriptografa usando formato CG3 (XChaCha20-Poly1305 IETF + header)."""
-    from crypto_core.kdf_params import derive_key_and_params
-
-    # Tenta primeiro com a senha fornecida
-    try:
-        key, _ = derive_key_and_params(password, salt, "vault_key")
-        result = _decrypt_json_cg3_with_key(blob, key)
-        return result
-    except Exception:
-        # Se falhar, tenta com senha vazia (descoberta através de análise)
-        logger.debug("CG3 falhou com senha fornecida, tentando senha vazia...")
-        key, _ = derive_key_and_params(b"", salt, "vault_key")
-        result = _decrypt_json_cg3_with_key(blob, key)
-        return result
-
-
-def _decrypt_json_cg3_with_key(blob: bytes, key: bytes) -> bytes:
-    """Descriptografa usando formato CG3 com chave fornecida."""
-    # Extrai componentes: header (256B) + nonce (24B) + ciphertext + tag (16B)
-    if len(blob) < 256 + 24 + 16:
-        raise ValueError("Blob muito pequeno para formato CG3")
-
-    header_bytes = blob[:256]
-    nonce = blob[256:280]  # 24 bytes
-    encrypted_data = blob[280:]
-
-    # Verifica se header é JSON válido
-    try:
-        header_str = header_bytes.rstrip(b"\x00").decode("utf-8")
-        json.loads(header_str)  # Valida JSON
-    except Exception:
-        raise ValueError("Header CG3 inválido")
-
-    # Descriptografa usando AEAD novo
-    from crypto_core.aead import decrypt_bytes
-    from crypto_core.format import get_aad_for_header
-
-    aad = get_aad_for_header(header_bytes)
-    ciphertext = encrypted_data[:-16]
-    tag = encrypted_data[-16:]
-
-    return decrypt_bytes(nonce, ciphertext, tag, key, aad)
-
-
-def _decrypt_json_cg2(blob: bytes, password: bytes, salt: bytes) -> bytes:
-    """Descriptografa usando formato CG2 (compatibilidade reversa)."""
-    # Usa implementação original
     key = _kdf_argon2id(password, salt)
     box = secret.SecretBox(key)
     return box.decrypt(blob)
-
-
-def _decrypt_json_cg2_calibrated(blob: bytes, password: bytes, salt: bytes) -> bytes:
-    """Descriptografa usando formato CG2 com parâmetros calibrados."""
-    # Usa parâmetros calibrados para compatibilidade com mudanças na calibração
-    from crypto_core.kdf_params import get_cached_params
-
-    params = get_cached_params()
-    key = argon2id.kdf(
-        secret.SecretBox.KEY_SIZE,
-        password,
-        salt,
-        opslimit=params["time_cost"],
-        memlimit=params["memory_cost"] * 1024,  # Converte KiB para bytes
-    )
-    box = secret.SecretBox(key)
-    return box.decrypt(blob)
-
-
-def _is_cg3_blob(blob: bytes) -> bool:
-    """Verifica se um blob é um vault CG3 válido baseado no header."""
-    # Verifica tamanho mínimo: header (256B) + nonce (24B) + ciphertext + tag (16B)
-    if len(blob) < 256 + 24 + 16:
-        return False
-
-    # Extrai header
-    header_bytes = blob[:256]
-
-    # Verifica se header é JSON válido (mesma lógica do _decrypt_json_cg3)
-    try:
-        header_str = header_bytes.rstrip(b"\x00").decode("utf-8")
-        json.loads(header_str)  # Valida JSON
-        return True
-    except Exception:
-        return False
-
-
-def _decrypt_json_cg2_fallback(blob: bytes, password: bytes, salt: bytes) -> bytes:
-    """Última tentativa de descriptografia CG2 com TODOS os parâmetros possíveis."""
-    print("[DEBUG] _decrypt_json_cg2_fallback: Tentando todas as combinações de parâmetros...")
-
-    # Lista abrangente de parâmetros para tentar
-    param_combinations = [
-        # PyNaCl presets
-        {"opslimit": argon2id.OPSLIMIT_INTERACTIVE, "memlimit": argon2id.MEMLIMIT_INTERACTIVE},
-        {"opslimit": argon2id.OPSLIMIT_MODERATE, "memlimit": argon2id.MEMLIMIT_MODERATE},
-        {"opslimit": argon2id.OPSLIMIT_SENSITIVE, "memlimit": argon2id.MEMLIMIT_SENSITIVE},
-        # Combinações manuais com diferentes valores
-        {"opslimit": 1, "memlimit": 8192 * 1024},  # 8MB
-        {"opslimit": 2, "memlimit": 16384 * 1024},  # 16MB
-        {"opslimit": 3, "memlimit": 32768 * 1024},  # 32MB
-        {"opslimit": 4, "memlimit": 65536 * 1024},  # 64MB
-        {"opslimit": 5, "memlimit": 131072 * 1024},  # 128MB
-        {"opslimit": 6, "memlimit": 262144 * 1024},  # 256MB
-        # Parâmetros do arquivo de calibração
-        {"opslimit": 4, "memlimit": 1048576 * 1024},  # 1GB (calibrado)
-        # Valores mínimos
-        {"opslimit": 1, "memlimit": 1024 * 1024},  # 1MB
-        {"opslimit": 1, "memlimit": 2048 * 1024},  # 2MB
-        {"opslimit": 1, "memlimit": 4096 * 1024},  # 4MB
-        {"opslimit": 1, "memlimit": 8192 * 1024},  # 8MB
-    ]
-
-    last_exception = None
-
-    for i, params in enumerate(param_combinations):
-        try:
-            print(
-                f"[DEBUG] _decrypt_json_cg2_fallback: Tentativa {i + 1}/{len(param_combinations)}: opslimit={params['opslimit']}, memlimit={params['memlimit'] // (1024 * 1024)}MB"
-            )
-
-            key = argon2id.kdf(
-                secret.SecretBox.KEY_SIZE,
-                password,
-                salt,
-                opslimit=params["opslimit"],
-                memlimit=params["memlimit"],
-            )
-
-            box = secret.SecretBox(key)
-            result = box.decrypt(blob)
-
-            print(f"[DEBUG] _decrypt_json_cg2_fallback: SUCESSO na tentativa {i + 1}!")
-            return result
-
-        except Exception as e:
-            print(
-                f"[DEBUG] _decrypt_json_cg2_fallback: Tentativa {i + 1} falhou: {type(e).__name__}"
-            )
-            last_exception = e
-
-    # Se chegou aqui, nenhuma combinação funcionou
-    print(
-        f"[DEBUG] _decrypt_json_cg2_fallback: TODAS AS {len(param_combinations)} TENTATIVAS FALHARAM!"
-    )
-    raise ValueError(f"Nenhuma combinação de parâmetros funcionou. Último erro: {last_exception}")
 
 
 class VaultEntry:
@@ -537,7 +318,7 @@ class VaultManager:
             self.path = Path(path) if path else Config.default_vault_path()
         self.salt_path = self.path.with_suffix(self.path.suffix + ".salt")
         self._opened = False
-        self._pw_secret: ObfuscatedSecret | None = None
+        self._pw_secret: CoreSecureMemory | None = None
         self.entries: dict[str, VaultEntry] = {}
         self.order: list[str] = []
         # Reforços novos
@@ -546,7 +327,7 @@ class VaultManager:
 
     def create(self, master_password):
         pw = _pw_bytes(master_password)
-        self._pw_secret = ObfuscatedSecret(CoreSecureMemory(pw))
+        self._pw_secret = CoreSecureMemory(pw)
         if not self.salt_path.exists():
             self.salt_path.write_bytes(utils.random(16))
         self.entries.clear()
@@ -575,7 +356,7 @@ class VaultManager:
                 try:
                     self._migrate_from_vlt3(raw, pw)
                     self._opened = True
-                    self._pw_secret = ObfuscatedSecret(CoreSecureMemory(pw))
+                    self._pw_secret = CoreSecureMemory(pw)
                     logger.info("CryptGuard Vault: migração VLT3 concluída com sucesso")
                     return
                 except Exception as e:
@@ -628,7 +409,7 @@ class VaultManager:
                     raise CorruptVault("Vault corrompido (decodificação)") from None
 
             # Só cria o _pw_secret após validar a senha
-            self._pw_secret = ObfuscatedSecret(CoreSecureMemory(pw))
+            self._pw_secret = CoreSecureMemory(pw)
             self._load_from_obj(obj)
             self._opened = True
             self._rate.attempts.pop("vault_open", None)  # limpa janela
@@ -729,7 +510,7 @@ class VaultManager:
             _decrypt_json(blob, _pw_bytes(old_password), salt)
         except Exception as exc:
             raise WrongPassword("Senha atual incorreta") from exc
-        self._pw_secret = ObfuscatedSecret(CoreSecureMemory(_pw_bytes(new_password)))
+        self._pw_secret = CoreSecureMemory(_pw_bytes(new_password))
         self.salt_path.write_bytes(utils.random(16))
         self._save()
 
@@ -751,16 +532,30 @@ class VaultManager:
     def _save(self) -> None:
         if not self._pw_secret:
             raise RuntimeError("Senha não definida")
-        salt = self.salt_path.read_bytes() if self.salt_path.exists() else utils.random(16)
-        self.salt_path.write_bytes(salt)
+        # Lê o salt existente ou cria um novo apenas se não existir
+        if self.salt_path.exists():
+            salt = self.salt_path.read_bytes()
+        else:
+            salt = utils.random(16)
+            self.salt_path.write_bytes(salt)
 
         # Serializa e comprime (gzip). Fallback de leitura existe em open().
         obj = self._data()
         payload = json.dumps(obj, separators=(",", ":")).encode("utf-8")
         gz_payload = StreamingCompressor.compress(payload)
 
-        with self._pw_secret.expose() as sm:
-            ct = _encrypt_json(gz_payload, sm_get_bytes(sm), salt)
+        # Extrai a senha do SecureMemory usando view()
+        pw_view = getattr(self._pw_secret, "view", None)
+        if callable(pw_view):
+            mv = pw_view()
+            try:
+                pw_bytes = bytes(mv)
+            finally:
+                with contextlib.suppress(Exception):
+                    mv.release()
+        else:
+            pw_bytes = sm_get_bytes(self._pw_secret)
+        ct = _encrypt_json(gz_payload, pw_bytes, salt)
 
         # Grava por backend atômico com WAL/backup
         self._storage.save(ct)
@@ -809,7 +604,7 @@ class VaultManager:
                 if not self.salt_path.exists():
                     self.salt_path.write_bytes(utils.random(16))
                 # Set new protected master password and save
-                self._pw_secret = ObfuscatedSecret(CoreSecureMemory(password))
+                self._pw_secret = CoreSecureMemory(password)
                 self._save()
                 return
             except Exception as ex:
@@ -824,7 +619,7 @@ class VaultManager:
                     if not self.salt_path.exists():
                         self.salt_path.write_bytes(utils.random(16))
                     # Set new protected master password and save
-                    self._pw_secret = ObfuscatedSecret(CoreSecureMemory(password))
+                    self._pw_secret = CoreSecureMemory(password)
                     self._save()
                     return
                 except Exception as ex2:

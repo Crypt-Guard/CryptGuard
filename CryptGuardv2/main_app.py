@@ -6,17 +6,40 @@ Interface clássica com painel KeyGuard (Qt) e pipeline único de criptografia (
 
 from __future__ import annotations
 
-# --------------------------------------------------------------- Standard library ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€â”€
+# --- Anti-shadow da stdlib 'platform' ---
+import platform as _stdlib_platform, os
+
+_std = getattr(_stdlib_platform, "__file__", "") or ""
+if not _std.endswith("platform.py"):
+    print(
+        "Erro: pacote local chamado 'platform' está sombreamento a stdlib. "
+        "Renomeie para 'cg_platform'."
+    )
+    os._exit(1)
+# --- fim anti-shadow ---
+
+# --- Bootstrap Qt (Linux): preferir Wayland, cair para XCB ---
+import sys
+
+if sys.platform.startswith("linux"):
+    if "QT_QPA_PLATFORM" not in os.environ:
+        if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland" or os.environ.get(
+            "WAYLAND_DISPLAY"
+        ):
+            os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
+        else:
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+# --- fim bootstrap ---
+
+# --------------------------------------------------------------- Standard library ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â"€â"€
 import contextlib
 import importlib.util
 import inspect
 import json
 import locale
-import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import time
 import warnings
 import zipfile
@@ -25,11 +48,29 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cg_platform import IS_LINUX, IS_WIN
+from cg_platform.fs_paths import APP_NAME as PLATFORM_APP_NAME, ORG_NAME as PLATFORM_ORG_NAME
+from cg_platform.linux_env import (
+    explain_qpa_failure,
+    harden_process_best_effort as harden_process_best_effort_linux,
+)
+from cg_platform.win_effects import try_enable_dark_titlebar, try_enable_mica
+from crypto_core.verify_integrity import verify_integrity
 # --------------------------------------------------------------- PySide6 / Qt ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import nacl
 from nacl import bindings as nb
 from nacl.bindings import crypto_secretstream_xchacha20poly1305_state
-from PySide6.QtCore import QDate, QLocale, QSize, QThread, QTimer, QTranslator, QUrl, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QDate,
+    QLocale,
+    QSize,
+    QThread,
+    QTimer,
+    QTranslator,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -56,11 +97,15 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QStatusBar,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+import qtawesome as qta
 
 from crypto_core.factories import decrypt as cg_decrypt
 
@@ -79,6 +124,7 @@ try:
         VaultManager,
         WrongPassword,
         open_or_init_vault,
+        password_whitespace_hint,
     )
 
     USING_V2 = True
@@ -106,6 +152,7 @@ except ImportError:
         VaultManager,
         WrongPassword,
         open_or_init_vault,
+        password_whitespace_hint,
     )
 
     USING_V2 = False
@@ -118,11 +165,12 @@ except ImportError:
 
 
 from crypto_core import LOG_PATH
-from crypto_core.config import SETTINGS_PATH
+from crypto_core.config import HYGIENE_DEFAULT_SETTINGS, SETTINGS_PATH
+from crypto_core.file_hygiene import TempFolderManager, cleanup_temp_folder, is_ssd, secure_delete_file
 from crypto_core.fileformat_v5 import read_header_version_any
 from crypto_core.logger import logger
+from crypto_core.securemem import ensure_securemem_ready
 from crypto_core.utils import archive_folder, secure_delete
-from crypto_core.verify_integrity import verify_integrity
 
 # --------------------------------------------------------------- Configuração de warnings e encoding ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*utcfromtimestamp.*")
@@ -138,6 +186,17 @@ try:
     locale.setlocale(locale.LC_ALL, "")
 except Exception as exc:
     logger.debug("locale.setlocale fallback: %s", exc)
+
+STRICT_SECUREMEM = os.getenv("CG_SECUREMEM_STRICT", "0") == "1"
+ensure_securemem_ready(strict=STRICT_SECUREMEM)
+
+if sys.platform.startswith("linux") and os.getenv("CG_HARDEN_LINUX", "1") == "1":
+    try:
+        from crypto_core.hardening_linux import harden_process_best_effort
+
+        harden_process_best_effort(logger=logger)
+    except Exception:
+        pass
 
 # --- NEW: KeyGuard sidebar (Qt) ---
 # Carrega o helper com fallback robusto caso o pacote não esteja em modules/keyguard/.
@@ -217,7 +276,7 @@ class CryptoWorker(QThread):
 
     def __init__(
         self,
-        operation: str,  # 'encrypt' ou 'decrypt'
+        operation: str,  # 'encrypt', 'decrypt' ou 'verify'
         src_path: str,
         password: str,
         delete_flag: bool = False,
@@ -351,6 +410,7 @@ class CryptoWorker(QThread):
         result_path: str | None = None
 
         keyfile_path = self._resolve_keyfile()
+        verify_only = bool(self.extra_params.get("verify_only", False))
 
         if hasattr(password_secure, "with_bytes"):
 
@@ -360,7 +420,7 @@ class CryptoWorker(QThread):
                     in_path=str(src),
                     out_path=str(out_path),
                     password=pwd,
-                    verify_only=False,
+                    verify_only=verify_only,
                     progress_cb=progress_cb,
                     keyfile=keyfile_path,
                 )
@@ -373,7 +433,7 @@ class CryptoWorker(QThread):
                     in_path=str(src),
                     out_path=str(out_path),
                     password=bytes(mv),
-                    verify_only=False,
+                    verify_only=verify_only,
                     progress_cb=progress_cb,
                     keyfile=keyfile_path,
                 )
@@ -389,9 +449,510 @@ class CryptoWorker(QThread):
         self.requestInterruption()
 
 
-# ------------------------------------------------------------------------------------------------------------------------------â•â•
+# ------------------------------------------------------------------------------------------------------------------------------──
+#                            SETTINGS DIALOG
+# ------------------------------------------------------------------------------------------------------------------------------──
+
+
+class SettingsDialog(QDialog):
+    """Dialog for application settings with tabbed interface."""
+    
+    def __init__(self, parent: QWidget | None, settings: dict):
+        super().__init__(parent)
+        self.setWindowTitle("CryptGuard Settings")
+        self.setMinimumSize(600, 500)
+        
+        # Store original settings
+        self.input_settings = settings.copy()
+        self.result_settings = settings.copy()
+        
+        # Create UI
+        self._build_ui()
+        
+        # Load current settings into controls
+        self._load_settings_to_ui()
+    
+    def _build_ui(self):
+        """Build the settings dialog UI with tabs."""
+        layout = QVBoxLayout(self)
+        
+        # Tab widget
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+        
+        # Create tabs
+        self._create_general_tab()
+        self._create_hygiene_tab()
+        
+        # Dialog buttons
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self._on_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def _create_general_tab(self):
+        """Create general settings tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # Clipboard auto-clear
+        group_clipboard = QGroupBox("Clipboard")
+        group_layout = QVBoxLayout(group_clipboard)
+        
+        self.chk_clipboard_autoclear = QCheckBox("Auto-clear clipboard after 30 seconds")
+        self.chk_clipboard_autoclear.setToolTip(
+            "Automatically clear the clipboard 30 seconds after copying a password"
+        )
+        group_layout.addWidget(self.chk_clipboard_autoclear)
+        
+        layout.addWidget(group_clipboard)
+        
+        # Fixed output directory
+        group_output = QGroupBox("Output Directory")
+        group_layout2 = QVBoxLayout(group_output)
+        
+        self.chk_fixed_out = QCheckBox("Use fixed output directory")
+        self.chk_fixed_out.toggled.connect(self._toggle_fixed_out)
+        group_layout2.addWidget(self.chk_fixed_out)
+        
+        dir_layout = QHBoxLayout()
+        self.ed_fixed_dir = QLineEdit()
+        self.ed_fixed_dir.setPlaceholderText("Select output directory...")
+        dir_layout.addWidget(self.ed_fixed_dir)
+        
+        self.btn_browse_dir = QPushButton("Browse...")
+        self.btn_browse_dir.clicked.connect(self._browse_output_dir)
+        dir_layout.addWidget(self.btn_browse_dir)
+
+        group_layout2.addLayout(dir_layout)
+        layout.addWidget(group_output)
+
+        # Security tools: keyfile generation and secure containers
+        group_security = QGroupBox("Security Tools")
+        sec_layout = QVBoxLayout(group_security)
+
+        btn_gen_keyfile = QPushButton("Generate secure keyfile (64 bytes)")
+        btn_gen_keyfile.clicked.connect(self._generate_keyfile)
+        sec_layout.addWidget(btn_gen_keyfile)
+
+        containers_row = QHBoxLayout()
+        btn_create_container = QPushButton("Create Secure Container")
+        btn_create_container.clicked.connect(self._create_container)
+        containers_row.addWidget(btn_create_container)
+
+        btn_read_container = QPushButton("Open Secure Container")
+        btn_read_container.clicked.connect(self._read_container)
+        containers_row.addWidget(btn_read_container)
+        containers_row.addStretch()
+        sec_layout.addLayout(containers_row)
+
+        layout.addWidget(group_security)
+
+        # Spacer
+        layout.addStretch()
+
+        self.tabs.addTab(tab, "General")
+    
+    def _create_hygiene_tab(self):
+        """Create file hygiene settings tab."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        
+        # SSD Warning at top
+        warning_frame = QFrame()
+        warning_frame.setFrameShape(QFrame.StyledPanel)
+        warning_frame.setStyleSheet(
+            "QFrame { background-color: rgba(255, 152, 0, 0.1); "
+            "border: 1px solid rgba(255, 152, 0, 0.3); "
+            "border-radius: 4px; padding: 8px; }"
+        )
+        warning_layout = QVBoxLayout(warning_frame)
+        
+        warning_label = QLabel(
+            "⚠️  <b>Important:</b> Secure deletion is NOT fully effective on SSDs/NVMe drives "
+            "due to wear leveling.<br>"
+            "For maximum security, use full-disk encryption (BitLocker, LUKS, FileVault)."
+        )
+        warning_label.setWordWrap(True)
+        warning_layout.addWidget(warning_label)
+        
+        layout.addWidget(warning_frame)
+        
+        # Auto-delete original
+        group_delete = QGroupBox("Automatic Deletion")
+        group_layout = QVBoxLayout(group_delete)
+        
+        self.chk_delete_original = QCheckBox("Delete original file after encryption")
+        self.chk_delete_original.setToolTip(
+            "Automatically delete the original file after successful encryption.\n"
+            "Uses secure deletion with multiple overwrite passes."
+        )
+        group_layout.addWidget(self.chk_delete_original)
+        
+        passes_layout = QHBoxLayout()
+        passes_label = QLabel("Secure deletion passes:")
+        passes_layout.addWidget(passes_label)
+        
+        self.spin_passes = QSpinBox()
+        self.spin_passes.setRange(1, 7)
+        self.spin_passes.setValue(3)
+        self.spin_passes.setToolTip(
+            "Number of overwrite passes (1-7).\n"
+            "More passes = slower but more thorough.\n"
+            "3 passes is a good balance."
+        )
+        passes_layout.addWidget(self.spin_passes)
+        passes_layout.addStretch()
+        
+        group_layout.addLayout(passes_layout)
+        
+        layout.addWidget(group_delete)
+        
+        # Temporary files
+        group_temp = QGroupBox("Temporary Files")
+        group_layout2 = QVBoxLayout(group_temp)
+        
+        self.chk_clean_startup = QCheckBox("Clean temporary files on startup")
+        self.chk_clean_startup.setToolTip(
+            "Automatically remove temporary files older than 24 hours when the application starts"
+        )
+        group_layout2.addWidget(self.chk_clean_startup)
+        
+        self.chk_clean_shutdown = QCheckBox("Clean temporary files on shutdown")
+        self.chk_clean_shutdown.setToolTip(
+            "Automatically remove temporary files older than 1 hour when the application exits"
+        )
+        group_layout2.addWidget(self.chk_clean_shutdown)
+        
+        # Clean Now button
+        cleanup_layout = QHBoxLayout()
+        cleanup_layout.addStretch()
+        
+        self.btn_clean_now = QPushButton("Clean Temporary Files Now")
+        self.btn_clean_now.setIcon(qta.icon("fa5s.broom", color="#536dfe"))
+        self.btn_clean_now.clicked.connect(self._clean_now)
+        self.btn_clean_now.setStyleSheet(
+            "QPushButton { padding: 8px 16px; font-weight: bold; }"
+        )
+        cleanup_layout.addWidget(self.btn_clean_now)
+        
+        group_layout2.addLayout(cleanup_layout)
+        
+        layout.addWidget(group_temp)
+        
+        # Spacer
+        layout.addStretch()
+        
+        self.tabs.addTab(tab, "File Hygiene")
+    
+    def _toggle_fixed_out(self, checked: bool):
+        """Enable/disable fixed output directory controls."""
+        self.ed_fixed_dir.setEnabled(checked)
+        self.btn_browse_dir.setEnabled(checked)
+    
+    def _browse_output_dir(self):
+        """Browse for output directory."""
+        dir_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Directory",
+            self.ed_fixed_dir.text() or str(Path.home())
+        )
+        if dir_path:
+            self.ed_fixed_dir.setText(dir_path)
+    
+    def _clean_now(self):
+        """Trigger manual cleanup."""
+        try:
+            manager = TempFolderManager()
+            manager.ensure_dirs()
+            stats = manager.get_temp_stats()
+            
+            if stats["file_count"] == 0:
+                QMessageBox.information(
+                    self,
+                    "Temp Cleanup",
+                    "No temporary files to clean."
+                )
+                return
+            
+            size_mb = stats["total_bytes"] / (1024 * 1024)
+            msg = (
+                f"Found {stats['file_count']} temporary file(s) "
+                f"using {size_mb:.2f} MB.\n\n"
+                f"Do you want to delete these files?"
+            )
+            
+            reply = QMessageBox.question(
+                self,
+                "Clean Temporary Files",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply != QMessageBox.Yes:
+                return
+            
+            # Perform cleanup
+            files_removed, bytes_freed = cleanup_temp_folder(max_age_hours=0, dry_run=False)
+            size_freed_mb = bytes_freed / (1024 * 1024)
+            
+            QMessageBox.information(
+                self,
+                "Cleanup Complete",
+                f"Removed {files_removed} file(s), freed {size_freed_mb:.2f} MB"
+            )
+            
+        except Exception as exc:
+            logger.exception("Manual temp cleanup failed")
+            QMessageBox.warning(
+                self,
+                "Cleanup Error",
+                f"Failed to clean temporary files:\n{exc}"
+            )
+    
+    def _load_settings_to_ui(self):
+        """Load current settings into UI controls."""
+        # General tab
+        self.chk_clipboard_autoclear.setChecked(
+            self.input_settings.get("clipboard_autoclear", True)
+        )
+        self.chk_fixed_out.setChecked(
+            self.input_settings.get("fixed_out_enabled", False)
+        )
+        self.ed_fixed_dir.setText(
+            self.input_settings.get("fixed_out_dir", "")
+        )
+        self._toggle_fixed_out(self.chk_fixed_out.isChecked())
+        
+        # Hygiene tab
+        self.chk_delete_original.setChecked(
+            self.input_settings.get("hygiene_delete_original", False)
+        )
+        self.chk_clean_startup.setChecked(
+            self.input_settings.get("hygiene_clean_startup", True)
+        )
+        self.chk_clean_shutdown.setChecked(
+            self.input_settings.get("hygiene_clean_shutdown", True)
+        )
+        self.spin_passes.setValue(
+            self.input_settings.get("hygiene_passes", 3)
+        )
+    
+    def _on_accept(self):
+        """Save settings and close."""
+        # General settings
+        self.result_settings["clipboard_autoclear"] = self.chk_clipboard_autoclear.isChecked()
+        self.result_settings["fixed_out_enabled"] = self.chk_fixed_out.isChecked()
+        self.result_settings["fixed_out_dir"] = self.ed_fixed_dir.text()
+        
+        # Hygiene settings
+        self.result_settings["hygiene_delete_original"] = self.chk_delete_original.isChecked()
+        self.result_settings["hygiene_clean_startup"] = self.chk_clean_startup.isChecked()
+        self.result_settings["hygiene_clean_shutdown"] = self.chk_clean_shutdown.isChecked()
+        self.result_settings["hygiene_passes"] = self.spin_passes.value()
+
+        self.accept()
+
+    def _generate_keyfile(self):
+        """Generate a 64-byte keyfile and select it in the main window."""
+        try:
+            key_data = os.urandom(64)
+            default_name = "cryptguard.keyfile"
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Secure Keyfile",
+                default_name,
+                "Keyfiles (*.keyfile *.key);;All Files (*)",
+            )
+            if not file_path:
+                return
+            Path(file_path).write_bytes(key_data)
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Secure keyfile (64 bytes) saved successfully to:\n{file_path}",
+            )
+            main_window = self.parent()
+            if main_window and hasattr(main_window, "keyfile_input") and hasattr(main_window, "check_keyfile"):
+                main_window.keyfile_input.setText(file_path)
+                main_window.check_keyfile.setChecked(True)
+                if hasattr(main_window, "status_bar"):
+                    main_window.status_bar.showMessage("New keyfile generated and selected.", 5000)
+        except Exception as exc:
+            logger.error("Failed to generate keyfile", exc_info=exc)
+            QMessageBox.warning(self, "Error", f"Could not generate keyfile:\n{exc}")
+
+    def _create_container(self):
+        """Abre o wizard de criação de container."""
+        try:
+            from ui.settings_containers import ContainerCreateDialog
+
+            main_window = self.parent()
+            if not main_window:
+                QMessageBox.warning(
+                    self,
+                    "Erro",
+                    "Não foi possível acessar a janela principal.",
+                )
+                return
+
+            cg_items = []
+            cg_vault_dir = None
+
+            if hasattr(main_window, "vm") and main_window.vm and main_window.vm._opened:
+                vm = main_window.vm
+                cg_vault_dir = vm.path.parent
+
+                for file_id in vm.order:
+                    if file_id in vm.entries:
+                        entry = vm.entries[file_id]
+                        created_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(entry.created))
+                        cg_items.append(
+                            {
+                                "id": file_id,
+                                "path": file_id,
+                                "name": entry.label,
+                                "size": len(entry.data),
+                                "extension": ".cg2",
+                                "orig_name": entry.label,
+                                "data": entry.data,
+                                "created_at": created_iso,
+                                "modified_at": created_iso,
+                            }
+                        )
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "CryptGuard Vault Fechado",
+                    "O CryptGuard Vault não está aberto.\n\n"
+                    "Deseja continuar sem adicionar arquivos do CryptGuard?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+
+                cg_vault_dir = Path.home() / "CryptGuard" / "vault"
+
+            kg_entries = []
+
+            if hasattr(main_window, "keyguard_pane") and main_window.keyguard_pane:
+                kg_pane = main_window.keyguard_pane
+                if hasattr(kg_pane, "_vault_mgr") and kg_pane._vault_mgr and kg_pane._vault_mgr._opened:
+                    kg_vm = kg_pane._vault_mgr
+
+                    for entry in kg_vm.entries.values():
+                        kg_entries.append(
+                            {
+                                "name": entry.name,
+                                "password_b64": entry.password_b64,
+                                "metadata": entry.metadata,
+                                "id": entry.name,
+                                "created": entry.created,
+                                "modified": entry.modified,
+                            }
+                        )
+
+            if not cg_items and not kg_entries:
+                QMessageBox.information(
+                    self,
+                    "Vaults Vazios",
+                    "Nenhum vault está aberto ou não há itens disponíveis.\n\n"
+                    "Para criar um container:\n"
+                    "1. Abra o CryptGuard Vault e/ou KeyGuard Vault\n"
+                    "2. Adicione alguns arquivos ou senhas\n"
+                    "3. Tente novamente",
+                )
+                return
+
+            if cg_vault_dir is None:
+                cg_vault_dir = Path.home() / "CryptGuard" / "vault"
+
+            dialog = ContainerCreateDialog(cg_items, kg_entries, cg_vault_dir, self)
+            dialog.exec()
+
+        except ImportError as exc:
+            logger.error("Módulo de containers não disponível: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Recurso Não Disponível",
+                "O módulo de Secure Containers não está disponível.\n"
+                "Verifique a instalação.",
+            )
+        except Exception as exc:
+            logger.error("Erro ao abrir dialog de criação de container: %s", exc, exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Erro",
+                f"Não foi possível abrir o assistente de criação:\n{exc}",
+            )
+
+    def _read_container(self):
+        """Abre dialog para ler container existente."""
+        try:
+            from ui.settings_containers import ContainerReadDialog
+
+            main_window = self.parent()
+            if not main_window:
+                QMessageBox.warning(
+                    self,
+                    "Erro",
+                    "Não foi possível acessar a janela principal.",
+                )
+                return
+
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Abrir Secure Container",
+                str(Path.home()),
+                "Vault Files (*.vault *.cgsc);;All Files (*)",
+            )
+
+            if not file_path:
+                return
+
+            container_path = Path(file_path)
+
+            password, ok = QInputDialog.getText(
+                self,
+                "Senha do Container",
+                "Digite a senha do container:",
+                QLineEdit.EchoMode.Password,
+            )
+
+            if not ok or not password:
+                return
+
+            dialog = ContainerReadDialog(
+                container_path,
+                password.encode("utf-8"),
+                parent=self,
+                main_window=main_window,
+            )
+            dialog.exec()
+
+        except ImportError as exc:
+            logger.error("Módulo de containers não disponível: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Recurso Não Disponível",
+                "O módulo de Secure Containers não está disponível.\n"
+                "Verifique a instalação.",
+            )
+        except Exception as exc:
+            logger.error("Erro ao abrir dialog de leitura de container: %s", exc, exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Erro",
+                f"Não foi possível abrir o container:\n{exc}",
+            )
+
+
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 #                        MAIN WINDOW (Interface Antiga)
-# ------------------------------------------------------------------------------------------------------------------------------â•â•
+# ------------------------------------------------------------------------------------------------------------------------------â•â•
 
 
 class MainWindow(QWidget):
@@ -401,6 +962,8 @@ class MainWindow(QWidget):
         # Ajuste de tamanho da janela para 1920×1080 @125%
         self.setMinimumSize(QSize(1100, 700))
         self.resize(QSize(1100, 700))
+        # leve transparência global para efeito "glass"
+        self.setWindowOpacity(0.96)
 
         # Aplica paleta antiga PRIMEIRO
         self._apply_palette_old_theme()
@@ -415,6 +978,7 @@ class MainWindow(QWidget):
         self._clipboard_token: str | None = None
         self._forced_out = ""
         self._is_encrypt = False
+        self._is_verify = False
         self._cancel_timer = None
         # Simple rate limiting (per file path)
         self._failed_attempts = {}
@@ -426,11 +990,15 @@ class MainWindow(QWidget):
         # Garantir KeyGuard apos montar a UI (próximo ciclo do event loop)
         QTimer.singleShot(0, self._ensure_keyguard)
         self.setAcceptDrops(True)
+        
+        # Higiene: cleanup de temporários na inicialização (se habilitado)
+        if self._settings.get("hygiene_clean_startup", True):
+            QTimer.singleShot(100, self._cleanup_temp_on_startup)
 
     # ----------------------------- tema/paleta (faltante) -----------------------------
     def _apply_palette_old_theme(self) -> None:
         """
-        Define paleta dark + CSS base (estilo clássico do app).
+        Define paleta dark + CSS base (atualizado para transparência e botões modernos).
         """
         app = QApplication.instance()
         if app is None:
@@ -453,42 +1021,258 @@ class MainWindow(QWidget):
         app.setPalette(pal)
 
         app.setStyleSheet("""
-            QWidget { background: #1b212b; color: #e6eaf0; }
-            QLabel  { color: #e6eaf0; }
-            QLineEdit, QPlainTextEdit, QTextEdit {
-                background: #2a3342; color: #e6eaf0;
-                border: 1px solid #3a4356; border-radius: 6px; padding: 4px;
+            QWidget {
+                /* Fundo base transparente para efeito glassmorphism */
+                background: transparent;
+                color: #e6eaf0;
             }
-            QComboBox {
-                background: #2a3342; color: #e6eaf0;
-                border: 1px solid #3a4356; border-radius: 6px; padding: 4px 8px;
+
+            MainWindow, QFrame {
+                background-color: rgba(27, 33, 43, 0.9);
             }
+
+            QLabel {
+                background-color: transparent;
+                color: #e6eaf0;
+            }
+
+            QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QDateEdit, QSpinBox {
+                background: rgba(42, 51, 66, 0.8);
+                color: #e6eaf0;
+                border: 1px solid #3a4356;
+                border-radius: 6px;
+                padding: 6px;
+            }
+
+            QLineEdit:focus,
+            QPlainTextEdit:focus,
+            QTextEdit:focus,
+            QComboBox:focus,
+            QDateEdit:focus,
+            QSpinBox:focus {
+                border-color: #536dfe;
+            }
+
             QComboBox QAbstractItemView {
-                background: #2a3342; color: #e6eaf0;
+                background: #2a3342;
+                color: #e6eaf0;
                 selection-background-color: #536dfe;
             }
-            QPushButton {
-                background: #536dfe; color: #ffffff;
-                border: none; border-radius: 6px; padding: 6px 12px;
+
+            /* Dialog windows share glass theme */
+            QDialog, QMessageBox, QInputDialog {
+                background-color: rgba(27, 33, 43, 0.95);
+                border: 1px solid #3a4356;
+                color: #e6eaf0;
             }
-            QPushButton:disabled { background: #4e586e; }
-            QCheckBox { padding: 0px 2px; margin: 0; }
+
+            QDialog QLabel, QMessageBox QLabel, QInputDialog QLabel {
+                background: transparent;
+                color: #e6eaf0;
+            }
+
+            QDialog QLineEdit, QInputDialog QLineEdit {
+                background: rgba(42, 51, 66, 0.8);
+                color: #e6eaf0;
+                border: 1px solid #3a4356;
+                border-radius: 6px;
+                padding: 6px;
+            }
+
+            QDialog QLineEdit:focus, QInputDialog QLineEdit:focus {
+                border-color: #536dfe;
+            }
+
+            QDialogButtonBox {
+                background: transparent;
+            }
+
+            QDialogButtonBox QPushButton,
+            QDialog QPushButton,
+            QMessageBox QPushButton {
+                background: #303a4b;
+                color: #e6eaf0;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                min-width: 80px;
+            }
+
+            QDialogButtonBox QPushButton:hover,
+            QDialog QPushButton:hover,
+            QMessageBox QPushButton:hover {
+                background: #4a5568;
+            }
+
+            QDialogButtonBox QPushButton:default,
+            QDialog QPushButton:default,
+            QMessageBox QPushButton:default {
+                background-color: #536dfe;
+                color: #ffffff;
+            }
+
+            QDialogButtonBox QPushButton:default:hover,
+            QDialog QPushButton:default:hover,
+            QMessageBox QPushButton:default:hover {
+                background-color: #6b7fff;
+            }
+
+            QDialog QGroupBox {
+                background-color: rgba(42, 51, 66, 0.7);
+                border: 1px solid #3a4356;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding: 10px;
+                padding-top: 15px;
+            }
+
+            QDialog QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 5px;
+                margin-left: 10px;
+                background-color: rgba(27, 33, 43, 0.95);
+                color: #e6eaf0;
+            }
+
+            /* Botões principais (Encrypt/Decrypt/Verify) */
+            QPushButton#mainActionButton {
+                background: transparent;
+                color: #e6eaf0;
+                border: 1px solid #4a5568;
+                border-radius: 8px;
+                padding: 10px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+
+            QPushButton#mainActionButton:hover {
+                background: rgba(74, 85, 104, 0.5);
+                border-color: #5a6578;
+            }
+
+            QPushButton#mainActionButton:pressed {
+                background: rgba(74, 85, 104, 0.8);
+            }
+
+            /* Botão cancel em destaque */
+            QPushButton#cancelButton {
+                background: #4e586e;
+                color: #e6eaf0;
+                border: none;
+                border-radius: 8px;
+                padding: 10px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+
+            QPushButton#cancelButton:hover {
+                background: #5a6578;
+            }
+
+            /* Botões de rodapé (flat) */
+            QPushButton#footerButton {
+                background: transparent;
+                color: #9aa3b2;
+                border: none;
+                border-radius: 6px;
+                padding: 5px;
+                font-weight: normal;
+                text-align: left;
+            }
+
+            QPushButton#footerButton:hover {
+                background: rgba(74, 85, 104, 0.3);
+                color: #e6eaf0;
+            }
+
+            /* Botões padrão */
+            QPushButton {
+                background: #303a4b;
+                color: #e6eaf0;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+
+            QPushButton:hover {
+                background: #4a5568;
+            }
+
+            QPushButton:pressed {
+                background: #364152;
+            }
+
+            QPushButton:disabled {
+                background: #2a3443;
+                color: #6d7689;
+            }
+
+            QCheckBox {
+                padding: 0px 2px;
+                margin: 0;
+                color: #e6eaf0;
+            }
+
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                background-color: #2a3342;
+                border: 2px solid #3a4356;
+                border-radius: 3px;
+            }
+
+            QCheckBox::indicator:hover {
+                border-color: #536dfe;
+            }
+
+            QCheckBox::indicator:checked {
+                background-color: #536dfe;
+                border-color: #536dfe;
+                image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEzLjUgNC41TDYgMTJMMi41IDguNSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+);
+            }
+
+            QCheckBox::indicator:checked:hover {
+                background-color: #6b7fff;
+                border-color: #6b7fff;
+            }
+
+            QCheckBox::indicator:disabled {
+                background-color: #1f2633;
+                border-color: #2a3342;
+            }
+
             QProgressBar {
-                background: #1f2633; color: #e6eaf0; height: 12px;
-                border: 1px solid #3a4356; border-radius: 4px;
+                background: rgba(31, 38, 51, 0.8);
+                color: #e6eaf0;
+                height: 12px;
+                border: 1px solid #3a4356;
+                border-radius: 4px;
                 text-align: center;
             }
-            QProgressBar::chunk { background: #536dfe; }
-            QStatusBar { background: #151a22; color: #9aa3b2; }
-            QToolTip { background: #2b3342; color: #e6eaf0; border: 1px solid #3a4356; }
+
+            QProgressBar::chunk {
+                background: #536dfe;
+            }
+
+            QStatusBar {
+                background: rgba(21, 26, 34, 0.85);
+                color: #9aa3b2;
+            }
+
+            QToolTip {
+                background: rgba(43, 51, 66, 0.95);
+                color: #e6eaf0;
+                border: 1px solid #3a4356;
+            }
         """)
 
     # --- KeyGuard integration (centralizado) ------------------------------
     def _ensure_keyguard(self) -> None:
         """Anexa o KeyGuard (Qt) no lado direito (com fallback de import) uma única vez."""
         # Se ainda não temos helper, tenta novamente o fallback dinâmico.
-        global attach_keyguard_qt
-        if attach_keyguard_qt is None:
+        helper = getattr(self, "_attach_keyguard_qt", attach_keyguard_qt)
+        if helper is None:
             try:
                 _BASE = pathlib.Path(__file__).resolve().parent
                 for _cand in (
@@ -500,14 +1284,14 @@ class MainWindow(QWidget):
                         _mod = importlib.util.module_from_spec(_spec)  # type: ignore
                         assert _spec and _spec.loader
                         _spec.loader.exec_module(_mod)  # type: ignore
-                        attach_keyguard_qt = getattr(_mod, "attach_keyguard_qt", None)
-                        if attach_keyguard_qt:
+                        helper = getattr(_mod, "attach_keyguard_qt", None)
+                        if helper:
+                            self._attach_keyguard_qt = helper
                             break
             except Exception as e:
                 logger.exception("Falha ao importar KeyGuard: %s", e)
-                attach_keyguard_qt = None
-        if attach_keyguard_qt is None:
-            # Reporta para você saber o motivo caso o painel não apareça.
+                helper = None
+        if helper is None:
             if hasattr(self, "status_bar"):
                 self.status_bar.showMessage("KeyGuard module not found (import failed).", 6000)
             return
@@ -522,7 +1306,7 @@ class MainWindow(QWidget):
             sep.setFrameShape(QFrame.VLine)
             sep.setStyleSheet("color:#1b202a;")
             self.body_layout.addWidget(sep, 0)
-            pane = attach_keyguard_qt(self, width=380)
+            pane = helper(self, width=380)
             if pane:
                 try:
                     pane.setMinimumWidth(380)
@@ -620,9 +1404,9 @@ class MainWindow(QWidget):
             f"QProgressBar::chunk{{background:{colors[min(score, 4)]};}}"
         )
 
-    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â"€
     #                           EVENT HANDLERS
-    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â"€
 
     def dragEnterEvent(self, e: QDragEnterEvent):
         if e.mimeData().hasUrls():
@@ -665,9 +1449,9 @@ class MainWindow(QWidget):
         except Exception as e:
             self.status_bar.showMessage(f"Could not detect format: {e}")
 
-    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â"€
     #                               SLOTS
-    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â”€
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------â"€
 
     def _browse_file(self):
         """Abre diÃ¡logo para selecionar arquivo/pasta."""
@@ -713,8 +1497,19 @@ class MainWindow(QWidget):
         except Exception as exc:
             logger.debug("Failed to update password visibility label: %s", exc)
 
+    def _guard_password_whitespace(self, pwd: str, parent_title: str) -> bool:
+        hint = password_whitespace_hint(pwd)
+        if hint is None:
+            return True
+        QMessageBox.warning(
+            self,
+            parent_title,
+            f"{hint}\nRemova os espaços em branco e tente novamente.",
+        )
+        return False
+
     def _start_operation(self, operation: str):
-        """Inicia operação de criptografia/descriptografia."""
+        """Inicia operação de criptografia, descriptografia ou verificação."""
         try:
             path = self.file_input.text().strip()
             if not path:
@@ -725,7 +1520,11 @@ class MainWindow(QWidget):
                 self.status_bar.showMessage("Enter a password.")
                 return
 
+            if not self._guard_password_whitespace(pwd, "Senha inválida"):
+                return
+
             self._is_encrypt = operation == "encrypt"
+            self._is_verify = operation == "verify"
 
             self._original_path = path
             src = path
@@ -779,6 +1578,14 @@ class MainWindow(QWidget):
 
             if self._is_encrypt:
                 self.status_bar.showMessage(f"Encrypting with {alg_name}")
+            elif self._is_verify:
+                try:
+                    ver = read_header_version_any(src)
+                    self.status_bar.showMessage(
+                        "Verifying CG2 v5 (SecretStream)" if ver >= 5 else "Verifying legacy CG2"
+                    )
+                except Exception:
+                    self.status_bar.showMessage("Verifying (unknown format)")
             else:
                 try:
                     ver = read_header_version_any(src)
@@ -789,6 +1596,8 @@ class MainWindow(QWidget):
                     self.status_bar.showMessage("Decrypting (unknown format)")
 
             delete_flag = self.check_delete.isChecked()
+            if self._is_verify:
+                delete_flag = False
             extra: dict[str, Any] = {}
 
             # Optional keyfile for both encrypt/decrypt
@@ -826,18 +1635,19 @@ class MainWindow(QWidget):
                     else:
                         extra["out_path"] = str(Path(src).with_suffix(".cg2"))
                 extra["hide_filename"] = self.check_hide_filename.isChecked()
+            elif self._is_verify:
+                extra["verify_only"] = True
 
             if not hasattr(self, "_operation_size"):
                 self._operation_size = src_size
 
             # Bloqueio anti-bruteforce (se criptografia NÃO; apenas antes de decrypt)
-            if (not self._is_encrypt) and path in self._lockout_until:
-                if time.time() < self._lockout_until[path]:
-                    wait_s = int(self._lockout_until[path] - time.time())
-                    self.status_bar.showMessage(
-                        f"Temporariamente bloqueado por tentativas falhas. Tente novamente em {wait_s}s."
-                    )
-                    return
+            if (not self._is_encrypt) and path in self._lockout_until and time.time() < self._lockout_until[path]:
+                wait_s = int(self._lockout_until[path] - time.time())
+                self.status_bar.showMessage(
+                    f"Too many attempts for {path.name} — wait {wait_s}s.", 5000
+                )
+                return
 
             # Pré-cheque da API SecretStream (fail-fast em ambientes com PyNaCl inconsistente)
             if self._is_encrypt:
@@ -867,6 +1677,7 @@ class MainWindow(QWidget):
             self.status_bar.showMessage(f"Erro ao iniciar: {ex}", 10000)
             self._toggle(True)
 
+
     def _verify_file(self):
         """Verifica integridade de arquivo criptografado."""
         path = self.file_input.text()
@@ -874,6 +1685,9 @@ class MainWindow(QWidget):
 
         if not path or not pwd:
             return self.status_bar.showMessage("Select file and enter password.")
+
+        if not self._guard_password_whitespace(pwd, "Senha inválida"):
+            return
 
         try:
             kf = self.keyfile_input.text().strip() if self.check_keyfile.isChecked() else None
@@ -906,6 +1720,7 @@ class MainWindow(QWidget):
                     os.remove(self._tmp_zip)
 
             # Worker handles cleanup internally; just signal finish
+            self._is_verify = False
             self.worker.finished.emit("")
             if self._cancel_timer:
                 with contextlib.suppress(Exception):
@@ -961,6 +1776,28 @@ class MainWindow(QWidget):
     def _operation_finished(self, out_path: str):
         """operação concluída com sucesso."""
         if not out_path:
+            if (not self._is_encrypt) and getattr(self, "_is_verify", False):
+                self.progress_bar.setValue(100)
+                if self._cancel_timer:
+                    with contextlib.suppress(Exception):
+                        self._cancel_timer.stop()
+                    self._cancel_timer = None
+                if hasattr(self, "_tmp_zip") and self._tmp_zip:
+                    Path(self._tmp_zip).unlink(missing_ok=True)
+                self.status_bar.showMessage("Integrity OK.", 5000)
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    "Integrity OK. Password is correct and file is not corrupt.",
+                )
+                if self._original_path:
+                    self._failed_attempts.pop(self._original_path, None)
+                    self._lockout_until.pop(self._original_path, None)
+                if hasattr(self, "_operation_size"):
+                    delattr(self, "_operation_size")
+                self._is_verify = False
+                self._toggle(True)
+                return
             self.status_bar.showMessage("Operation cancelled.", 5000)
             self._toggle(True)
             return
@@ -978,18 +1815,19 @@ class MainWindow(QWidget):
         final_output = out_path
 
         # PATCH 7.2: Extração automÃ¡tica pós-decrypt
-        if not self._is_encrypt and self.check_extract.isChecked() and out_path.endswith(".zip"):
-            if zipfile.is_zipfile(out_path):
-                dest_dir = Path(out_path).with_suffix("")
-                try:
-                    with zipfile.ZipFile(out_path, "r") as zf:
-                        zf.extractall(dest_dir)
-                    Path(out_path).unlink(missing_ok=True)
-                    final_output = str(dest_dir)
-                    self.status_bar.showMessage(f"Extracted to: {dest_dir}", 5000)
-                except Exception as e:
-                    logger.warning(f"Auto-extract failed: {e}")
-                    QMessageBox.warning(self, "Extract", f"Could not extract ZIP: {e}")
+        if (
+            not self._is_encrypt
+            and self.check_extract.isChecked()
+            and out_path.endswith(".zip")
+            and zipfile.is_zipfile(out_path)
+        ):
+            dest_dir = Path(out_path).with_suffix("")
+            try:
+                with zipfile.ZipFile(out_path, "r") as zf:
+                    zf.extractall(dest_dir)
+                self.status_bar.showMessage(f"ZIP extracted to {dest_dir}", 5000)
+            except Exception as exc:
+                logger.exception("Auto-extract failed: %s", exc)
 
         # Vault (opcional)
         if self._is_encrypt and self.check_vault.isChecked():
@@ -1011,15 +1849,54 @@ class MainWindow(QWidget):
         else:
             QMessageBox.information(self, "Success", f"Output file:\n{Path(final_output).name}")
 
-        # Secure-delete
+        # Secure-delete (checkbox manual OU auto-delete após encryptação)
+        should_delete = False
         if self.check_delete.isChecked():
+            should_delete = True
+        elif self._is_encrypt and self._settings.get("hygiene_delete_original", False):
+            # Auto-delete após encriptação (se habilitado nas configs)
+            should_delete = True
+        
+        if should_delete and self._original_path:
             try:
                 p = Path(self._original_path)
-                if p.is_dir():
-                    shutil.rmtree(p, ignore_errors=True)
-                else:
-                    secure_delete(self._original_path, passes=1)
+                
+                # Check if SSD and warn user
+                if is_ssd(p):
+                    msg = (
+                        f"WARNING: File is on SSD/NVMe storage.\n\n"
+                        f"Secure deletion is NOT fully effective on SSDs due to wear leveling.\n"
+                        f"The file will be deleted, but data may remain in spare cells.\n\n"
+                        f"For maximum security, use full-disk encryption (BitLocker, LUKS, etc.)"
+                    )
+                    reply = QMessageBox.warning(
+                        self,
+                        "SSD Detection",
+                        msg,
+                        QMessageBox.Ok | QMessageBox.Cancel,
+                        QMessageBox.Ok
+                    )
+                    if reply != QMessageBox.Ok:
+                        self.status_bar.showMessage("Secure deletion cancelled.", 5000)
+                        should_delete = False
+                
+                if should_delete:
+                    passes = self._settings.get("hygiene_passes", 3)
+                    if p.is_dir():
+                        shutil.rmtree(p, ignore_errors=True)
+                        self.status_bar.showMessage(f"Directory deleted: {p.name}", 5000)
+                    else:
+                        success = secure_delete_file(p, passes=passes)
+                        if success:
+                            self.status_bar.showMessage(
+                                f"Original file securely deleted ({passes} pass{'es' if passes > 1 else ''})", 
+                                5000
+                            )
+                        else:
+                            self.status_bar.showMessage(f"Delete failed for: {p.name}", 8000)
+                            
             except Exception as e:
+                logger.warning("Secure delete failed: %s", e)
                 self.status_bar.showMessage(f"Delete failed: {e}", 8000)
 
         if not self._is_encrypt and self._original_path:
@@ -1032,6 +1909,7 @@ class MainWindow(QWidget):
         if hasattr(self, "_operation_size"):
             delattr(self, "_operation_size")
 
+        self._is_verify = False
         self._toggle(True)
 
     def _operation_error(self, msg: str):
@@ -1074,6 +1952,7 @@ class MainWindow(QWidget):
         if hasattr(self, "_operation_size"):
             delattr(self, "_operation_size")
 
+        self._is_verify = False
         self._toggle(True)
 
     # --- MOVIDO PARA CIMA & TORNADO NÃƒO BLOQUEANTE ---
@@ -1081,10 +1960,11 @@ class MainWindow(QWidget):
         """
         Verifica se a API crypto_secretstream_xchacha20poly1305_init_push tem a
         assinatura esperada (1 arg: key). Em versÃµes legadas pode exigir 2 args
-        (header, key) ou outra forma â€“ não suportada pelo xchacha_stream atual.
+        (header, key) ou outra forma â€" não suportada pelo xchacha_stream atual.
         Retorna (ok, mensagem_de_erro_ou_vazia).
         """
         try:
+
             func = nb.crypto_secretstream_xchacha20poly1305_init_push
             sig = inspect.signature(func)
             # Assinatura moderna (1 param) ou estilo C (2 params) - ambas suportadas
@@ -1100,7 +1980,7 @@ class MainWindow(QWidget):
                         func(state, b"\x00" * 32)
                 except Exception as exc:
                     logger.debug(
-                        "SecretStream preflight test failed in %s mode: %s", self.operation, exc
+                        "SecretStream preflight test failed during init_push: %s", exc
                     )
                 return True, ""
             # Assinatura inesperada
@@ -1123,6 +2003,13 @@ class MainWindow(QWidget):
             )
             if not ok or not pw:
                 return
+            if password_whitespace_hint(pw):
+                QMessageBox.warning(
+                    self,
+                    "Senha inválida",
+                    "A senha contém espaços em branco extras. Remova-os e tente novamente.",
+                )
+                continue
             try:
                 vault_path = Config.default_vault_path()
                 if vault_path.exists() and vault_path.stat().st_size == 0:
@@ -1255,6 +2142,7 @@ class MainWindow(QWidget):
     # ───────────────────────────── Settings (UI + persistência) ─────────────────────────────
     def _load_settings(self) -> dict:
         try:
+
             if SETTINGS_PATH.exists():
                 return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         except Exception as exc:
@@ -1264,15 +2152,109 @@ class MainWindow(QWidget):
             "clipboard_autoclear": True,  # limpa em 30s
             "fixed_out_enabled": False,  # usar diretório fixo?
             "fixed_out_dir": "",  # caminho do diretório
+            # Higiene de arquivos
+            "hygiene_delete_original": HYGIENE_DEFAULT_SETTINGS["delete_original_after_encrypt"],
+            "hygiene_clean_startup": HYGIENE_DEFAULT_SETTINGS["clean_temp_on_startup"],
+            "hygiene_clean_shutdown": HYGIENE_DEFAULT_SETTINGS["clean_temp_on_shutdown"],
+            "hygiene_passes": HYGIENE_DEFAULT_SETTINGS["secure_delete_passes"],
         }
 
     def _save_settings(self, data: dict) -> None:
         try:
+
             SETTINGS_PATH.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except Exception as e:
             self.status_bar.showMessage(f"Could not save settings: {e}", 8000)
+
+    # ───────────────────────────── Higiene de Arquivos ─────────────────────────────
+    
+    def _cleanup_temp_on_startup(self) -> None:
+        """Limpa temporários antigos na inicialização (non-blocking)."""
+        try:
+            files_removed, bytes_freed = cleanup_temp_folder(max_age_hours=24, dry_run=False)
+            if files_removed > 0:
+                size_mb = bytes_freed / (1024 * 1024)
+                logger.info(f"Startup cleanup: removed {files_removed} temp file(s), freed {size_mb:.2f} MB")
+                self.status_bar.showMessage(
+                    f"Cleaned {files_removed} temporary file(s) ({size_mb:.1f} MB)", 4000
+                )
+        except Exception as exc:
+            logger.warning("Startup temp cleanup failed: %s", exc)
+
+    def _cleanup_temp_on_shutdown(self) -> None:
+        """Limpa temporários recentes no encerramento (quick cleanup)."""
+        try:
+            # Cleanup mais agressivo: arquivos com mais de 1 hora
+            files_removed, _ = cleanup_temp_folder(max_age_hours=1, dry_run=False)
+            if files_removed > 0:
+                logger.info(f"Shutdown cleanup: removed {files_removed} temp file(s)")
+        except Exception as exc:
+            logger.warning("Shutdown temp cleanup failed: %s", exc)
+
+    def _manual_cleanup_temp(self) -> None:
+        """Limpeza manual de temporários (com confirmação)."""
+        try:
+            manager = TempFolderManager()
+            manager.ensure_dirs()
+            stats = manager.get_temp_stats()
+            
+            if stats["file_count"] == 0:
+                QMessageBox.information(
+                    self,
+                    "Temp Cleanup",
+                    "No temporary files to clean."
+                )
+                return
+            
+            size_mb = stats["total_bytes"] / (1024 * 1024)
+            msg = (
+                f"Found {stats['file_count']} temporary file(s) "
+                f"using {size_mb:.2f} MB.\n\n"
+                f"Do you want to delete these files?"
+            )
+            
+            reply = QMessageBox.question(
+                self,
+                "Clean Temporary Files",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            
+            if reply != QMessageBox.Yes:
+                return
+            
+            # Perform cleanup
+            files_removed, bytes_freed = cleanup_temp_folder(max_age_hours=0, dry_run=False)
+            size_freed_mb = bytes_freed / (1024 * 1024)
+            
+            QMessageBox.information(
+                self,
+                "Cleanup Complete",
+                f"Removed {files_removed} file(s), freed {size_freed_mb:.2f} MB"
+            )
+            self.status_bar.showMessage(f"Cleaned {files_removed} temp file(s)", 5000)
+            
+        except Exception as exc:
+            logger.exception("Manual temp cleanup failed")
+            QMessageBox.warning(
+                self,
+                "Cleanup Error",
+                f"Failed to clean temporary files:\n{exc}"
+            )
+
+    def closeEvent(self, event):
+        """Handle window close event with optional temp cleanup."""
+        try:
+            # Cleanup de temporários no encerramento (se habilitado)
+            if self._settings.get("hygiene_clean_shutdown", True):
+                self._cleanup_temp_on_shutdown()
+        except Exception as exc:
+            logger.warning("Shutdown cleanup failed: %s", exc)
+        finally:
+            event.accept()
 
     def open_settings(self):
         dlg = SettingsDialog(self, self._settings)
@@ -1532,6 +2514,7 @@ class MainWindow(QWidget):
         exp_date_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         exp_row.addWidget(exp_date_label)
         self.date_expiration = ClickableDateEdit(self)
+        self.date_expiration.setMinimumWidth(100)
         self.date_expiration.setDate(QDate.currentDate())
         self.date_expiration.setCalendarPopup(True)
         exp_row.addWidget(self.date_expiration)
@@ -1599,13 +2582,24 @@ class MainWindow(QWidget):
         # Botões de ação (sem alterar rótulos)
         btn_row = QHBoxLayout()
         self._compact(btn_row, 10)
-        self.btn_encrypt = QPushButton("Encrypt", self)
-        self.btn_decrypt = QPushButton("Decrypt", self)
-        self.btn_verify = QPushButton("Verify", self)
-        self.btn_cancel = QPushButton("Cancel", self)
+        self.btn_encrypt = QPushButton(" Encrypt", self)
+        self.btn_decrypt = QPushButton(" Decrypt", self)
+        self.btn_verify = QPushButton(" Verify", self)
+        self.btn_cancel = QPushButton(" Cancel", self)
+
+        self.btn_encrypt.setIcon(qta.icon("fa5s.lock", color="#e6eaf0"))
+        self.btn_decrypt.setIcon(qta.icon("fa5s.unlock", color="#e6eaf0"))
+        self.btn_verify.setIcon(qta.icon("fa5s.check", color="#e6eaf0"))
+        self.btn_cancel.setIcon(qta.icon("fa5s.times", color="#e6eaf0"))
+
+        self.btn_encrypt.setObjectName("mainActionButton")
+        self.btn_decrypt.setObjectName("mainActionButton")
+        self.btn_verify.setObjectName("mainActionButton")
+        self.btn_cancel.setObjectName("cancelButton")
+
         self.btn_encrypt.clicked.connect(lambda: self._start_operation("encrypt"))
         self.btn_decrypt.clicked.connect(lambda: self._start_operation("decrypt"))
-        self.btn_verify.clicked.connect(self._verify_file)
+        self.btn_verify.clicked.connect(lambda: self._start_operation("verify"))
         self.btn_cancel.clicked.connect(self._cancel_operation)
         for b in (self.btn_encrypt, self.btn_decrypt, self.btn_verify, self.btn_cancel):
             btn_row.addWidget(b)
@@ -1624,19 +2618,27 @@ class MainWindow(QWidget):
         footer = QHBoxLayout()
         self._compact(footer, 10)
         footer.addStretch(1)  # empurra tudo para a direita
-        self.btn_log = QPushButton("Log", self)
+        self.btn_log = QPushButton(" Log", self)
+        self.btn_log.setIcon(qta.icon("fa5s.file-alt", color="#9aa3b2"))
+        self.btn_log.setObjectName("footerButton")
         self.btn_log.clicked.connect(self._open_log)
         footer.addWidget(self.btn_log)
 
-        self.btn_change_pw = QPushButton("Change Password", self)
+        self.btn_change_pw = QPushButton(" Change Password", self)
+        self.btn_change_pw.setIcon(qta.icon("fa5s.key", color="#9aa3b2"))
+        self.btn_change_pw.setObjectName("footerButton")
         self.btn_change_pw.clicked.connect(self._change_vault_password)
         footer.addWidget(self.btn_change_pw)
 
-        self.btn_vault = QPushButton("Vault", self)
+        self.btn_vault = QPushButton(" Vault", self)
+        self.btn_vault.setIcon(qta.icon("fa5s.database", color="#9aa3b2"))
+        self.btn_vault.setObjectName("footerButton")
         self.btn_vault.clicked.connect(self._open_vault)
         footer.addWidget(self.btn_vault)
 
-        self.btn_settings = QPushButton("Settings", self)
+        self.btn_settings = QPushButton(" Settings", self)
+        self.btn_settings.setIcon(qta.icon("fa5s.cog", color="#9aa3b2"))
+        self.btn_settings.setObjectName("footerButton")
         self.btn_settings.clicked.connect(self.open_settings)
         footer.addWidget(self.btn_settings)
 
@@ -1704,80 +2706,6 @@ class MainWindow(QWidget):
 # ------------------------------------------------------------------------------------------------------------------------------â•â•
 
 
-class SettingsDialog(QDialog):
-    """Diálogo de configurações: clipboard e pasta fixa de saída (.cg2)."""
-
-    def __init__(self, parent: QWidget | None, initial: dict):
-        super().__init__(parent)
-        self.setWindowTitle("Settings")
-        self.setMinimumWidth(480)
-        self.result_settings = dict(initial)
-
-        lay = QVBoxLayout(self)
-
-        # Grupo: Segurança / Clipboard
-        grp_clip = QGroupBox("Clipboard")
-        form_clip = QFormLayout(grp_clip)
-        self.chk_autoclear = QCheckBox("Auto-clear passwords from clipboard after 30 seconds", self)
-        self.chk_autoclear.setChecked(bool(initial.get("clipboard_autoclear", True)))
-        form_clip.addRow(self.chk_autoclear)
-        lay.addWidget(grp_clip)
-
-        # Grupo: Saída fixa
-        grp_out = QGroupBox("Encrypted output (.cg2)")
-        form_out = QFormLayout(grp_out)
-        self.chk_fixed = QCheckBox("Save all .cg2 files to a fixed folder", self)
-        self.chk_fixed.setChecked(bool(initial.get("fixed_out_enabled", False)))
-        row = QHBoxLayout()
-        self.ed_dir = QLineEdit(self)
-        self.ed_dir.setPlaceholderText("Choose a folder…")
-        self.ed_dir.setText(str(initial.get("fixed_out_dir", "")))
-        self.btn_browse = QPushButton("Browse…", self)
-        self.btn_browse.clicked.connect(self._pick_folder)
-        row.addWidget(self.ed_dir, 1)
-        row.addWidget(self.btn_browse)
-        form_out.addRow(self.chk_fixed)
-        form_out.addRow("Folder:", row)
-        lay.addWidget(grp_out)
-
-        # Botões OK/Cancel
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
-        btns.accepted.connect(self._accept)
-        btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
-
-        # habilita/desabilita linha da pasta conforme checkbox
-        self._sync_out_enabled()
-        self.chk_fixed.toggled.connect(self._sync_out_enabled)
-
-    def _sync_out_enabled(self):
-        enabled = self.chk_fixed.isChecked()
-        self.ed_dir.setEnabled(enabled)
-        self.btn_browse.setEnabled(enabled)
-
-    def _pick_folder(self):
-        d = QFileDialog.getExistingDirectory(self, "Choose folder")
-        if d:
-            self.ed_dir.setText(d)
-
-    def _accept(self):
-        # valida se preciso
-        enabled = self.chk_fixed.isChecked()
-        path = self.ed_dir.text().strip()
-        if enabled:
-            try:
-                p = Path(path).expanduser()
-                p.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                QMessageBox.warning(self, "Settings", f"Invalid folder:\n{e}")
-                return
-        self.result_settings = {
-            "clipboard_autoclear": bool(self.chk_autoclear.isChecked()),
-            "fixed_out_enabled": enabled,
-            "fixed_out_dir": path if enabled else "",
-        }
-        self.accept()
-
 
 # Handler global de exceções para capturar todos os erros
 def global_exception_handler(exc_type, exc_value, exc_traceback):
@@ -1793,6 +2721,22 @@ sys.excepthook = global_exception_handler
 
 def main() -> None:
     """Entry-point for the legacy Qt UI."""
+    QCoreApplication.setOrganizationName(PLATFORM_ORG_NAME)
+    if hasattr(QCoreApplication, "setOrganizationDomain"):
+        QCoreApplication.setOrganizationDomain("cryptguard.dev")
+    QCoreApplication.setApplicationName(PLATFORM_APP_NAME)
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        if hasattr(QGuiApplication, "setApplicationDisplayName"):
+            QGuiApplication.setApplicationDisplayName(PLATFORM_APP_NAME)
+    except Exception:
+        pass
+    if IS_LINUX:
+        try:
+            harden_process_best_effort_linux()
+        except Exception as exc:
+            logger.debug("Linux process hardening skipped: %s", exc)
     try:
         from crypto_core.config import enable_process_hardening
         from crypto_core.memharden import harden_process_best_effort
@@ -1805,7 +2749,14 @@ def main() -> None:
         # best-effort hardening; ignore failures to keep UI usable
         pass
 
-    app = QApplication(sys.argv)
+    try:
+        app = QApplication(sys.argv)
+    except Exception:
+        if IS_LINUX:
+            print("Falha ao inicializar backend Qt (Wayland/XCB). Verifique dependências do sistema.")
+            explain_qpa_failure()
+        raise
+
     try:
         _tr = QTranslator()
         if _tr.load(QLocale.system(), "cryptguard", "_", "i18n"):
@@ -1820,6 +2771,14 @@ def main() -> None:
         logger.debug("Failed to connect aboutToQuit handler: %s", exc)
 
     win.show()
+    if IS_WIN:
+        try:
+            hwnd = int(win.winId())
+            try_enable_dark_titlebar(hwnd)
+            try_enable_mica(hwnd)
+        except Exception as exc:
+            logger.debug("Windows effects not applied: %s", exc)
+
     sys.exit(app.exec())
 
 

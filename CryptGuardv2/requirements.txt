@@ -1,12 +1,33 @@
-﻿# Core crypto/runtime
-argon2-cffi>=23.1
-pynacl>=1.5
+﻿# ======================================
+# CryptGuard — dependências completas
+# ======================================
+# Core crypto/runtime
+argon2-cffi>=25.1
+argon2-cffi-bindings>=25.1   # bindings nativos do Argon2 (usa CFFI)
+cffi>=1.16                   # requerido por argon2/pynacl/cryptography
+PyNaCl>=1.6                  # bindings libsodium (secretstream, etc.)
 reedsolo>=1.7
 psutil>=5.9
+zxcvbn>=4.5
 
-# UI (optional if using the KeyGuard/GUI)
-PySide6>=6.6
-ttkbootstrap>=1.10
-
-# Optional crypto (used elsewhere; no longer required by HKDF mixing path)
+# Cripto adicional (HKDF, etc.)
 cryptography>=42
+
+# GUI (Qt + Tk theme)
+PySide6>=6.9
+pyside6-essentials>=6.9
+pyside6-addons>=6.9
+shiboken6>=6.9               # runtime do Qt for Python
+ttkbootstrap>=1.10
+pillow>=10.2                 # usado pelo ttkbootstrap p/ imagens/temas
+QtAwesome>=1.4
+
+# ------------------------------
+# Ferramentas de teste/qualidade
+# (se não quiser, remova esta seção)
+hypothesis>=6.90
+pytest>=8
+pytest-cov>=5
+ruff>=0.6
+mypy>=1.11
+bandit>=1.7

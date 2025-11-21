@@ -61,6 +61,7 @@ def follow_logs():
 
 
 def main():
+
     parser = argparse.ArgumentParser(description="Visualizar logs do CryptGuard")
     parser.add_argument(
         "-n",
