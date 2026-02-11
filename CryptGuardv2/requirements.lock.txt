@@ -22,7 +22,7 @@ cffi==2.0.0
     #   pynacl
 coverage[toml]==7.11.0
     # via pytest-cov
-cryptography==46.0.1
+cryptography==46.0.5
     # via -r requirements.txt
 hypothesis==6.142.5
     # via -r requirements.txt
