@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Reportar vulnerabilidade
+    url: https://github.com/Crypt-Guard/CryptGuard/blob/main/SECURITY.md
+    about: Não publique vulnerabilidades; siga o canal confidencial da política de segurança.
+  - name: Guia de contribuição
+    url: https://github.com/Crypt-Guard/CryptGuard/blob/main/more_info/CONTRIBUTING.md
+    about: Consulte requisitos para issues, branches e pull requests.

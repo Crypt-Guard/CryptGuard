@@ -1,0 +1,88 @@
+name: Relato de bug
+description: Informe um comportamento incorreto e reproduzível.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado pelo relato. Não publique vulnerabilidades exploráveis; nesses casos, siga a [Política de Segurança](https://github.com/Crypt-Guard/CryptGuard/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Descrição
+      description: Explique o problema de forma objetiva.
+      placeholder: O que aconteceu e em qual operação?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Versão ou commit
+      description: Informe a versão exibida ou o hash do commit utilizado.
+      placeholder: "Exemplo: branch main, commit abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Sistema operacional
+      options:
+        - Windows
+        - Linux
+        - macOS
+        - Outro
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Passos para reproduzir
+      description: Use dados sintéticos e forneça a sequência mínima.
+      placeholder: |
+        1. Inicie...
+        2. Selecione...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamento esperado
+      description: O que deveria ocorrer?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamento atual
+      description: O que ocorreu de fato?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Cole somente trechos sanitizados. Remova senhas, chaves, caminhos privados e dados reais.
+      render: shell
+
+  - type: input
+    id: affected-files
+    attributes:
+      label: Arquivos afetados
+      description: Informe apenas nomes genéricos, extensões ou quantidades; não anexe conteúdo sensível.
+      placeholder: "Exemplo: arquivo .cg2 de teste com 10 MiB"
+
+  - type: checkboxes
+    id: sensitive-data
+    attributes:
+      label: Confirmação de privacidade
+      options:
+        - label: Confirmei que o relato, os logs e os anexos não contêm dados sensíveis, senhas ou chaves.
+          required: true

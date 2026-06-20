@@ -1,0 +1,65 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check required documentation
+        shell: bash
+        run: |
+          required_files=(
+            README.md
+            LICENSE
+            SECURITY.md
+            CHANGELOG.md
+            CODE_OF_CONDUCT.md
+            more_info/CONTRIBUTING.md
+            more_info/ROADMAP.md
+            docs/ARCHITECTURE.md
+            docs/SECURITY_MODEL.md
+            docs/INSTALLATION.md
+            docs/USAGE.md
+            docs/DEPENDENCIES.md
+            docs/RELEASE_PROCESS.md
+          )
+
+          failed=0
+          for file in "${required_files[@]}"; do
+            if [[ ! -s "$file" ]]; then
+              echo "Missing or empty required file: $file"
+              failed=1
+            fi
+          done
+
+          if (( failed != 0 )); then
+            exit 1
+          fi
+
+      - name: Check Markdown files for unresolved conflicts
+        shell: bash
+        run: |
+          if git grep -n -E '^(<<<<<<< |>>>>>>> )' -- '*.md'; then
+            echo "Unresolved merge conflict marker found in Markdown."
+            exit 1
+          fi

@@ -1,0 +1,57 @@
+name: Proposta de hardening
+description: Sugira uma melhoria defensiva sem divulgar uma vulnerabilidade explorável.
+title: "[Hardening]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Este formulário é público. Não inclua prova de conceito, segredo ou detalhe que permita exploração. Vulnerabilidades devem ser enviadas conforme [SECURITY.md](https://github.com/Crypt-Guard/CryptGuard/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: affected-area
+    attributes:
+      label: Área afetada
+      options:
+        - Criptografia ou KDF
+        - Formato de arquivo ou metadados
+        - Vault ou KeyGuard
+        - Containers
+        - Memória ou processo
+        - Arquivos, temporários ou logs
+        - Dependências ou CI
+        - Documentação ou operação
+        - Outra
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Descrição
+      description: Explique a oportunidade de defesa em nível seguro para discussão pública.
+    validations:
+      required: true
+
+  - type: textarea
+    id: risk
+    attributes:
+      label: Risco
+      description: Descreva impacto e pré-condições sem fornecer instruções exploráveis.
+    validations:
+      required: true
+
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: Mitigação proposta
+      description: Inclua alternativas, compatibilidade e como validar a mudança.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: public-safe
+    attributes:
+      label: Divulgação segura
+      options:
+        - label: Este relato não contém vulnerabilidade explorável nem dados que deveriam ser enviados de forma privada.
+          required: true

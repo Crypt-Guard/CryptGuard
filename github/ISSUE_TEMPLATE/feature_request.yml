@@ -1,0 +1,43 @@
+name: Solicitação de funcionalidade
+description: Proponha uma melhoria ou nova capacidade.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Descrição da ideia
+      description: Explique o comportamento proposto.
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema que resolve
+      description: Descreva o caso de uso e quem se beneficia.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: Liste soluções existentes, workarounds ou opções descartadas.
+    validations:
+      required: true
+
+  - type: textarea
+    id: security-impact
+    attributes:
+      label: Impacto em segurança
+      description: Considere o modelo de ameaça, dados sensíveis, novas dependências e possibilidade de uso incorreto.
+    validations:
+      required: true
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibilidade
+      description: Indique impactos em formatos, configurações, sistemas operacionais e versões existentes.
+    validations:
+      required: true

@@ -1,0 +1,50 @@
+name: Security scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bandit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: CryptGuardv2/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r CryptGuardv2/requirements.txt
+
+      # Advisory during the first hardening phase. Make this blocking after
+      # findings are triaged and a reviewed baseline is established.
+      - name: Bandit advisory scan
+        continue-on-error: true
+        shell: bash
+        run: |
+          if python -m bandit --version >/dev/null 2>&1; then
+            python -m bandit -r CryptGuardv2
+          else
+            echo "Bandit is not available; skipping advisory scan."
+          fi
