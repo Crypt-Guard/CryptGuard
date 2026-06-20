@@ -1,183 +1,103 @@
-# 🔐 CryptGuard v3.0 (final hardening release)
+# CryptGuard
 
-**CryptGuard** e um app de criptografia de arquivos com GUI em PySide6 e CLIs essenciais. A serie 3.0 escreve sempre o formato v5 usando XChaCha20-Poly1305 SecretStream, Argon2id calibrado e suporte integrado a Vault, KeyGuard e containers seguros (.vault) para compartilhamento/backup.
+[![Documentação](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/docs.yml/badge.svg)](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/docs.yml)
+[![Checks Python](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/python-static.yml/badge.svg)](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/python-static.yml)
+[![Licença Apache-2.0](https://img.shields.io/badge/licen%C3%A7a-Apache--2.0-blue.svg)](LICENSE)
 
----
+CryptGuard é uma aplicação para criptografia autenticada de arquivos, com interface gráfica em PySide6 e ferramentas de linha de comando para operações auxiliares.
 
-## ✨ Highlights (v3.0)
+> [!IMPORTANT]
+> O projeto está em desenvolvimento e aberto à auditoria comunitária. Ele ainda não passou por auditoria criptográfica externa independente. Avalie o código e o modelo de ameaça antes de proteger dados críticos.
 
-| # | Feature | What it does |
-|---|---------|--------------|
-| 1 | XChaCha20-Poly1305 (SecretStream) | Criptografia autenticada em streaming com marcador final autenticado. |
-| 2 | Header como AAD | Cabecalho + parametros de KDF vinculados; qualquer alteracao quebra a autenticacao. |
-| 3 | Metadados finais autenticados | TAG_FINAL inclui nome/extensao, tamanho real, padding e contagem de blocos. |
-| 4 | Argon2id calibrado (Interactive/Sensitive) | Perfis com custo ajustado na maquina, gravados no cabecalho autenticado. |
-| 5 | Padding opcional 0/4/8/16 KiB | Camufla tamanho sem perder verificacao do tamanho real. |
-| 6 | Verify robusto | Corrupcao em cabecalho/quadros/dados anexados falha com erro limpo. |
-| 7 | Vault + KeyGuard integrados | Armazenamento de .cg2 e gerador/gerenciador de senhas com vault dedicado. |
-| 8 | Containers seguros (.vault) | Transporta selecoes do Vault do CryptGuard e do KeyGuard em um unico arquivo. |
-| 9 | CLIs de higiene e containers | Limpeza/remocao segura de temporarios e automacao de containers via CLI. |
-| 10 | Hardening best effort | secure memory libsodium, protecoes de processo, logs com mascaramento. |
+## Principais recursos
 
----
+- Criptografia autenticada de arquivos e verificação de integridade.
+- Vault para organização de arquivos já criptografados.
+- KeyGuard para geração e gerenciamento local de senhas.
+- Containers seguros `.vault` para transporte e backup de itens selecionados.
+- CLIs para containers e higiene de arquivos.
+- Hardening *best-effort* de memória, processo, arquivos temporários e logs.
 
-## 🆕 O que mudou na serie 3.0
+## Estado atual
 
-**Core/Format**
-- ✅ Escrita unica no formato v5 (.cg2) com SecretStream; leitor continua compativel com formatos antigos.
-- ✅ Metadados finais autenticados (`orig_name`, `orig_ext`, `pt_size`, `chunks`, `pad`) em TAG_FINAL.
-- ✅ Padding maximo 16 KiB para equilibrar privacidade de tamanho e overhead.
+A aplicação principal está em [`CryptGuardv2/`](CryptGuardv2/). A série 3.x documenta escrita no formato v5 com XChaCha20-Poly1305 SecretStream, Argon2id calibrado, cabeçalho associado à autenticação e metadados finais autenticados. A árvore também mantém componentes de compatibilidade para leitura de formatos anteriores.
 
-**KDF & Perfis**
-- 🔐 Argon2id com calibracao por maquina; perfis **Interactive** (responsivo) e **Sensitive** (custo maior por tentativa).
-- 🔧 Parametros (tempo, memoria, paralelismo, perfil) ficam autenticados no cabecalho.
+Não há, neste repositório, uma release binária oficial ou uma garantia de estabilidade de formato e API. O uso atual deve ser feito a partir do código-fonte. Consulte o [changelog](CHANGELOG.md) e o [roadmap](more_info/ROADMAP.md) para distinguir o estado documentado das metas futuras.
 
-**Vault**
-- 📦 Armazena apenas arquivos ja cifrados (.cg2) com cabecalho vinculado como AAD; IO busca ser atomico e logs mascaram dados sensiveis.
+## Instalação pelo código-fonte
 
-**KeyGuard**
-- 🔑 Gerador de senhas com modulo `secrets`, estimativa de entropia, conjuntos de caracteres e vault proprio com rate-limit de desbloqueio.
+Use Python 3.11 ou mais recente. Python 3.13 é a versão usada para gerar o arquivo de dependências travadas atualmente disponível no projeto.
 
-**Containers seguros**
-- 🧳 Formato `.vault` com Argon2id e SecretStream em TLV (`cg_file`, `kg_secret`, `manifest`) para compartilhar/backup com selecao guiada ou via CLI.
-
-**Compatibilidade e limpeza**
-- ♻️ Leitura de formatos antigos preservada; escrita sempre v5.
-- 🧹 CLIs de higiene para limpar temporarios e remocao segura best effort.
-
----
-
-## 🔧 Como funciona (visao rapida do formato v5)
-- Cabecalho do SecretStream + JSON de KDF sao autenticados como AAD (commitment cabecalho/payload).
-- Fluxo em quadros autenticados; cada quadro valida antes de liberar bytes.
-- TAG_FINAL carrega JSON autenticado com nome/extensao, tamanho real e padding aplicado.
-- Padding opcional (0/4/8/16 KiB) apenas no ultimo bloco; o tamanho real e validado.
-- Apenas XChaCha20-Poly1305 SecretStream e usado para escrita; leituras aceitam legado.
-
----
-
-## 🧪 Security model (notas rapidas)
-- AEAD: XChaCha20-Poly1305 via libsodium SecretStream; final autenticado protege fechamento e metadados.
-- KDF: Argon2id com perfis Interactive/Sensitive e parametros calibrados p/ maquina, autenticados no cabecalho.
-- Metadados privados: nome, extensao e tamanho ficam cifrados/autenticados; Vault/containers so guardam payloads cifrados.
-- Hardening best effort: secure memory, comparacoes em tempo constante, protecoes de processo (POSIX/Windows), mascaramento de logs.
-- Fora do escopo: maquina comprometida, keylogger, hipervisor malicioso, snapshots/backup do SO capturando plaintext.
-
----
-
-## 📦 Instalacao
-
-### Windows (binario)
-1) Baixe o instalador ou `.exe` na pagina de Releases.  
-2) Execute sem privilegios de administrador.  
-> 💡 Tip: rodar como admin pode bloquear drag-and-drop (UAC).
-
-### Codigo-fonte (Python 3.11+)
 ```bash
 git clone https://github.com/Crypt-Guard/CryptGuard.git
-cd CryptGuard/CryptGuardv2
-
+cd CryptGuard
+cd CryptGuardv2
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
+```
+
+Ative o ambiente virtual:
+
+```bash
+# Linux/macOS
 source .venv/bin/activate
 
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+```
+
+Instale e execute:
+
+```bash
 pip install -r requirements.txt
 python main_app.py
 ```
 
----
+Instruções específicas por plataforma estão em [Instalação](docs/INSTALLATION.md).
 
-## 🖥️ Usando o app (GUI)
-1) Arraste ou selecione um arquivo.  
-2) Escolha o perfil KDF (Interactive/Sensitive) e, se quiser, padding e data de expiracao.  
-3) Opcional: marcar para colocar o `.cg2` no Vault.  
-4) Digite uma senha forte e clique **Encrypt**. Para abrir um `.cg2`, selecione e use **Decrypt**.  
-5) Use **Verify** para checar integridade sem gravar plaintext.  
+## Uso básico
 
----
+Na interface gráfica, selecione um arquivo e use **Encrypt**, **Decrypt** ou **Verify** conforme a operação desejada. O Vault, o KeyGuard e os containers seguros possuem fluxos próprios na interface.
 
-## 🔑 KeyGuard Password Generator
-**Core Features**
-- Geracao criptograficamente segura (modulo `secrets`), estimativa de entropia e filtros de padrao fraco.
-- Conjuntos de caracteres: digitos, letras, alfanumerico, ASCII imprimivel; comprimento flexivel.
+Para conhecer os comandos auxiliares e as práticas recomendadas, consulte o [guia de uso](docs/USAGE.md).
 
-**KeyGuard Vault**
-- Vault dedicado para senhas/segredos, com compressao e gravacao atomica onde possivel.
-- Desbloqueio possui rate-limit para dificultar tentativas rapidas.
+## Security Model
 
-**Integracao**
-- Sidebar integrada ao app; pode acompanhar fluxos de Vault e containers seguros (.vault).
+O CryptGuard busca oferecer confidencialidade e detecção de adulteração para dados armazenados, desde que a senha seja adequada e o ambiente de execução seja confiável. O formato v5 usa criptografia autenticada em streaming; parâmetros de derivação e metadados relevantes são vinculados à autenticação.
 
-**Usage Tips**
-- Prefira senhas longas/aleatorias; nao reutilize senhas de containers.
-- Se notar espacos acidentais em inicio/fim, corrija antes de salvar ou usar.
+Vaults e containers reduzem a exposição operacional, mas não substituem controle de acesso do sistema, criptografia de disco ou backups. As proteções de memória, processo e exclusão segura são *best-effort*.
 
----
+Leia o [modelo de segurança completo](docs/SECURITY_MODEL.md) antes de usar o projeto com dados sensíveis.
 
-## ⚙️ Tuning & options
-- **KDF profile**: Interactive (responsivo) vs Sensitive (custo maior por tentativa).  
-- **Pad size**: 0 / 4 / 8 / 16 KiB; mais padding = mais camuflagem, mais overhead.  
-- **Expiration**: metadado autenticado (nao-secreto) para sinalizar validade/retencao.  
+## Limitations (Limitações)
 
----
+- Uma máquina comprometida, malware, keylogger ou acesso root/administrador pode capturar senhas e dados em texto claro.
+- Exclusão segura não pode ser garantida em SSDs, NVMe, sistemas com *copy-on-write*, snapshots ou backups.
+- Senhas perdidas não podem ser recuperadas pelo projeto.
+- Arquivos autenticados corrompidos não devem ser reparados manualmente; restaure uma cópia íntegra.
+- Não há promessa de segurança absoluta, inviolabilidade ou adequação automática a requisitos regulatórios.
+- Compatibilidade legada deve ser validada com cópias de teste antes de qualquer migração importante.
 
-## 🧳 Secure Containers (.vault)
-- GUI: em **Settings > Secure Containers**, um wizard de 3 passos permite escolher itens do Vault do CryptGuard e do KeyGuard para criar o `.vault`. Ao importar, escolha integrar nos vaults ou exportar arquivos.
-- CLI: `python -m cli.container_cli --help` para listar, extrair, integrar ou criar containers em scripts/batch.
-- Formato: Argon2id + SecretStream em TLV (`cg_file`, `kg_secret`, `manifest`); cabecalho autenticado como AAD.
+## Documentation (Documentação)
 
----
+- [Arquitetura](docs/ARCHITECTURE.md)
+- [Modelo de segurança](docs/SECURITY_MODEL.md)
+- [Instalação](docs/INSTALLATION.md)
+- [Uso](docs/USAGE.md)
+- [Dependências](docs/DEPENDENCIES.md)
+- [Processo de release](docs/RELEASE_PROCESS.md)
+- [Roadmap](more_info/ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+- [Suporte](SUPPORT.md)
+- [Governança](GOVERNANCE.md)
 
-## 🛠️ Linha de comando
-```bash
-# Higiene / remocao segura (best effort)
-python -m cli.hygiene_cli --status
-python -m cli.hygiene_cli --temp
-python -m cli.hygiene_cli --file PATH [--passes N]
+## Contributing (Contribuindo)
 
-# Containers seguros
-python -m cli.container_cli list --in backup.vault
-python -m cli.container_cli extract --in backup.vault --to ./destino
-python -m cli.container_cli create --out novo.vault --kdf-profile strong
-```
+Issues e pull requests são bem-vindos. Antes de contribuir, leia o [guia de contribuição](more_info/CONTRIBUTING.md) e o [Código de Conduta](CODE_OF_CONDUCT.md). Mudanças em criptografia, formato de arquivo, KDF, Vault ou controles de segurança devem explicar impacto, riscos e compatibilidade.
 
----
+## Security Policy (Política de Segurança)
 
-## 🔍 Troubleshooting
-- ❌ **InvalidTag / autenticacao falhou**: o arquivo foi alterado (cabecalho, quadros ou lixo anexo). Nao tente reparar dados autenticados; recupere de backup.
-- 🖱️ **Drag-and-drop no Windows**: nao rode como admin; o UAC pode bloquear origem nao elevada.
-- 🔎 **KeyGuard nao aparece**: verifique se o modulo `modules/keyguard/` esta presente/importavel.
-- 🗄️ **Vault corrompido ou com senha errada**: sem senha correta nao ha recuperacao; use backups.
-- 🔒 **Secure delete pouco efetivo em SSD/NVMe**: limitacao estrutural; combine com criptografia de disco completa.
+Não publique vulnerabilidades exploráveis em issues. Siga o processo de divulgação responsável descrito em [SECURITY.md](SECURITY.md).
 
----
+## License (Licença)
 
-## 🧠 Tips
-- Use senhas longas/aleatorias; prefira o perfil Sensitive quando o hardware permitir.
-- Mantenha backups separados para `.cg2`, Vault do CryptGuard, Vault do KeyGuard e containers `.vault`.
-- Evite rodar em maquinas potencialmente comprometidas; mantenha SO e libs atualizados.
-- Compartilhe a senha de containers por canal separado e seguro.
-
----
-
-## 🤝 Contributing
-- Pull Requests bem-vindos (testes adicionais, empacotamento, UX). Documente qualquer mudanca que afete seguranca.
-- Para vulnerabilidades, use o contato confidencial em `SECURITY.md` (nao abra issue publica).
-
-## 📜 License
-- Apache-2.0. Veja `LICENSE`.
-
-## 🛡️ Security Policy
-- Consulte `SECURITY.md` para ameaca, limites e fluxo de reporte.
-
-## 📚 Changelog (summary)
-- **3.0**: Escrita unica SecretStream, AAD no cabecalho, TAG_FINAL com metadados autenticados, padding ate 16 KiB, Argon2id calibrado com perfis, Vault/KeyGuard integrados, containers .vault, CLIs de higiene/containers, hardening adicional.
-- **2.7.x e anteriores**: modos multi-algoritmo, footer END0/NAM0, padding ate 1 MiB, primeiros conceitos de hidden volume (removidos), Vault legado.
-
-## 🌍 Export Compliance
-- Conteudo criptografico de codigo aberto com algoritmos padronizados (AES-GCM, XChaCha20-Poly1305, etc.). Binarios podem estar sujeitos a ECCN 5D002 / License Exception ENC; use conforme as leis locais e de sancoes.
-
-## 🙏 Acknowledgements / Third-party
-- cryptography, argon2-cffi, PyNaCl/libsodium, reedsolo, PySide6/Qt, ttkbootstrap, QtAwesome, zxcvbn-python.
+CryptGuard é distribuído sob a [Apache License 2.0](LICENSE). Dependências de terceiros mantêm suas próprias licenças; consulte também o arquivo [NOTICE](NOTICE).

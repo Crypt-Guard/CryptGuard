@@ -1,0 +1,23 @@
+CryptGuard
+Copyright dos respectivos contribuidores
+
+Este projeto é disponibilizado sob a Apache License, Version 2.0.
+Consulte o arquivo LICENSE para os termos completos.
+
+O CryptGuard utiliza ou pode interagir com componentes de terceiros, incluindo:
+
+- cryptography
+- argon2-cffi
+- PyNaCl e libsodium
+- PySide6, Qt e shiboken6
+- reedsolo
+- psutil
+- zxcvbn
+- Pillow
+- QtAwesome
+- ttkbootstrap
+
+Esses componentes permanecem sujeitos às licenças, avisos de copyright e
+condições de distribuição de seus respectivos projetos. Este arquivo não
+reproduz nem substitui as licenças de terceiros. Distribuidores devem consultar
+as versões efetivamente incluídas e preservar todos os avisos exigidos.

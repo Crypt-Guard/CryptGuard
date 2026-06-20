@@ -1,58 +1,90 @@
-# 🛡️ Security Policy - CryptGuard v3.x
+# Política de Segurança
 
-CryptGuard entrega criptografia forte e autenticada para arquivos, Vaults e containers, mas nenhum software oferece seguranca absoluta. Este documento explica o que e protegido, o que nao e, e como relatar vulnerabilidades.
+O CryptGuard fornece mecanismos de criptografia autenticada, mas nenhum software oferece segurança absoluta. Esta política descreve versões cobertas, modelo de ameaça, limitações e o processo de divulgação responsável.
 
----
+## Versões suportadas
 
-## 🎯 Scope & threat model
-- **In scope (v3.x)**  
-  - Formato v5 `.cg2`, Vault do CryptGuard, Vault do KeyGuard e containers `.vault`.  
-  - Atacantes offline sem a senha.  
-  - Detecao de corrupcao/adulteracao em cabecalho, quadros de streaming ou lixo anexado (falha de autenticacao limpa).
-- **Out of scope**  
-  - Maquinas comprometidas (malware, keylogger), hipervisor/OS malicioso, acesso root/admin.  
-  - Snapshots/backups do SO que capturam plaintext.  
-  - Vazamentos causados por ferramentas externas.  
-  - Nao existem hidden volumes ou decoy volumes na linha 3.x (qualquer referencia a isso e legado 1.x).
+| Linha | Suporte de segurança |
+| --- | --- |
+| 3.x em desenvolvimento | Sim, na branch principal |
+| 2.x | Não; documentação e formatos legados |
+| 1.x e anteriores | Não |
 
----
+O projeto ainda não mantém um calendário formal de releases. Correções são direcionadas à linha 3.x atual.
 
-## 🔐 Cryptographic design & guarantees
-- XChaCha20-Poly1305 via libsodium SecretStream; TAG_FINAL autentica fechamento e metadados.  
-- Argon2id com perfis **Interactive** (responsivo) e **Sensitive** (custo maior por tentativa); parametros calibrados por maquina e autenticados no cabecalho.  
-- Metadados privados (nome, extensao, tamanho real) cifrados/autenticados; Vault e containers armazenam apenas payload cifrado.  
-- Formatos:  
-  - `.cg2` (v5) sempre escrito com SecretStream; leitor aceita formatos anteriores.  
-  - Vault: guarda apenas arquivos cifrados, cabecalho vinculado como AAD.  
-  - `.vault`: containers com Argon2id + SecretStream em TLV (`cg_file`, `kg_secret`, `manifest`).  
+## Escopo de segurança
 
----
+Relatos relevantes incluem, entre outros:
 
-## 🧱 Hardening & best-effort protections
-- **Memoria e segredos:** secure memory via libsodium, `SecureBytes`, comparacoes em tempo constante (`secretcmp`), limpeza explicita de buffers, mascaramento de logs/variaveis (`secretenv`, obfuscadores).  
-- **Processo:** tentativas de bloquear core dump/ptrace em POSIX e ajustes de DEP/error-mode em Windows; falhas geram `SecurityWarning` mas nao interrompem o app.  
-- **Higiene de arquivos:** `cli/hygiene_cli.py` e `crypto_core/file_hygiene.py` para limpar temporarios e remocao segura best effort. Em SSD/NVMe, wear-leveling pode manter blocos antigos; combine com criptografia de disco completa para garantias fortes.  
+- falhas de confidencialidade ou autenticação no formato `.cg2` v5;
+- derivação, armazenamento, exposição ou comparação inadequada de chaves e senhas;
+- adulteração não detectada de cabeçalhos, quadros, metadados, Vaults ou containers `.vault`;
+- travessia de diretórios, escrita insegura ou substituição inesperada de arquivos;
+- vazamento de informações sensíveis por logs, temporários ou mensagens de erro;
+- bypasses de controles de desbloqueio ou integração entre Vault, KeyGuard e containers.
 
----
+## Modelo de ameaça
 
-## ✅ Safe usage guidelines
-1) Use senhas fortes e unicas; prefira o perfil Sensitive quando possivel.  
-2) Mantenha backups separados de `.cg2`, Vault do CryptGuard, Vault do KeyGuard e containers `.vault`; perda de arquivo + senha = perda permanente.  
-3) Verifique integridade com **Verify** antes de abrir arquivos suspeitos; nao tente reparar dados autenticados corrompidos.  
-4) Proteja o ambiente: SO e libs atualizados, evite rodar em maquinas nao confiaveis, nao execute como admin sem necessidade.  
-5) Compartilhe containers com a senha enviada por canal separado e seguro.  
+O modelo principal considera um atacante com acesso offline aos arquivos criptografados, mas sem a senha. Nesse cenário, espera-se que uma senha adequada, a KDF Argon2id e a criptografia autenticada dificultem a recuperação do conteúdo e detectem alterações nos dados protegidos.
 
----
+O projeto busca proteger:
 
-## 🚨 Reporting a vulnerability
-- Nao abra issue publica para assuntos de seguranca.  
-- Contato preferencial: `cryptguard737@gmail.com`.  
-- Inclua descricao clara, impacto esperado, passos de reproducao e (quando possivel) provas de conceito ou vetores de teste.  
-- O time reconhece o recebimento, investiga e publica correcoes; avisos publicos sao feitos quando apropriado (releases/notas de seguranca).  
+- conteúdo de arquivos criptografados;
+- integridade de cabeçalhos, quadros e metadados autenticados;
+- dados armazenados pelos componentes Vault, KeyGuard e containers, conforme os formatos implementados;
+- operações temporárias e segredos em memória dentro das limitações do sistema operacional e do runtime Python.
 
----
+## Fora do escopo
 
-## ⚖️ Legal & export
-- Software fornecido "no estado em que se encontra", sem garantias expressas ou implicitas.  
-- O usuario e responsavel por escolher senhas, perfis de KDF e politica de backup adequados ao seu modelo de ameaca.  
-- O uso deve obedecer leis locais de criptografia/exportacao (binarios podem se enquadrar em ECCN 5D002 / License Exception ENC).  
+As seguintes condições não são neutralizadas pelo CryptGuard:
+
+- máquina comprometida por malware, keylogger ou ferramenta de acesso remoto;
+- sistema operacional, kernel, hipervisor ou firmware malicioso;
+- atacante com acesso root, administrador ou depuração equivalente durante o uso;
+- captura de texto claro por swap, hibernação, crash dump ou periféricos;
+- snapshots, backups, sincronizadores ou históricos do sistema que preservem arquivos ou texto claro;
+- senhas fracas, reutilizadas, compartilhadas de forma insegura ou perdidas;
+- exposição causada por aplicações externas após a descriptografia;
+- ataques físicos e forenses contra um equipamento ligado e desbloqueado.
+
+Hidden volumes e decoy volumes não fazem parte da linha 3.x. Referências anteriores são históricas e não constituem uma garantia disponível.
+
+## Como reportar uma vulnerabilidade
+
+Não abra issue pública, discussão ou pull request com detalhes de uma vulnerabilidade explorável.
+
+Envie o relato para **cryptguard737@gmail.com** com:
+
+- descrição e impacto esperado;
+- versão, commit ou estado da branch analisada;
+- ambiente e pré-condições;
+- passos mínimos para reprodução;
+- prova de conceito ou vetores de teste, quando seguros;
+- sugestões de mitigação, se disponíveis.
+
+Evite anexar dados reais, senhas, chaves ou arquivos privados. Use conteúdo sintético e indique no assunto que se trata de um relato de segurança.
+
+## Processo de resposta
+
+Os mantenedores buscarão confirmar o recebimento, avaliar a severidade, solicitar informações adicionais quando necessário e coordenar uma correção antes da divulgação pública. O projeto não oferece um SLA rígido; o prazo depende da complexidade, disponibilidade dos mantenedores e impacto observado.
+
+Quando apropriado, a correção será acompanhada de documentação, nota de segurança ou orientação de atualização. A divulgação coordenada deve evitar expor usuários antes que uma mitigação esteja disponível.
+
+## Recomendações de uso seguro
+
+- Use senhas longas, únicas e geradas aleatoriamente.
+- Proteja a senha por canal separado dos arquivos criptografados.
+- Mantenha sistema operacional, Python e dependências atualizados.
+- Trabalhe somente em máquinas confiáveis e evite privilégios administrativos desnecessários.
+- Mantenha backups testados dos arquivos criptografados, Vaults e containers.
+- Use **Verify** antes de processar arquivos recebidos de terceiros.
+- Não tente modificar ou reparar manualmente dados autenticados corrompidos.
+- Combine o projeto com criptografia de disco completa e uma política de backup adequada.
+
+## Exclusão segura
+
+A sobrescrita e remoção de arquivos é apenas *best-effort*. SSDs e NVMe usam *wear-leveling*; sistemas de arquivos podem usar journaling, compressão ou *copy-on-write*; snapshots e backups podem reter blocos antigos. Para reduzir esse risco, use criptografia de disco desde o início e os mecanismos de descarte seguro oferecidos pelo fabricante ou pelo sistema.
+
+## Conformidade de exportação
+
+Software criptográfico pode estar sujeito a regras locais de uso, importação e exportação. Distribuidores e usuários são responsáveis por avaliar as normas aplicáveis à sua jurisdição. Este texto não constitui aconselhamento jurídico nem uma classificação formal de exportação.
