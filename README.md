@@ -1,7 +1,5 @@
 # CryptGuard
 
-[![Licença Apache-2.0](https://img.shields.io/badge/licen%C3%A7a-Apache--2.0-blue.svg)](LICENSE)
-
 CryptGuard é uma aplicação para criptografia autenticada de arquivos, com interface gráfica em PySide6 e ferramentas de linha de comando para operações auxiliares.
 
 > [!IMPORTANT]
