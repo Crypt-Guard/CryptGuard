@@ -79,7 +79,7 @@ No PowerShell, defina `$env:PYTHONPYCACHEPREFIX = ".cache/pycache"` antes do `co
 4. Preencha integralmente o [template de pull request](../.github/PULL_REQUEST_TEMPLATE.md).
 5. Explique limitações conhecidas, migração e compatibilidade.
 
-Mudanças em criptografia, formato de arquivo, KDF, Vault, KeyGuard, containers ou segurança devem incluir uma explicação explícita do impacto de segurança, ameaças afetadas, riscos de regressão, compatibilidade e vetores de teste. Não apresente um algoritmo próprio como seguro sem análise pública e evidências adequadas.
+Mudanças em criptografia, formato de arquivo, KDF, Vault, KeyGuard, containers, autenticação, logs, secure delete ou gerenciamento de segredos devem incluir uma explicação explícita do impacto de segurança, ameaças afetadas, riscos de regressão, compatibilidade e vetores de teste. Não apresente um algoritmo próprio como seguro sem análise pública e evidências adequadas.
 
 ## Documentando mudanças de segurança
 
@@ -88,6 +88,7 @@ Mudanças em criptografia, formato de arquivo, KDF, Vault, KeyGuard, containers 
 - Documente alterações de formato e caminhos de migração.
 - Use dados sintéticos em testes e exemplos.
 - Mantenha detalhes exploráveis em canal privado até a correção coordenada.
+- Registre limitações conhecidas e atualize o roadmap quando a entrega depender de trabalho futuro.
 
 ## Licença
 

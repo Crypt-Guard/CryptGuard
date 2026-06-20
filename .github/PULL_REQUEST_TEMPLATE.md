@@ -16,7 +16,7 @@ Descreva o problema e a solução proposta. Explique por que esta mudança perte
 
 Descreva ameaças afetadas, novos riscos, dados sensíveis envolvidos e mitigações. Se não houver impacto, justifique brevemente.
 
-Se o PR mudar criptografia, formato de arquivo, KDF, Vault, KeyGuard, containers ou controles de segurança, explique obrigatoriamente:
+Se o PR mudar criptografia, formato de arquivo, KDF, Vault, KeyGuard, containers, autenticação, secure delete, logs ou controles de segurança, explique obrigatoriamente:
 
 - compatibilidade de leitura e escrita;
 - migração ou rollback;

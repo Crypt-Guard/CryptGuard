@@ -27,4 +27,4 @@ Somente mantenedores autorizados podem publicar releases. O processo futuro deve
 
 ## Alterações desta governança
 
-Mudanças neste documento devem ser propostas por pull request, com justificativa e período razoável para revisão comunitária.
+Mudanças neste documento devem ser propostas por pull request, com justificativa e período razoável para revisão comunitária. A governança poderá evoluir conforme o projeto, a comunidade e o grupo de mantenedores crescerem.

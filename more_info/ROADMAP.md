@@ -8,19 +8,22 @@ Este documento apresenta intenções de evolução, não promessas de entrega. P
 - Writer documentado no formato v5 com SecretStream e Argon2id.
 - GUI em PySide6, Vault, KeyGuard, containers `.vault` e CLIs auxiliares.
 - Documentação, templates comunitários e CI inicial para existência de documentos, compilação Python e análises não bloqueantes.
+- Dependabot configurado para acompanhar GitHub Actions e dependências Python sem alterar automaticamente o código.
 - Projeto em desenvolvimento, sem auditoria criptográfica externa independente confirmada.
 
 ## Curto prazo
 
 - Construir uma suíte automatizada reproduzível para criptografia, autenticação, corrupção, senhas incorretas e compatibilidade.
 - Estabelecer testes de integração para Vault, KeyGuard, containers e CLIs.
-- Corrigir gradualmente achados de Ruff e Bandit até tornar esses checks bloqueantes.
+- Corrigir gradualmente achados de Ruff, Bandit e mypy; torná-los bloqueantes somente quando o código estiver preparado.
 - Definir ambientes suportados de Python e sistemas operacionais com evidências de CI.
 - Revisar e documentar formatos persistentes e estratégias de migração.
+- Manter atualizações semanais de dependências sob revisão humana.
 
 ## Médio prazo
 
 - Separar dependências de runtime, GUI, testes e qualidade.
+- Refatorar gradualmente arquivos grandes, preservando comportamento e compatibilidade com testes de regressão.
 - Unificar a estratégia entre `requirements.txt` e `requirements.lock.txt` sem perder reprodutibilidade.
 - Criar empacotamento reproduzível e validar instaladores em ambientes isolados.
 - Formalizar CI/CD para artefatos, matrizes de plataforma e testes de regressão.
