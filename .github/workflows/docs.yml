@@ -34,6 +34,9 @@ jobs:
             SECURITY.md
             CHANGELOG.md
             CODE_OF_CONDUCT.md
+            SUPPORT.md
+            GOVERNANCE.md
+            NOTICE
             more_info/CONTRIBUTING.md
             more_info/ROADMAP.md
             docs/ARCHITECTURE.md

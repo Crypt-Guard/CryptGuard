@@ -1,6 +1,8 @@
 # AVISO: este arquivo é um resumo histórico/auxiliar e não deve ser usado para
 # instalar a aplicação. A lista operacional principal está em
 # ../CryptGuardv2/requirements.txt, e o lock correspondente fica na mesma pasta.
+# A separação entre dependências de runtime e desenvolvimento será feita em uma
+# etapa própria de profissionalização do código principal.
 
 cryptography>=44.0.1
 argon2-cffi>=23.1.0

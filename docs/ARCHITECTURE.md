@@ -2,7 +2,7 @@
 
 ## Visão geral
 
-O CryptGuard é uma aplicação Python com interface gráfica, serviços de criptografia e utilitários de linha de comando. A raiz do repositório contém documentação, governança e automação; a aplicação executável está integralmente em `CryptGuardv2/`.
+O CryptGuard é uma aplicação Python com interface gráfica, serviços de criptografia e utilitários de linha de comando. A raiz do repositório contém documentação, governança e automação; a aplicação executável está integralmente em [`CryptGuardv2/`](../CryptGuardv2/).
 
 Este documento é uma descrição de alto nível baseada na árvore, nos nomes dos módulos e na documentação existente. Ele não substitui revisão de código nem declara estabilidade das interfaces internas.
 
@@ -48,6 +48,10 @@ Faz a ponte entre subsistemas, especialmente containers e Vaults. Essa camada re
 
 Isola caminhos, ambiente Linux e efeitos específicos de Windows. Proteções dependentes de plataforma devem falhar de modo controlado quando indisponíveis.
 
+### `i18n`
+
+Reúne recursos e documentação de internacionalização. A expansão bilíngue deve manter textos, codificação e fallback consistentes entre interface e documentação.
+
 ## Fluxo conceitual
 
 ```text
@@ -69,3 +73,5 @@ Dados não devem ser considerados íntegros antes da validação criptográfica.
 - Compatibilidade legada amplia a superfície de ataque e deve permanecer explicitamente testada.
 
 Qualquer refatoração interna de `CryptGuardv2/` será realizada em uma etapa separada. A profissionalização documental deste repositório não altera a arquitetura executável atual.
+
+Consulte também o [README](../README.md) e o [Modelo de Segurança](SECURITY_MODEL.md).

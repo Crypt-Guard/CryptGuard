@@ -2,6 +2,8 @@
 
 O CryptGuard fornece mecanismos de criptografia autenticada, mas nenhum software oferece segurança absoluta. Esta política descreve versões cobertas, modelo de ameaça, limitações e o processo de divulgação responsável.
 
+Para detalhes técnicos e premissas, consulte o [Modelo de Segurança](docs/SECURITY_MODEL.md).
+
 ## Versões suportadas
 
 | Linha | Suporte de segurança |
@@ -44,6 +46,7 @@ As seguintes condições não são neutralizadas pelo CryptGuard:
 - captura de texto claro por swap, hibernação, crash dump ou periféricos;
 - snapshots, backups, sincronizadores ou históricos do sistema que preservem arquivos ou texto claro;
 - senhas fracas, reutilizadas, compartilhadas de forma insegura ou perdidas;
+- engenharia social, coerção ou divulgação voluntária de credenciais;
 - exposição causada por aplicações externas após a descriptografia;
 - ataques físicos e forenses contra um equipamento ligado e desbloqueado.
 
@@ -88,3 +91,5 @@ A sobrescrita e remoção de arquivos é apenas *best-effort*. SSDs e NVMe usam 
 ## Conformidade de exportação
 
 Software criptográfico pode estar sujeito a regras locais de uso, importação e exportação. Distribuidores e usuários são responsáveis por avaliar as normas aplicáveis à sua jurisdição. Este texto não constitui aconselhamento jurídico nem uma classificação formal de exportação.
+
+Consulte também o [Modelo de Segurança detalhado](docs/SECURITY_MODEL.md).
