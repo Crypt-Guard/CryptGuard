@@ -1,4 +1,4 @@
-﻿# ======================================
+# ======================================
 # CryptGuard — dependências completas
 # ======================================
 # Core crypto/runtime
@@ -11,7 +11,7 @@ psutil>=5.9
 zxcvbn>=4.5
 
 # Cripto adicional (HKDF, etc.)
-cryptography>=42
+cryptography>=48.0.1
 
 # GUI (Qt + Tk theme)
 PySide6>=6.9
@@ -19,14 +19,14 @@ pyside6-essentials>=6.9
 pyside6-addons>=6.9
 shiboken6>=6.9               # runtime do Qt for Python
 ttkbootstrap>=1.10
-pillow>=10.2                 # usado pelo ttkbootstrap p/ imagens/temas
+pillow>=12.2.0                 # usado pelo ttkbootstrap p/ imagens/temas
 QtAwesome>=1.4
 
 # ------------------------------
 # Ferramentas de teste/qualidade
 # (se não quiser, remova esta seção)
 hypothesis>=6.90
-pytest>=8
+pytest>=9.0.3
 pytest-cov>=5
 ruff>=0.6
 mypy>=1.11

@@ -22,7 +22,7 @@ cffi==2.0.0
     #   pynacl
 coverage[toml]==7.11.0
     # via pytest-cov
-cryptography==46.0.1
+cryptography==48.0.1
     # via -r requirements.txt
 hypothesis==6.142.5
     # via -r requirements.txt
@@ -40,7 +40,7 @@ packaging==25.0
     # via pytest
 pathspec==0.12.1
     # via mypy
-pillow==10.4.0
+pillow==12.2.0
     # via
     #   -r requirements.txt
     #   ttkbootstrap
@@ -69,7 +69,7 @@ pyside6-essentials==6.9.2
     #   -r requirements.txt
     #   pyside6
     #   pyside6-addons
-pytest==8.4.2
+pytest==9.0.3
     # via
     #   -r requirements.txt
     #   pytest-cov
