@@ -1,7 +1,5 @@
 # CryptGuard
 
-[![Documentação](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/docs.yml/badge.svg)](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/docs.yml)
-[![Checks Python](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/python-static.yml/badge.svg)](https://github.com/Crypt-Guard/CryptGuard/actions/workflows/python-static.yml)
 [![Licença Apache-2.0](https://img.shields.io/badge/licen%C3%A7a-Apache--2.0-blue.svg)](LICENSE)
 
 CryptGuard é uma aplicação para criptografia autenticada de arquivos, com interface gráfica em PySide6 e ferramentas de linha de comando para operações auxiliares.
