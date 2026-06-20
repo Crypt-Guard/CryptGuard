@@ -91,7 +91,7 @@ shiboken6==6.9.2
     #   pyside6-essentials
 sortedcontainers==2.4.0
     # via hypothesis
-stevedore==5.5.0
+stevedore==5.8.0
     # via bandit
 ttkbootstrap==1.14.2
     # via -r requirements.txt
