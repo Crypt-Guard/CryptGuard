@@ -1,57 +1,42 @@
-# CryptGuard v2 Roadmap
+# Roadmap do CryptGuard 3.x
 
-**Current Version:** v2.6 (July 2025)
+Este documento apresenta intenções de evolução, não promessas de entrega. Prioridades podem mudar após testes, revisão de segurança e disponibilidade dos mantenedores.
 
----
+## Estado atual
 
-## 🏁 1. Current Features
+- Aplicação principal concentrada em `CryptGuardv2/`.
+- Writer documentado no formato v5 com SecretStream e Argon2id.
+- GUI em PySide6, Vault, KeyGuard, containers `.vault` e CLIs auxiliares.
+- Documentação, templates comunitários e CI inicial para existência de documentos, compilação Python e análises não bloqueantes.
+- Projeto em desenvolvimento, sem auditoria criptográfica externa independente confirmada.
 
-### Core Encryption
-- **AES-256-GCM** (streaming)  
-- **ChaCha20-Poly1305** (single-shot & streaming)  
-- **XChaCha20-Poly1305** (single-shot & streaming, nonce 24 B)  
-- **Argon2id**-based KDF (Fast, Balanced, Secure profiles) with auto-calibration  
-- **HKDF-SHA256** sub-key separation: `enc_key` + `hmac_key`  
+## Curto prazo
 
-### Integrity & Redundancy
-- **HMAC-SHA256** global authentication tag  
-- **Reed–Solomon** per-chunk optional error-correction (32 bytes parity)  
-- **Metadata encryption** with ChaCha20-Poly1305 (salt + nonce + ciphertext)  
+- Construir uma suíte automatizada reproduzível para criptografia, autenticação, corrupção, senhas incorretas e compatibilidade.
+- Estabelecer testes de integração para Vault, KeyGuard, containers e CLIs.
+- Corrigir gradualmente achados de Ruff e Bandit até tornar esses checks bloqueantes.
+- Definir ambientes suportados de Python e sistemas operacionais com evidências de CI.
+- Revisar e documentar formatos persistentes e estratégias de migração.
 
-### Memory & Process Hardening
-- **SecureBytes** (mlock/VirtualLock + multi-pass zeroization)  
-- **KeyObfuscator** (XOR mask + timed exposure)  
-- Optional `--harden` flag: DEP, error-mode, anti-debug checks  
+## Médio prazo
 
-### Usability / UX
-- **PySide6 GUI**: drag-&-drop, arquivo / pasta picker único, confirm-password, strength meter, progress bar 0–100 %, botão Cancel, velocímetro  
-- **Secure Delete**: overwrite + remove original file  
-- **Atomic Writes**: safe rename + chmod(600)  
-- **Rotating Log**: SecureFormatter + 1 MB×5 backups  
-- **CLI flags**: `--calibrate-kdf`, `--harden`  
+- Separar dependências de runtime, GUI, testes e qualidade.
+- Unificar a estratégia entre `requirements.txt` e `requirements.lock.txt` sem perder reprodutibilidade.
+- Criar empacotamento reproduzível e validar instaladores em ambientes isolados.
+- Formalizar CI/CD para artefatos, matrizes de plataforma e testes de regressão.
+- Produzir documentação bilíngue, mantendo português brasileiro como fonte inicial durante a transição.
+- Adotar processo de release, notas e política de compatibilidade verificáveis.
 
-### Testing & Packaging
-- **pytest** suite: round‑trip, bad‑password, corrupt data, giant‑file streaming  
-- **PyInstaller** build: `--onefile --windowed --icon cryptguard.ico`  
+## Longo prazo
 
----
+- Contratar ou coordenar auditoria criptográfica externa independente.
+- Publicar releases assinadas e material verificável de procedência dos artefatos.
+- Evoluir defesa de memória, processo e armazenamento com testes específicos por plataforma.
+- Avaliar integrações avançadas somente após estabilização do formato, testes e modelo de ameaça.
 
-## 🔜 2. Near‑Term Roadmap (v2.7)
+## Itens removidos ou legados
 
-1. **Multi-Platform Builds**  
-   - Native macOS (`.app`) and Linux (AppImage / DEB)  
-2. **Hidden Volumes** & Plausible Deniability  
-3. **Key Rolling** for encrypted archives  
-4. **Exportable Checksums** & Verification Mode  
-5. **FIPS-compliant Mode** & PKCS#11 Token Support  
-
----
-
-## 🚀 3. Long-Term Goals (v3.0+)
-
-- **Automated Updater** with signed releases  
-- **Plugin API** for custom algorithms  
-
----
-
-_Last updated: July 2025_
+- Hidden volumes e decoy volumes não fazem parte da série 3.x e não devem ser anunciados como recurso disponível.
+- Formatos, algoritmos e perfis da série 2.x permanecem apenas como contexto histórico ou compatibilidade de leitura quando implementada.
+- Metas antigas como FIPS, PKCS#11, plugins ou atualizador automático não são compromissos ativos; exigem nova proposta, análise de segurança e manutenção sustentável.
+- Alegações antigas de testes completos ou builds multiplataforma não devem ser reproduzidas sem automação e artefatos verificáveis.
