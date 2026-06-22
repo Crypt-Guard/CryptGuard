@@ -12,7 +12,7 @@ argon2-cffi-bindings==25.1.0
     #   argon2-cffi
 attrs==25.4.0
     # via hypothesis
-bandit==1.8.6
+bandit==1.9.4
     # via -r requirements.txt
 cffi==2.0.0
     # via
