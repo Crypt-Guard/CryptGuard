@@ -60,7 +60,7 @@ pynacl==1.6.0
     # via -r requirements.txt
 pyside6==6.9.2
     # via -r requirements.txt
-pyside6-addons==6.9.2
+pyside6-addons==6.11.1
     # via
     #   -r requirements.txt
     #   pyside6
