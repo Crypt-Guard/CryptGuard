@@ -40,7 +40,7 @@ packaging==25.0
     # via pytest
 pathspec==0.12.1
     # via mypy
-pillow==10.4.0
+pillow==12.2.0
     # via
     #   -r requirements.txt
     #   ttkbootstrap

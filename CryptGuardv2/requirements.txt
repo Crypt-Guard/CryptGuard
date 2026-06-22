@@ -1,4 +1,4 @@
-﻿# ======================================
+# ======================================
 # CryptGuard — dependências completas
 # ======================================
 # Core crypto/runtime
@@ -19,7 +19,7 @@ pyside6-essentials>=6.9
 pyside6-addons>=6.9
 shiboken6>=6.9               # runtime do Qt for Python
 ttkbootstrap>=1.10
-pillow>=10.2                 # usado pelo ttkbootstrap p/ imagens/temas
+pillow>=12.2.0                 # usado pelo ttkbootstrap p/ imagens/temas
 QtAwesome>=1.4
 
 # ------------------------------
